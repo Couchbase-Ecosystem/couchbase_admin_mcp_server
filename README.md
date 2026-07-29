@@ -163,6 +163,74 @@ the plaintext password back to the agent or into a log file.
 
 ---
 
+## Connecting from Claude Desktop
+
+Claude Desktop speaks **stdio** natively and does not connect directly to a
+private HTTP MCP endpoint: its "custom connector" feature routes the URL through
+Anthropic's cloud, which cannot reach a server on a private work network (and you
+should not expose a cluster-admin server to the public internet to make it
+reach). Two setups work; pick by how you're running the container.
+
+### Option A — stdio (simplest for Claude Desktop)
+
+Let Claude Desktop launch the container per session and talk stdio directly. The
+container still reaches the Couchbase container over the Docker network for the
+*cluster* connection; only the MCP channel is stdio. In
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "couchbase-admin": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--network", "your_docker_network",
+        "-e", "CB_ADMIN_TRANSPORT=stdio",
+        "-e", "CB_CONNECTION_STRING=couchbase://couchbase",
+        "-e", "CB_USERNAME=Administrator",
+        "-e", "CB_PASSWORD=password",
+        "-e", "CB_ADMIN_READ_ONLY_MODE=false",
+        "couchbase-admin-mcp:latest"
+      ]
+    }
+  }
+}
+```
+
+`--network your_docker_network` is what lets the launched container resolve the
+`couchbase` service name. Note the image defaults to http, so `stdio` is set
+explicitly here.
+
+### Option B — HTTP + mcp-remote bridge (for a long-running container)
+
+If the admin server runs as a persistent service (the image default: http on
+`0.0.0.0:8000`, port published to your host), bridge it into Claude Desktop with
+`mcp-remote`. The bridge runs on your machine, reaches the container locally, and
+presents stdio to Claude Desktop — nothing needs public exposure.
+
+```json
+{
+  "mcpServers": {
+    "couchbase-admin": {
+      "command": "npx",
+      "args": ["mcp-remote", "http://localhost:8000/mcp", "--allow-http"]
+    }
+  }
+}
+```
+
+`--allow-http` is required because the container serves plain HTTP on localhost
+(mcp-remote expects HTTPS otherwise). If you enable OAuth, add
+`--header "Authorization:Bearer <token>"`.
+
+> Restart Claude Desktop after editing `claude_desktop_config.json`, and verify
+> the server shows **Connected** in Settings → Developer. If it doesn't, run the
+> exact command from the config manually in a terminal — the error it prints is
+> far more useful than the status line.
+
+---
+
 ## Running in Docker
 
 Build the image:

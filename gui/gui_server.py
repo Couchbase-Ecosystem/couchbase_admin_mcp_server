@@ -661,7 +661,23 @@ def call_tool():
         if n.strip()
     }
 
-    if in_confirm_set and automation_mode and tool_name not in hard_ceiling:
+    if in_confirm_set and automation_mode:
+        if tool_name in hard_ceiling:
+            # A ceiling tool under automation must not be satisfiable by a
+            # self-supplied confirm:true — that is the agent rubber-stamping
+            # itself. Refuse; a human must approve via a non-automation session.
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        f"'{tool_name}' is in the automation hard ceiling "
+                        "(CB_ADMIN_ALWAYS_CONFIRM) and cannot run under automation "
+                        "mode, even with confirm:true. A human must approve it."
+                    ),
+                    "requires_confirmation": True,
+                    "hard_ceiling": True,
+                }
+            ), 403
         # Authorized automation: skip the per-call human confirmation.
         in_confirm_set = False
 

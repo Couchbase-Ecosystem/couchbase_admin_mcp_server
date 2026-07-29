@@ -102,6 +102,26 @@ def test_hard_ceiling_not_bypassable_by_automation(srv):
     assert "requires_confirmation" in out
 
 
+def test_hard_ceiling_not_bypassable_by_automation_self_confirm(srv):
+    """An automation principal cannot satisfy a ceiling tool with its own
+    confirm:true — that self-issued confirmation is not a human approval."""
+    _set_claims("couchbase-admin-mcp:write couchbase-admin-mcp:automation")
+    out = _call(srv, "admin_bucket_delete", {"bucket_name": "b", "confirm": True})
+    assert "requires_confirmation" in out
+    assert "hard ceiling" in out.lower()
+
+
+def test_interactive_confirm_still_works_for_ceiling_tool(srv):
+    """A non-automation (interactive/human) session CAN confirm a ceiling tool
+    with confirm:true — the ceiling only blocks automation self-confirmation."""
+    from auth import scope_gate
+
+    scope_gate.clear_token_claims()  # interactive, no automation scope
+    out = _call(srv, "admin_bucket_delete", {"bucket_name": "b", "confirm": True})
+    # passes the gate (reaches execution; REST error is fine, not a confirm demand)
+    assert "requires_confirmation" not in out
+
+
 def test_read_tool_never_gated(srv):
     """Read-only tools are not gated regardless of principal."""
     from auth import scope_gate

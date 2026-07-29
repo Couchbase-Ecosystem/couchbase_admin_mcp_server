@@ -295,17 +295,31 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     in_confirm_set = name in _CONFIRMATION_REQUIRED
     if in_confirm_set and session_has_automation_scope():
         if name in _AUTOMATION_HARD_CEILING:
-            _log.info(
-                "automation principal hit hard ceiling for %s; human confirmation "
-                "still required",
+            # A ceiling tool under an automation principal must NOT be satisfiable
+            # by a self-supplied confirm:true — that "confirmation" is the agent
+            # rubber-stamping itself, exactly what the ceiling exists to prevent.
+            # Refuse outright; the workflow must route to a genuine human approval
+            # (a different, non-automation principal / interactive session).
+            _log.warning(
+                "automation principal blocked at hard ceiling for %s; a self-issued "
+                "confirm is not a human approval — routing to human required",
                 name,
             )
-        else:
-            _log.info(
-                "automation principal authorized for %s; per-call confirmation skipped",
-                name,
+            return err(
+                f"`{name}` is in the automation hard ceiling "
+                "(CB_ADMIN_ALWAYS_CONFIRM) and cannot be executed by an "
+                "automation-scoped principal, even with confirm:true. A human "
+                "must approve this operation through a non-automation session.",
+                tool=name,
+                args=arguments,
+                requires_confirmation=True,
+                hard_ceiling=True,
             )
-            in_confirm_set = False
+        _log.info(
+            "automation principal authorized for %s; per-call confirmation skipped",
+            name,
+        )
+        in_confirm_set = False
 
     msg = require_confirmation(name, arguments, in_confirm_set)
     if msg:

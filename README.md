@@ -171,6 +171,12 @@ the plaintext password back to the agent or into a log file.
   scope enforcement (including automation mode) applies. Without auth, deploy
   behind a trusted proxy.
 
+> **⚠ Never set `OAUTH_SKIP_VERIFY=true` in production.** It disables JWT
+> signature, issuer, audience, and expiry verification — any token is accepted
+> and any caller can self-grant write and automation scope, making the entire
+> trust model meaningless. It exists only for local development and defaults to
+> off. Leave it unset in any shared or production deployment.
+
 ---
 
 ## Development

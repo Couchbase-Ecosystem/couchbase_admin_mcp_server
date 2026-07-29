@@ -208,7 +208,14 @@ def validate_token(token: str) -> dict[str, Any]:
     """
     skip = _env("OAUTH_SKIP_VERIFY", "false").lower() in ("1", "true", "yes")
     if skip:
-        # Decode without verification — dev only
+        # Decode without verification — dev only. Log loudly: if this is ever on
+        # in a shared/production deployment it is a critical misconfiguration.
+        import logging
+
+        logging.getLogger("couchbase-admin.auth").warning(
+            "OAUTH_SKIP_VERIFY is enabled — JWT signature/issuer/audience/expiry "
+            "are NOT verified. Any token is accepted. NEVER use this in production."
+        )
         return jwt.decode(token, options={"verify_signature": False})
 
     algorithms = (_env("OAUTH_ALGORITHMS") or "RS256").split()

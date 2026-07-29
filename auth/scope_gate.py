@@ -48,8 +48,9 @@ _token_claims: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Conte
 
 # Tool names that the server force-loads in read-only mode despite not being
 # annotated readOnlyHint=True. Injected by configure() so this module never
-# hardcodes a list that could drift from server.py. Defaults to the known set.
-_always_read: frozenset[str] = frozenset({"cb_query", "cb_analytics_query"})
+# hardcodes a list that could drift from server.py. The admin server has no
+# such tools (every write is a real mutation), so the default is empty.
+_always_read: frozenset[str] = frozenset()
 
 
 def configure(always_loaded_in_read_only: set[str] | frozenset[str]) -> None:

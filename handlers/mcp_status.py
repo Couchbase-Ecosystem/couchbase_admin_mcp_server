@@ -141,7 +141,7 @@ def _status_payload(server_module) -> dict:
     }
 
     return {
-        "server": "couchbase-mcp",
+        "server": "couchbase-admin-mcp",
         "python_version": sys.version.split()[0],
         "transport": os.environ.get("CB_ADMIN_TRANSPORT", "stdio").lower(),
         "transport_host": os.environ.get("CB_ADMIN_HOST", "127.0.0.1"),

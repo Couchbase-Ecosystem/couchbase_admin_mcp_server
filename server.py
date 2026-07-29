@@ -21,14 +21,15 @@ Tool categories (all upstream names preserved)
                                                   cb_perf_*)
   8.x-only   - vector indexes, lock, conflicts  (admin_vector_index_create_*,
                                                   admin_user_lock/unlock/create_temporary,
-                                                  admin_xdcr_conflict_log_query,
-                                                  cb_perf_by_user)
-  Extended   - transactions, Analytics, Backup  (cb_transaction_run,
-                                                  cb_analytics_query, admin_backup_*)
+                                                  admin_xdcr_conflict_log_query)
+  Backup     - repository, backup, restore       (admin_backup_*)
   Eventing   - function lifecycle, deploy, stats (admin_eventing_*)
-  Synonyms   - FTS synonym set documents (8.x)   (cb_fts_synonym_*)
   Encryption - DARE + KMIP                       (admin_encryption_*, admin_kmip_*)
   Capella v4 - SaaS control plane (read-only)    (capella_*)
+
+  Note: the data-plane tools (cb_get/upsert/query, cb_transaction_run,
+  cb_analytics_query, cb_perf_by_user, cb_fts_synonym_*) live in the separate
+  MCP-Couchbase data server, not here.
 
 Environment variables
 ─────────────────────

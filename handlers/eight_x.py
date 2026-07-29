@@ -14,8 +14,6 @@ Tools added:
     admin_user_create_temporary       (creates user with temporaryPassword)
   XDCR:
     admin_xdcr_conflict_log_query     (reads from configured conflict collection)
-  Query analytics:
-    cb_perf_by_user                   (8.x adds `users` to completed_requests)
 
 Explicitly deferred (need live-cluster validation):
   - Search synonym source management — the 8.x API for synonym sources is

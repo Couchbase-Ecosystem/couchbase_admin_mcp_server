@@ -178,7 +178,9 @@ def _is_read_only(tool) -> bool:
 
 
 def _visible_tools():
-    always_loaded_in_ro = {"cb_query", "cb_analytics_query"}
+    # Admin server has no internally-DML-gated tools, so nothing is force-loaded
+    # in read-only mode beyond the annotated read-only tools.
+    always_loaded_in_ro: set[str] = set()
     out = []
     for t in ALL_TOOLS:
         if t.name in DISABLED_TOOLS:

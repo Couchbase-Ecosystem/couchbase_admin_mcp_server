@@ -173,9 +173,9 @@ docker build -t couchbase-admin-mcp:latest .
 
 **Connecting to a Couchbase cluster in another container.** Put both on the same
 Docker network and point `CB_CONNECTION_STRING` at the cluster container's
-service name. Use the **HTTP transport** — stdio cannot cross a container
-boundary, so it only works when the MCP client runs as a parent process inside
-the same container.
+service name. The image **defaults to the HTTP transport on `0.0.0.0:8000`**, so
+no transport configuration is needed — stdio cannot cross a container boundary,
+so HTTP is the right default for a container.
 
 ```yaml
 # docker-compose.yml
@@ -190,17 +190,18 @@ services:
     depends_on: [couchbase]
     ports: ["8000:8000"]
     environment:
-      CB_ADMIN_TRANSPORT: http
-      CB_ADMIN_HOST: 0.0.0.0            # listen on the container network, not just localhost
       CB_CONNECTION_STRING: couchbase://couchbase   # the service name above
       CB_USERNAME: Administrator
       CB_PASSWORD: password
       CB_ADMIN_READ_ONLY_MODE: "false"  # opt in to writes (default is true/read-only)
+      # Transport defaults to http on 0.0.0.0:8000 — no need to set it.
       # For automation on a shared cluster, also set the auth + ceiling vars —
       # see "Trust models" above.
 ```
 
-Your MCP client (or agent) then connects to `http://<host>:8000/mcp`.
+Your MCP client (or agent) then connects to `http://<host>:8000/mcp`. To run
+stdio instead (only meaningful when a supervisor in the same container drives
+the server), set `CB_ADMIN_TRANSPORT=stdio`.
 
 Notes:
 - The image runs as a non-root user and ships **read-only by default** — set
@@ -219,8 +220,12 @@ Notes:
 
 ## Transports
 
-- **stdio** (default) — for local MCP clients.
-- **http** — set `CB_ADMIN_TRANSPORT=http`. With `OAUTH_ISSUER` configured and
+- **stdio** — the default when run directly (`pip install` / `couchbase-admin-mcp-server`),
+  for local MCP clients that launch the server as a subprocess. **The Docker
+  image defaults to http instead** (see "Running in Docker"), since stdio can't
+  cross a container boundary.
+- **http** — set `CB_ADMIN_TRANSPORT=http` (already the default in the image).
+  With `OAUTH_ISSUER` configured and
   `CB_ADMIN_HTTP_REQUIRE_AUTH=true`, bearer tokens are validated and per-tool
   scope enforcement (including automation mode) applies. Without auth, deploy
   behind a trusted proxy.

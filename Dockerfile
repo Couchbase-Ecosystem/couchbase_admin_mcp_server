@@ -5,20 +5,20 @@
 # Build:
 #   docker build -t couchbase-ecosystem/couchbase-admin-mcp:0.1.0 -t couchbase-ecosystem/couchbase-admin-mcp:latest .
 #
-# Run (stdio — MCP client is a parent process IN THE SAME container/host):
-#   docker run -i --rm \
-#     -e CB_CONNECTION_STRING="couchbases://cluster.example" \
-#     -e CB_USERNAME="user" \
-#     -e CB_PASSWORD="pass" \
-#     couchbase-ecosystem/couchbase-admin-mcp:latest
-#
-# Run (HTTP transport — REQUIRED when the MCP client is in another container or
-# on another host; stdio cannot cross a container boundary):
+# Run (default: HTTP transport on 0.0.0.0:8000 — the container default, ready
+# for another container or the host to connect):
 #   docker run -d --rm --name couchbase-admin-mcp \
 #     -p 8000:8000 \
-#     -e CB_ADMIN_TRANSPORT=http \
-#     -e CB_ADMIN_HOST=0.0.0.0 \
-#     -e CB_CONNECTION_STRING="couchbases://your-cluster-host" \
+#     -e CB_CONNECTION_STRING="couchbase://your-cluster-host" \
+#     -e CB_USERNAME="user" -e CB_PASSWORD="pass" \
+#     couchbase-ecosystem/couchbase-admin-mcp:latest
+#   # MCP client connects to http://<host>:8000/mcp
+#
+# Run (stdio — only if an MCP client/ supervisor in THIS SAME container speaks to
+# the server over stdin/stdout; stdio cannot cross a container boundary):
+#   docker run -i --rm \
+#     -e CB_ADMIN_TRANSPORT=stdio \
+#     -e CB_CONNECTION_STRING="couchbases://cluster.example" \
 #     -e CB_USERNAME="user" -e CB_PASSWORD="pass" \
 #     couchbase-ecosystem/couchbase-admin-mcp:latest
 #
@@ -95,10 +95,21 @@ COPY --chown=mcp:mcp auth /app/auth
 
 USER mcp
 
-# Read-only mode is ON by default — operators must explicitly opt out
+# Container defaults differ from the code defaults on purpose:
+#   * Transport defaults to HTTP (not stdio) — a container is a networked
+#     deployment, and stdio cannot cross a container boundary. Override with
+#     -e CB_ADMIN_TRANSPORT=stdio only if a supervisor in THIS container speaks
+#     to the server over stdio.
+#   * Host binds 0.0.0.0 so the MCP client (in another container / on the host)
+#     can reach it. This means the server is reachable by anything on its Docker
+#     network. It ships READ-ONLY (no writes without CB_ADMIN_READ_ONLY_MODE=
+#     false), but HTTP without OAuth performs no request auth — keep it on a
+#     trusted network, publish the port only when you mean to, and enable OAuth
+#     (OAUTH_ISSUER + CB_ADMIN_HTTP_REQUIRE_AUTH=true) for authenticated scope
+#     enforcement.
 ENV CB_ADMIN_READ_ONLY_MODE=true \
-    CB_ADMIN_TRANSPORT=stdio \
-    CB_ADMIN_HOST=127.0.0.1 \
+    CB_ADMIN_TRANSPORT=http \
+    CB_ADMIN_HOST=0.0.0.0 \
     CB_ADMIN_PORT=8000
 
 # Document the HTTP transport port (no-op for stdio mode)

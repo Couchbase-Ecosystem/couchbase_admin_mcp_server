@@ -5,27 +5,30 @@
 # Build:
 #   docker build -t couchbase-ecosystem/couchbase-admin-mcp:0.1.0 -t couchbase-ecosystem/couchbase-admin-mcp:latest .
 #
-# Run (default: HTTP transport on 0.0.0.0:8000 — the container default, ready
-# for another container or the host to connect):
+# Run (default: stdio — for Claude Desktop and local MCP clients that launch the
+# container per session and speak over stdin/stdout):
+#   docker run -i --rm \
+#     --network your_docker_network \
+#     -e CB_CONNECTION_STRING="couchbase://couchbase-server" \
+#     -e CB_USERNAME="user" -e CB_PASSWORD="pass" \
+#     couchbase-ecosystem/couchbase-admin-mcp:latest
+#   # (--network lets the container resolve the couchbase service name)
+#
+# Run (HTTP transport — opt in for a long-running networked service that other
+# containers / agents connect to; stdio cannot cross a container boundary):
 #   docker run -d --rm --name couchbase-admin-mcp \
 #     -p 8000:8000 \
-#     -e CB_CONNECTION_STRING="couchbase://your-cluster-host" \
+#     -e CB_ADMIN_TRANSPORT=http \
+#     -e CB_ADMIN_HOST=0.0.0.0 \
+#     -e CB_CONNECTION_STRING="couchbase://couchbase-server" \
 #     -e CB_USERNAME="user" -e CB_PASSWORD="pass" \
 #     couchbase-ecosystem/couchbase-admin-mcp:latest
 #   # MCP client connects to http://<host>:8000/mcp
 #
-# Run (stdio — only if an MCP client/ supervisor in THIS SAME container speaks to
-# the server over stdin/stdout; stdio cannot cross a container boundary):
-#   docker run -i --rm \
-#     -e CB_ADMIN_TRANSPORT=stdio \
-#     -e CB_CONNECTION_STRING="couchbases://cluster.example" \
-#     -e CB_USERNAME="user" -e CB_PASSWORD="pass" \
-#     couchbase-ecosystem/couchbase-admin-mcp:latest
-#
 # Connecting to a Couchbase cluster in ANOTHER container: put both on the same
 # Docker network and point CB_CONNECTION_STRING at the cluster's service name,
-# e.g. CB_CONNECTION_STRING="couchbase://couchbase-server". See the
-# docker-compose example in README ("Running in Docker").
+# e.g. CB_CONNECTION_STRING="couchbase://couchbase-server". See README
+# ("Connecting from Claude Desktop" and "Running in Docker").
 #
 # Note: CB_BUCKET is optional for the admin server — admin operations act at the
 # cluster level. It only affects the SDK warm-up used by a few diagnostics tools.
@@ -95,21 +98,21 @@ COPY --chown=mcp:mcp auth /app/auth
 
 USER mcp
 
-# Container defaults differ from the code defaults on purpose:
-#   * Transport defaults to HTTP (not stdio) — a container is a networked
-#     deployment, and stdio cannot cross a container boundary. Override with
-#     -e CB_ADMIN_TRANSPORT=stdio only if a supervisor in THIS container speaks
-#     to the server over stdio.
-#   * Host binds 0.0.0.0 so the MCP client (in another container / on the host)
-#     can reach it. This means the server is reachable by anything on its Docker
-#     network. It ships READ-ONLY (no writes without CB_ADMIN_READ_ONLY_MODE=
-#     false), but HTTP without OAuth performs no request auth — keep it on a
-#     trusted network, publish the port only when you mean to, and enable OAuth
-#     (OAUTH_ISSUER + CB_ADMIN_HTTP_REQUIRE_AUTH=true) for authenticated scope
-#     enforcement.
+# Container defaults:
+#   * Transport defaults to STDIO — the frictionless path for Claude Desktop and
+#     other local MCP clients, which launch the server with `docker run -i` and
+#     speak over stdin/stdout. stdio cannot cross a container boundary, so for a
+#     long-running networked service that other containers/agents connect to,
+#     opt in with -e CB_ADMIN_TRANSPORT=http (and CB_ADMIN_HOST=0.0.0.0).
+#   * Host defaults to 127.0.0.1 (only relevant once http is enabled). Set
+#     CB_ADMIN_HOST=0.0.0.0 to accept connections from other containers/the host.
+#     HTTP without OAuth performs no request auth — keep it on a trusted network,
+#     publish the port only when you mean to, and enable OAuth (OAUTH_ISSUER +
+#     CB_ADMIN_HTTP_REQUIRE_AUTH=true) for authenticated scope enforcement.
+# Read-only is ON by default in every mode — writes require CB_ADMIN_READ_ONLY_MODE=false.
 ENV CB_ADMIN_READ_ONLY_MODE=true \
-    CB_ADMIN_TRANSPORT=http \
-    CB_ADMIN_HOST=0.0.0.0 \
+    CB_ADMIN_TRANSPORT=stdio \
+    CB_ADMIN_HOST=127.0.0.1 \
     CB_ADMIN_PORT=8000
 
 # Document the HTTP transport port (no-op for stdio mode)

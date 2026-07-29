@@ -199,8 +199,8 @@ container still reaches the Couchbase container over the Docker network for the
 ```
 
 `--network your_docker_network` is what lets the launched container resolve the
-`couchbase` service name. Note the image defaults to http, so `stdio` is set
-explicitly here.
+`couchbase` service name. stdio is the image default, so no transport env is
+needed — it's shown in the config above only for clarity.
 
 ### Option B — HTTP + mcp-remote bridge (for a long-running container)
 
@@ -241,9 +241,9 @@ docker build -t couchbase-admin-mcp:latest .
 
 **Connecting to a Couchbase cluster in another container.** Put both on the same
 Docker network and point `CB_CONNECTION_STRING` at the cluster container's
-service name. The image **defaults to the HTTP transport on `0.0.0.0:8000`**, so
-no transport configuration is needed — stdio cannot cross a container boundary,
-so HTTP is the right default for a container.
+service name. For a long-running networked service you **opt in to HTTP** with
+`CB_ADMIN_TRANSPORT=http` and `CB_ADMIN_HOST=0.0.0.0` (stdio, the default,
+cannot cross a container boundary).
 
 ```yaml
 # docker-compose.yml
@@ -262,7 +262,8 @@ services:
       CB_USERNAME: Administrator
       CB_PASSWORD: password
       CB_ADMIN_READ_ONLY_MODE: "false"  # opt in to writes (default is true/read-only)
-      # Transport defaults to http on 0.0.0.0:8000 — no need to set it.
+      CB_ADMIN_TRANSPORT: http          # opt in to HTTP for a networked service
+      CB_ADMIN_HOST: 0.0.0.0            # accept connections from other containers/host
       # For automation on a shared cluster, also set the auth + ceiling vars —
       # see "Trust models" above.
 ```
@@ -288,11 +289,11 @@ Notes:
 
 ## Transports
 
-- **stdio** — the default when run directly (`pip install` / `couchbase-admin-mcp-server`),
-  for local MCP clients that launch the server as a subprocess. **The Docker
-  image defaults to http instead** (see "Running in Docker"), since stdio can't
-  cross a container boundary.
-- **http** — set `CB_ADMIN_TRANSPORT=http` (already the default in the image).
+- **stdio** (default, code and Docker image alike) — for local MCP clients
+  (including Claude Desktop) that launch the server as a subprocess and speak
+  over stdin/stdout.
+- **http** — opt in with `CB_ADMIN_TRANSPORT=http` for a long-running networked
+  service; stdio cannot cross a container boundary.
   With `OAUTH_ISSUER` configured and
   `CB_ADMIN_HTTP_REQUIRE_AUTH=true`, bearer tokens are validated and per-tool
   scope enforcement (including automation mode) applies. Without auth, deploy

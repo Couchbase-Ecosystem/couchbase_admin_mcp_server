@@ -5,23 +5,30 @@
 # Build:
 #   docker build -t couchbase-ecosystem/couchbase-admin-mcp:0.1.0 -t couchbase-ecosystem/couchbase-admin-mcp:latest .
 #
-# Run (stdio — for use behind a process supervisor):
+# Run (stdio — MCP client is a parent process IN THE SAME container/host):
 #   docker run -i --rm \
 #     -e CB_CONNECTION_STRING="couchbases://cluster.example" \
 #     -e CB_USERNAME="user" \
 #     -e CB_PASSWORD="pass" \
-#     -e CB_BUCKET="travel-sample" \
 #     couchbase-ecosystem/couchbase-admin-mcp:latest
 #
-# Run (HTTP transport — for networked deployment):
+# Run (HTTP transport — REQUIRED when the MCP client is in another container or
+# on another host; stdio cannot cross a container boundary):
 #   docker run -d --rm --name couchbase-admin-mcp \
 #     -p 8000:8000 \
 #     -e CB_ADMIN_TRANSPORT=http \
 #     -e CB_ADMIN_HOST=0.0.0.0 \
-#     -e CB_CONNECTION_STRING="couchbases://cluster.example" \
+#     -e CB_CONNECTION_STRING="couchbases://your-cluster-host" \
 #     -e CB_USERNAME="user" -e CB_PASSWORD="pass" \
-#     -e CB_BUCKET="travel-sample" \
 #     couchbase-ecosystem/couchbase-admin-mcp:latest
+#
+# Connecting to a Couchbase cluster in ANOTHER container: put both on the same
+# Docker network and point CB_CONNECTION_STRING at the cluster's service name,
+# e.g. CB_CONNECTION_STRING="couchbase://couchbase-server". See the
+# docker-compose example in README ("Running in Docker").
+#
+# Note: CB_BUCKET is optional for the admin server — admin operations act at the
+# cluster level. It only affects the SDK warm-up used by a few diagnostics tools.
 
 # ── Stage 1: build dependencies ───────────────────────────────────────────────
 FROM python:3.12-slim AS builder
@@ -43,7 +50,11 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 
-# Install runtime deps + the HTTP transport extras
+# Install runtime deps + the HTTP transport extras.
+# NOTE: the HTTP transport uses StreamableHTTPServerTransport, whose API has
+# varied across mcp releases. This code was validated against mcp 1.28.1. If the
+# HTTP transport fails to start after a rebuild, pin mcp to a known-good version
+# here (e.g. "mcp==1.28.1") rather than the open ">=1.0.0" range.
 RUN pip install --prefix=/install \
     "mcp>=1.0.0" \
     "couchbase>=4.4.0,<5.0.0" \

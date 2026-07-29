@@ -163,6 +163,60 @@ the plaintext password back to the agent or into a log file.
 
 ---
 
+## Running in Docker
+
+Build the image:
+
+```bash
+docker build -t couchbase-admin-mcp:latest .
+```
+
+**Connecting to a Couchbase cluster in another container.** Put both on the same
+Docker network and point `CB_CONNECTION_STRING` at the cluster container's
+service name. Use the **HTTP transport** — stdio cannot cross a container
+boundary, so it only works when the MCP client runs as a parent process inside
+the same container.
+
+```yaml
+# docker-compose.yml
+services:
+  couchbase:
+    image: couchbase:enterprise
+    ports: ["8091-8096:8091-8096", "11210:11210"]
+    # ... your cluster provisioning ...
+
+  admin-mcp:
+    build: .
+    depends_on: [couchbase]
+    ports: ["8000:8000"]
+    environment:
+      CB_ADMIN_TRANSPORT: http
+      CB_ADMIN_HOST: 0.0.0.0            # listen on the container network, not just localhost
+      CB_CONNECTION_STRING: couchbase://couchbase   # the service name above
+      CB_USERNAME: Administrator
+      CB_PASSWORD: password
+      CB_ADMIN_READ_ONLY_MODE: "false"  # opt in to writes (default is true/read-only)
+      # For automation on a shared cluster, also set the auth + ceiling vars —
+      # see "Trust models" above.
+```
+
+Your MCP client (or agent) then connects to `http://<host>:8000/mcp`.
+
+Notes:
+- The image runs as a non-root user and ships **read-only by default** — set
+  `CB_ADMIN_READ_ONLY_MODE=false` to enable writes.
+- `CB_BUCKET` is optional here — admin operations act at the cluster level; it
+  only affects the SDK warm-up used by a few diagnostics tools.
+- Use `couchbase://` (not `couchbases://`) for a non-TLS in-network connection,
+  or supply certs and keep `couchbases://` for TLS. See the TLS vars in
+  `.env.example`.
+- On HTTP with no OAuth configured, the server performs no request auth — keep
+  it on a trusted internal network or put a proxy in front. With `OAUTH_ISSUER`
+  + `CB_ADMIN_HTTP_REQUIRE_AUTH=true`, bearer-token scope enforcement (including
+  automation mode) applies.
+
+---
+
 ## Transports
 
 - **stdio** (default) — for local MCP clients.

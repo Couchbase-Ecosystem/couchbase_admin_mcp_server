@@ -100,7 +100,7 @@ confirmation off entirely. Both destroy the gate.
 This server instead binds an **automation mode** to the authenticated principal:
 
 - A workflow's service principal is issued a token by your IdP carrying the
-  automation scope (`couchbase-mcp:automation`) **in addition to** the write
+  automation scope (`couchbase-admin-mcp:automation`) **in addition to** the write
   scope.
 - A session on that token executes gated writes **without** a per-call prompt —
   because the human decision already happened, once, when the credential was

@@ -29,8 +29,8 @@ def srv(monkeypatch):
     """
     monkeypatch.setenv("CB_ADMIN_READ_ONLY_MODE", "false")
     monkeypatch.setenv("CB_ADMIN_ALWAYS_CONFIRM", "admin_bucket_delete")
-    monkeypatch.setenv("CB_ADMIN_SCOPE_WRITE", "couchbase-mcp:write")
-    monkeypatch.setenv("CB_ADMIN_SCOPE_AUTOMATION", "couchbase-mcp:automation")
+    monkeypatch.setenv("CB_ADMIN_SCOPE_WRITE", "couchbase-admin-mcp:write")
+    monkeypatch.setenv("CB_ADMIN_SCOPE_AUTOMATION", "couchbase-admin-mcp:automation")
 
     # handlers.shared reads CB_ADMIN_READ_ONLY_MODE at import time and caches it;
     # server.py reads the cached value plus its own env at import. Reload shared
@@ -83,21 +83,21 @@ def test_confirm_argument_satisfies_the_gate(srv):
 
 def test_automation_scope_skips_confirmation(srv):
     """An automation+write principal executes ordinary writes without a prompt."""
-    _set_claims("couchbase-mcp:write couchbase-mcp:automation")
+    _set_claims("couchbase-admin-mcp:write couchbase-admin-mcp:automation")
     out = _call(srv, "admin_bucket_create", {"bucket_name": "b", "ram_quota_mb": 256})
     assert "requires_confirmation" not in out
 
 
 def test_automation_scope_does_not_substitute_for_write(srv):
     """Automation scope WITHOUT write scope is still denied by the scope gate."""
-    _set_claims("couchbase-mcp:automation")
+    _set_claims("couchbase-admin-mcp:automation")
     out = _call(srv, "admin_bucket_create", {"bucket_name": "b", "ram_quota_mb": 256})
     assert "scope" in out.lower()
 
 
 def test_hard_ceiling_not_bypassable_by_automation(srv):
     """A tool in CB_ADMIN_ALWAYS_CONFIRM is withheld even for automation."""
-    _set_claims("couchbase-mcp:write couchbase-mcp:automation")
+    _set_claims("couchbase-admin-mcp:write couchbase-admin-mcp:automation")
     out = _call(srv, "admin_bucket_delete", {"bucket_name": "b"})
     assert "requires_confirmation" in out
 

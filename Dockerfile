@@ -14,7 +14,7 @@
 #     couchbase-ecosystem/couchbase-admin-mcp:latest
 #
 # Run (HTTP transport — for networked deployment):
-#   docker run -d --rm --name couchbase-mcp \
+#   docker run -d --rm --name couchbase-admin-mcp \
 #     -p 8000:8000 \
 #     -e CB_ADMIN_TRANSPORT=http \
 #     -e CB_ADMIN_HOST=0.0.0.0 \

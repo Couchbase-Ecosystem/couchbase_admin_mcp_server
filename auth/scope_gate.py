@@ -28,8 +28,8 @@ changes.
 
 Environment
 ───────────
-  CB_ADMIN_SCOPE_READ    scope required for read tools   (default: couchbase-mcp:read)
-  CB_ADMIN_SCOPE_WRITE   scope required for write tools  (default: couchbase-mcp:write)
+  CB_ADMIN_SCOPE_READ    scope required for read tools   (default: couchbase-admin-mcp:read)
+  CB_ADMIN_SCOPE_WRITE   scope required for write tools  (default: couchbase-admin-mcp:write)
 
 License: MIT — Copyright (c) 2026 Chris Ahrendt
 """
@@ -74,11 +74,11 @@ def clear_token_claims() -> None:
 
 
 def _scope_read() -> str:
-    return os.environ.get("CB_ADMIN_SCOPE_READ", "couchbase-mcp:read").strip()
+    return os.environ.get("CB_ADMIN_SCOPE_READ", "couchbase-admin-mcp:read").strip()
 
 
 def _scope_write() -> str:
-    return os.environ.get("CB_ADMIN_SCOPE_WRITE", "couchbase-mcp:write").strip()
+    return os.environ.get("CB_ADMIN_SCOPE_WRITE", "couchbase-admin-mcp:write").strip()
 
 
 def _scope_automation() -> str:
@@ -91,7 +91,7 @@ def _scope_automation() -> str:
     can never self-promote by placing a value in tool arguments.
     """
     return os.environ.get(
-        "CB_ADMIN_SCOPE_AUTOMATION", "couchbase-mcp:automation"
+        "CB_ADMIN_SCOPE_AUTOMATION", "couchbase-admin-mcp:automation"
     ).strip()
 
 

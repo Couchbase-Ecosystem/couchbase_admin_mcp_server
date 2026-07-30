@@ -557,3 +557,102 @@ mutation suites exist.
   enterprise/http with an automation-scoped token (writes execute with no confirmation),
   and all 134 tools driven with every declared parameter — **0 tools reject their own
   declared arguments**, so the mass-assignment allow-list does not block legitimate use.
+
+---
+
+# Round 5 — the three remaining deliverable items
+
+Each of the three turned out to be worse than the earlier note said, which is worth
+recording because in all three cases the note had been written from reading the code
+rather than running it.
+
+## TLS: the enterprise transport was cleartext
+
+`uvicorn.Config(...)` was built with no `ssl_certfile` and no `ssl_keyfile`. The bearer
+tokens this transport carries hold the automation scope, and that token is the credential
+the entire unattended model rests on — the scope gate, the hard ceiling and the audit
+principal are all downstream of "the caller holds a legitimate token". An observer who
+captured one became an authorized child agent and bypassed every control at once.
+
+`tls_config.py` now supports both shapes, because both are real:
+
+| Variable | Meaning |
+|---|---|
+| `CB_ADMIN_TLS_CERT_FILE` / `CB_ADMIN_TLS_KEY_FILE` | This process terminates TLS |
+| `CB_ADMIN_TLS_KEY_PASSWORD` | Only if the key is encrypted |
+| `CB_ADMIN_TLS_CLIENT_CA_FILE` | Mutual TLS — a stolen bearer token alone is then not enough |
+| `CB_ADMIN_TLS_TERMINATED_EXTERNALLY=1` | An ingress, mesh or sidecar handles it in front |
+
+**A non-loopback HTTP bind with neither a certificate nor the acknowledgement is fatal at
+startup.** The acknowledgement is mandatory rather than inferred because "a mesh handles
+it" and "nobody configured it" produce byte-identical processes; the only difference is
+whether a human decided. Loopback is exempt. A half-configured pair is fatal everywhere,
+including loopback, because it looks configured and silently is not.
+
+Verified by a real handshake against the real server, not by inspecting the arguments:
+TLSv1.3 / AES-256-GCM negotiated, cleartext client refused, an untrusting client
+rejecting the chain (so the certificate is genuinely presented), and mutual TLS refusing
+a client with no certificate. Two of those tests are marked `live`.
+
+## The console had never worked
+
+`gui/static/index.html` is 567 lines of JSX served in a plain `<script>` with React from
+cdnjs and **no transpiler anywhere on the page**:
+
+```
+$ node --check <extracted app script>
+    <div className="result-empty">
+    ^
+SyntaxError: Unexpected token '<'
+```
+
+React never mounted. The page was blank, and had been from the start. Nothing caught it
+because every backend test drives Flask directly and none ever loaded the page.
+
+Fixed by vendoring Babel standalone, React and react-dom under `gui/static/vendor/` and
+marking the app script `type="text/babel"`. Vendoring rather than using a CDN also fixes
+two things the earlier note missed: the console could not load at all inside an
+air-gapped or egress-restricted network, and an administration tool for a production
+database was fetching its JavaScript from a third party at request time. The Google Fonts
+`<link>` is gone for the same reasons — the intended faces stay first in the font stacks
+and fall back to system fonts.
+
+Verified by compiling the real JSX with the vendored Babel and rendering the `App`
+component: 23,668 bytes compiled, 1,861 bytes of markup. `tests/test_gui_frontend.py`
+asserts the render, and includes a guard so that converting the source to
+`React.createElement` later fails loudly rather than leaving the Babel assertion vacuous.
+
+## A verifier for the four inferred v4 paths
+
+`scripts/verify_capella_paths.py`. Read-only and non-destructive by default: GETs are
+called for real, and write operations are probed with `OPTIONS` — a method the API does
+not implement — so a 404 means the route does not exist and a 405 means it does. It never
+sends a real write unless `--write-probe` is passed **and** specific operations are named
+with `--only`.
+
+```bash
+export CB_CAPELLA_API_KEY='<the API key SECRET, not its id>'
+python3 scripts/verify_capella_paths.py --org <organization_id> --only-pat   # the 4
+python3 scripts/verify_capella_paths.py --org <organization_id>              # all 61
+```
+
+Exit status is 0 only when nothing is `MISSING`, so it works in CI.
+
+Two things it gets right that a naive version would not, both tested against a fake
+Capella that reproduces the awkward cases:
+
+- It **discovers real identifiers** (project, cluster, bucket, scope, collection, App
+  Service, admin user) rather than substituting a placeholder UUID. A fabricated id makes
+  every nested path return 404, which would report `MISSING` for paths that are perfectly
+  correct — the most likely way for this tool to be confidently wrong.
+- It distinguishes a 404 meaning *route not found* from a 404 whose body says the route
+  matched and the **object** is absent. Reporting the second as `MISSING` would send
+  someone to fix a path that is fine.
+
+Anything it cannot exercise reports `SKIPPED`, never `MISSING`, so silence is never
+mistaken for approval.
+
+## Status
+
+**569 tests** pass in both orderings (9 `live`, run separately). `ruff check` and
+`ruff format --check` clean. The mutation suites still catch 45/45.

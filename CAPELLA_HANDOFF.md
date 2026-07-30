@@ -661,3 +661,74 @@ mistaken for approval.
 
 **569 tests** pass in both orderings (9 `live`, run separately). `ruff check` and
 `ruff format --check` clean. The mutation suites still catch 45/45.
+
+---
+
+# v4 path verification — first live run
+
+Run 2026-07-30 against a test organization
+(`00000000-0000-0000-0000-00000000org1`), `--only-pat`:
+
+```
+  organization : 00000000-0000-0000-0000-00000000org1
+  project      : 00000000-0000-0000-0000-0000000proj1
+  cluster      : 00000000-0000-0000-0000-000000clus1
+  bucket       : dGVzdC1idWNrZXQ=            (base64 of a bucket name)
+  scope        : _default
+  collection   : _default
+  app service  : NONE FOUND
+
+  VERIFIED  [PAT] POST    capella_collection_create      405
+  VERIFIED  [PAT] DELETE  capella_collection_delete      405
+  SKIPPED   [PAT] DELETE  capella_app_service_turn_off        (no app_service_id)
+  SKIPPED   [PAT] DELETE  capella_app_service_admin_user_delete
+```
+
+**Two of the four inferred paths are confirmed**, and they are the two that mattered
+most: collection create and delete sit directly on `capella_env_ensure`'s reconcile path,
+so a wrong path there would have failed part-way through standing up an environment.
+Both are retagged `[LIVE]` in `spec.py` with the date and organization.
+
+Incidentally confirmed by the discovery phase itself, since each required a successful
+GET: `/projects`, `/clusters`, `/buckets`, `/buckets/{id}/scopes`,
+`/scopes/{name}/collections`, and `/appservices` (which returned an empty list — the route
+works, the org simply has no App Service).
+
+## What `[LIVE]` does not claim
+
+A 405 to an `OPTIONS` probe proves the **path** exists, because the control plane can only
+reject the method after it has matched the route. It does **not** prove the **method** is
+accepted: a route that took only GET would answer 405 to OPTIONS as well. The methods here
+are still inferred from the sibling pattern and the API reference.
+
+Proving a method means performing the operation:
+
+```powershell
+python scripts\verify_capella_paths.py --write-probe --only capella_collection_create
+```
+
+That creates a real collection. `--write-probe` deliberately requires `--only` so it
+cannot be run across the whole surface by accident.
+
+## The two still unverified
+
+Both are App Services sub-paths and need an App Service to exist in the target project:
+
+    DELETE .../appservices/{app_service_id}/activationState
+    DELETE .../appservices/{app_service_id}/adminUsers/{admin_user_id}
+
+The parent `/appservices` collection path is confirmed. Re-run `--only-pat` once a project
+has an App Service — App Services are also what Couchbase Lite sync testing needs,
+so this will resolve itself the first time that path is exercised for real.
+
+## Worth doing next
+
+The run above covered only the four inferred paths. The remaining 57 are `[TF]` or `[DOC]`
+— good provenance, but transcription is still transcription:
+
+```powershell
+python scripts\verify_capella_paths.py
+```
+
+Exit status is 0 only if nothing is `MISSING`, so this belongs in CI against a
+long-lived test organization.

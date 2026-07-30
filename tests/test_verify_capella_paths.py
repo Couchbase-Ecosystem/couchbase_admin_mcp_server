@@ -296,8 +296,19 @@ def test_an_unknown_operation_name_is_rejected(script, monkeypatch, capsys):
 
 
 def test_only_pat_selects_exactly_the_inferred_paths(script, monkeypatch, capsys):
-    """The four [PAT] operations are the whole reason this script exists, so the selector
-    that isolates them is worth pinning."""
+    """The [PAT] operations are the whole reason this script exists, so the selector that
+    isolates them is worth pinning.
+
+    The expected count is DERIVED from the registry rather than hard-coded. It was
+    hard-coded to 4, and the moment two of those paths were confirmed against a live
+    organization and retagged [LIVE], the test failed for a reason that was the opposite
+    of a problem. A test that punishes progress gets deleted rather than fixed.
+    """
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
+    expected = {n for n, o in OPS_BY_NAME.items() if "[PAT]" in (o.summary or "")}
+
     monkeypatch.setattr("sys.argv", ["verify", "--org", "ORG", "--only-pat", "--json"])
     script.main()
     payload = json.loads(_last_json(capsys))
@@ -305,7 +316,7 @@ def test_only_pat_selects_exactly_the_inferred_paths(script, monkeypatch, capsys
     assert all(r["inferred"] for r in payload["results"]), [
         r["name"] for r in payload["results"] if not r["inferred"]
     ]
-    assert len(payload["results"]) == 4, [r["name"] for r in payload["results"]]
+    assert {r["name"] for r in payload["results"]} == expected
 
 
 def _last_json(capsys):
@@ -389,13 +400,25 @@ def test_the_static_parse_matches_the_real_registry(script):
         assert by_name[name].method == real.method, f"{name}: method differs"
 
 
-def test_the_static_parse_preserves_the_pat_tags(script):
+def test_the_static_parse_preserves_the_provenance_tags(script):
     """--only-pat selects on the summary text, so the fallback has to carry it or the
-    four inferred paths could not be isolated without the SDK installed."""
+    inferred paths could not be isolated without the SDK installed.
+
+    Compared against the registry rather than a fixed number, so confirming a path and
+    retagging it [LIVE] does not break this.
+    """
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
     root = pathlib.Path(__file__).resolve().parent.parent
     static = script._ops_by_static_parse(str(root / "handlers" / "capella" / "spec.py"))
-    inferred = [op for op in static if "[PAT]" in (op.summary or "")]
-    assert len(inferred) == 4, [op.name for op in inferred]
+
+    for tag in ("[PAT]", "[LIVE]", "[TF]", "[DOC]"):
+        from_static = {op.name for op in static if tag in (op.summary or "")}
+        from_registry = {n for n, o in OPS_BY_NAME.items() if tag in (o.summary or "")}
+        assert from_static == from_registry, (
+            f"{tag} tags differ between parse and registry"
+        )
 
 
 def test_load_ops_prefers_the_real_registry(script):

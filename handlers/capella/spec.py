@@ -26,6 +26,17 @@ fails as an opaque 404 that looks like a missing resource. Sources:
   [PAT]  Not individually verified; follows the confirmed sibling pattern
          exactly (e.g. collections under a confirmed scopes path). Marked
          inline. These are the ones to re-check first if a call 404s.
+  [LIVE] Confirmed against a real Capella organization with
+         scripts/verify_capella_paths.py — the control plane matched the route
+         and answered 405 to an OPTIONS probe, which it can only do after
+         routing. Verified 2026-07-30 against a test
+         organization (v4, cloudapi.cloud.couchbase.com).
+
+         What [LIVE] does and does not assert: the PATH exists. The METHOD is
+         still inferred, because an OPTIONS probe deliberately does not mutate
+         anything — a route that accepted only GET would answer 405 to OPTIONS
+         too. Run the script with --write-probe --only <name> to prove the
+         method, accepting that it then performs the real operation.
 
 TWO CORRECTIONS TO THE PREVIOUS IMPLEMENTATION
 ==============================================
@@ -597,7 +608,7 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Create a collection. For mobile testing the collection layout must "
             "match what the App Endpoint syncs and what Couchbase Lite expects. "
-            "[PAT]"
+            "[LIVE]"
         ),
         group="buckets",
         body={"name": {"type": "string"}, "maxTTL": {"type": "integer"}},
@@ -608,7 +619,7 @@ OPS: tuple[Op, ...] = (
         name="capella_collection_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/scopes/{scope_name}/collections/{collection_name}",
-        summary="Delete a collection and its documents. [PAT]",
+        summary="Delete a collection and its documents. [LIVE]",
         group="buckets",
         destructive=True,
         guarded=True,

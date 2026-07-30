@@ -882,6 +882,39 @@ The skip summary is now grouped by cause, with a closing line naming the missing
 Previously each of the 22 printed the same sentence, twice over, which buried the one
 actionable fact.
 
+### Then the bootstrap found a real bug in `capella_env_create`
+
+`--bootstrap-app-service --yes-really-mutate` creates a temporary App Service so those 22
+paths can be exercised, then deletes it from a `finally`. Its first live run failed:
+
+```
+POST .../appservices  {"nodes": 1, ...}
+422 {"code":422,"httpStatusCode":422,
+     "message":"The instance desired capacity must be between 2 and 12."}
+```
+
+The `nodes: 1` came from `spec.py`, which stated *"2 is the documented minimum for HA; 1
+suffices for testing."* That is wrong — 2 is a hard floor, not an availability
+recommendation — and the same literal was hard-coded at
+`handlers/capella/environment.py` in the App Service phase of `capella_env_create`.
+
+**So the App Service phase of the primary environment tool could never have succeeded.** It
+would have failed on a 422 the first time anyone ran a full `capella_env_create` against a
+real organization.
+
+Nothing caught it because nothing creates an App Service: the guardrail tests stub the client,
+and the path verifier only probed with `OPTIONS`, which never sends a body. The claim was
+plausible, self-consistent, documented in a description the model reads, and false.
+
+Fixed at all three sites, now sharing one named `spec.MIN_APP_SERVICE_NODES`. Four mutation
+entries cover it, including one asserting the verifier's duplicated copy of the constant
+cannot drift from the spec's — the script has to run with nothing installed, so it cannot
+import it.
+
+This is the second time a live run found something invisible from reading the code. The first
+was the App Services list being 405, which had made all 21 App Services operations
+unreachable.
+
 ## Standing recommendation
 
 ```powershell

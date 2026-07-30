@@ -21,6 +21,7 @@ SESSION = "tests/test_session.py"
 COMPAT = "tests/test_mcp_compat.py"
 STATUS = "tests/test_mcp_status.py"
 CONTRACT = "tests/test_handler_contract.py"
+CAPELLA = "tests/test_capella.py tests/test_verify_capella_paths.py"
 
 MUTATIONS = [
     # ── Defect 1: the Secure flag behind a TLS-terminating proxy ────────────
@@ -327,6 +328,35 @@ MUTATIONS = [
         "    def _fake_sdk_connection():\n        return cluster, object(), object()",
         "    def _fake_sdk_connection():\n        raise AssertionError('no cluster')",
         CONTRACT,
+    ),
+    # ── The App Service node count, found by a live 422 ─────────────────────
+    (
+        "capella: env_create asks for a single App Service node again",
+        "handlers/capella/environment.py",
+        '                "nodes": MIN_APP_SERVICE_NODES,',
+        '                "nodes": 1,',
+        CAPELLA,
+    ),
+    (
+        "capella: the node floor drops below what Capella accepts",
+        "handlers/capella/spec.py",
+        "MIN_APP_SERVICE_NODES = 2",
+        "MIN_APP_SERVICE_NODES = 1",
+        CAPELLA,
+    ),
+    (
+        "capella: the tool description tells the model 1 node is fine",
+        "handlers/capella/spec.py",
+        '            f"Node count. Capella requires {MIN_APP_SERVICE_NODES}-"',
+        '            f"Node count. 1 suffices for testing. {MIN_APP_SERVICE_NODES}-"',
+        CAPELLA,
+    ),
+    (
+        "capella: the verifier's node count drifts from the spec",
+        "scripts/verify_capella_paths.py",
+        "_MIN_APP_SERVICE_NODES = 2",
+        "_MIN_APP_SERVICE_NODES = 1",
+        CAPELLA,
     ),
 ]
 

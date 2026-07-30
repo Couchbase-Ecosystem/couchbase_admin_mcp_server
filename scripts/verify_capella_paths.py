@@ -222,6 +222,10 @@ def _first_id(payload: str, *keys: str) -> str | None:
     return None
 
 
+#: Smallest App Service Capella will actually create. Kept in step with
+#: spec.MIN_APP_SERVICE_NODES by a test, not by an import — see bootstrap_app_service.
+_MIN_APP_SERVICE_NODES = 2
+
 #: Poll settings for the App Services bootstrap. Provisioning takes minutes, not seconds.
 _BOOTSTRAP_POLL_SECONDS = 15
 _BOOTSTRAP_TIMEOUT_SECONDS = 1800  # 30 min
@@ -275,9 +279,20 @@ def bootstrap_app_service(token: str, base: str, args) -> str | None:
             f"Ephemeral App Service for v4 path verification. {_BOOTSTRAP_MARKER}. "
             "Safe to delete."
         ),
-        # One node, smallest documented compute. This exists to make paths resolvable, not
-        # to serve traffic, and a 2-node HA pair would double the cost for no extra coverage.
-        "nodes": 1,
+        # TWO nodes, not one. `{"nodes": 1}` looks like the cheap choice and it is simply
+        # refused:
+        #
+        #   422 {"code":422,"httpStatusCode":422,
+        #        "message":"The instance desired capacity must be between 2 and 12."}
+        #
+        # spec.py asserted the opposite ("1 suffices for testing"), and the same wrong value
+        # was hard-coded in capella_env_create's App Service phase, so that phase could
+        # never have succeeded. This run is what found it.
+        #
+        # Duplicated from spec.MIN_APP_SERVICE_NODES rather than imported: this script must
+        # run with nothing installed — it falls back to parsing spec.py with `ast` when the
+        # package is absent, which is how it ran here. A test asserts the two agree.
+        "nodes": _MIN_APP_SERVICE_NODES,
         "compute": {"cpu": 2, "ram": 4},
     }
 

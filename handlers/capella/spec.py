@@ -284,15 +284,33 @@ _DB_CREDENTIAL_BODY: dict[str, Any] = {
     },
 }
 
+#: The node range Capella accepts for an App Service. Named, because the wrong value was
+#: hard-coded in three places and a live 422 was the only thing that found it.
+MIN_APP_SERVICE_NODES = 2
+MAX_APP_SERVICE_NODES = 12
+
 _APP_SERVICE_CREATE_BODY: dict[str, Any] = {
     "name": {"type": "string"},
     "description": {
         "type": "string",
         "description": "Free text; carries the mcp-env marker.",
     },
+    # LIVE-CORRECTED. This said "2 is the documented minimum for HA; 1 suffices for
+    # testing", which is wrong — Capella rejects 1 outright:
+    #
+    #   POST .../appservices  {"nodes": 1, ...}
+    #   422 {"code":422,"message":"The instance desired capacity must be between 2 and 12."}
+    #
+    # The claim came from reading the docs, where 2 is described as the HA minimum, and
+    # nothing contradicted it because no test ever created an App Service. It made
+    # capella_env_create fail at its App Service phase every time.
     "nodes": {
         "type": "integer",
-        "description": "Node count. 2 is the documented minimum for HA; 1 suffices for testing.",
+        "description": (
+            f"Node count. Capella requires {MIN_APP_SERVICE_NODES}-"
+            f"{MAX_APP_SERVICE_NODES} and rejects anything outside that with a 422; "
+            f"{MIN_APP_SERVICE_NODES} is both the minimum and the cheapest."
+        ),
     },
     "compute": {
         "type": "object",

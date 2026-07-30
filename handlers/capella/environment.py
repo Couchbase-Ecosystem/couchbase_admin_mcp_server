@@ -55,6 +55,7 @@ from . import guardrails as g
 from .client import CapellaError, build_path, capella_list, capella_request
 from .spec import (
     IN_FLIGHT_CLUSTER_STATES,
+    MIN_APP_SERVICE_NODES,
     OPS_BY_NAME,
     TERMINAL_APP_SERVICE_STATES,
 )
@@ -960,7 +961,11 @@ def _ensure(args: dict) -> dict:
                     ttl_hours=args.get("ttl_hours"),
                     owner=str(args.get("owner") or ""),
                 ),
-                "nodes": 1,
+                # NOT 1. Capella answers `{"nodes": 1}` with
+                #   422 "The instance desired capacity must be between 2 and 12."
+                # so this phase of capella_env_create failed every time it ran. No test
+                # caught it because no test creates an App Service; a live run did.
+                "nodes": MIN_APP_SERVICE_NODES,
                 "compute": {"cpu": 2, "ram": 4},
             },
         )

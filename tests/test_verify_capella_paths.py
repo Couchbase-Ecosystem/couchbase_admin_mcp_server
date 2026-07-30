@@ -1027,8 +1027,10 @@ def test_the_created_app_service_carries_an_identifying_marker(fast_polls, monke
     script.bootstrap_app_service("tok", "/base", _Args())
 
     assert script._BOOTSTRAP_MARKER in seen["body"]["description"]
-    # One node, not an HA pair: this exists to make paths resolvable, not serve traffic.
-    assert seen["body"]["nodes"] == 1
+    # The cheapest App Service Capella will actually create — which is TWO nodes, not one.
+    # This test asserted 1 until a live run came back with
+    #   422 "The instance desired capacity must be between 2 and 12."
+    assert seen["body"]["nodes"] == script._MIN_APP_SERVICE_NODES == 2
 
 
 def test_a_failed_deployment_still_returns_the_id(fast_polls, monkeypatch):

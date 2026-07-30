@@ -618,3 +618,83 @@ def test_the_authoritative_table_covers_every_app_service_operation():
     assert not missing, (
         f"App Services operations with no authoritative path pinned: {sorted(missing)}"
     )
+
+
+# ── App Service node count ───────────────────────────────────────────────────
+#
+# A live run answered `{"nodes": 1}` with
+#
+#   422 {"code":422,"message":"The instance desired capacity must be between 2 and 12."}
+#
+# spec.py stated the opposite ("2 is the documented minimum for HA; 1 suffices for testing"),
+# and the same wrong value was hard-coded in capella_env_create's App Service phase — so that
+# phase could never have succeeded. Nothing caught it because no test creates an App Service,
+# and the docs describe 2 as the HA minimum, which reads like an availability recommendation
+# rather than a hard floor.
+#
+# These pin the corrected value at every site that carries one.
+
+
+def test_the_app_service_node_floor_is_two():
+    """Not 1. The API refuses 1 with a 422, whatever the documentation implies."""
+    from handlers.capella import spec
+
+    assert spec.MIN_APP_SERVICE_NODES == 2
+    assert spec.MAX_APP_SERVICE_NODES == 12
+
+
+def test_env_create_requests_at_least_the_minimum_node_count():
+    """The regression that mattered: capella_env_create hard-coded 1, so the App Service
+    phase of the primary environment tool failed every time it ran."""
+    import inspect
+
+    from handlers.capella import environment, spec
+
+    # Comment lines are excluded: the comment that explains this bug quotes the bad literal
+    # verbatim, so a naive substring search over the whole source reports the explanation as
+    # the violation. Same trap as the mcp_compat field scan.
+    code = [
+        line
+        for line in inspect.getsource(environment).splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    offenders = [line.strip() for line in code if '"nodes": 1' in line]
+    assert not offenders, (
+        "capella_env_create is back to requesting a single App Service node, which Capella "
+        f"refuses with a 422: {offenders}"
+    )
+    assert any('"nodes": MIN_APP_SERVICE_NODES' in line for line in code)
+    assert spec.MIN_APP_SERVICE_NODES >= 2
+
+
+def test_the_documented_node_description_does_not_claim_one_works():
+    """The description is what the model reads before choosing a value. It previously told
+    the model that 1 was fine for testing, which is the value that 422s."""
+    from handlers.capella import spec
+
+    description = spec._APP_SERVICE_CREATE_BODY["nodes"]["description"]
+    assert "1 suffices" not in description
+    assert str(spec.MIN_APP_SERVICE_NODES) in description
+
+
+def test_the_verifier_and_the_spec_agree_on_the_node_floor():
+    """The verify script cannot import spec — it must run with nothing installed, and falls
+    back to parsing spec.py with `ast`. So the constant is duplicated, and this is what keeps
+    the copy honest."""
+    import pathlib
+    import re
+
+    from handlers.capella import spec
+
+    script = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "verify_capella_paths.py"
+    ).read_text(encoding="utf-8")
+
+    match = re.search(r"^_MIN_APP_SERVICE_NODES\s*=\s*(\d+)", script, re.MULTILINE)
+    assert match, "the verify script no longer declares _MIN_APP_SERVICE_NODES"
+    assert int(match.group(1)) == spec.MIN_APP_SERVICE_NODES
+
+    # And it must actually be used in the request body, not merely declared.
+    assert '"nodes": _MIN_APP_SERVICE_NODES' in script

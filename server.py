@@ -90,6 +90,7 @@ from mcp.types import TextContent, Tool
 import audit
 import authz
 import deployment
+import mcp_compat
 import profile_config
 import tls_config
 from auth import request_auth
@@ -194,7 +195,7 @@ _GATING: bool = deployment.gating_enabled()
 
 def _is_read_only(t: Tool) -> bool:
     """A tool is read-only if its annotation says so."""
-    return bool(t.annotations and t.annotations.readOnlyHint)
+    return mcp_compat.is_read_only(t)
 
 
 def _filter_tools(raw_tools: list[Tool]) -> list[Tool]:
@@ -232,7 +233,7 @@ def _with_correlation_id(tool: Tool) -> Tool:
     Advertised here rather than in ~204 hand-written schemas so it cannot drift, and so
     a tool added tomorrow gets it for free.
     """
-    schema = dict(tool.inputSchema or {})
+    schema = dict(mcp_compat.input_schema(tool))
     properties = dict(schema.get("properties") or {})
     if "correlation_id" in properties:
         return tool
@@ -259,7 +260,7 @@ def _is_write_tool(t: Tool) -> bool:
     Unannotated tools count as writes (unknown intent -> stronger gate). This is
     the same classification the read-only filter and the scope gate use.
     """
-    return not (t.annotations and t.annotations.readOnlyHint)
+    return not mcp_compat.is_read_only(t)
 
 
 # Default confirmation set: EVERY write tool (decision: admin operations are

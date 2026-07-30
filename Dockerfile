@@ -59,9 +59,9 @@ COPY pyproject.toml ./
 # HTTP transport fails to start after a rebuild, pin mcp to a known-good version
 # here (e.g. "mcp==1.28.1") rather than the open ">=1.0.0" range.
 RUN pip install --prefix=/install \
-    # Same upper bound as pyproject.toml, and for the same reason: mcp 2.0 renamed the
-    # Tool model's fields, so an unbounded range builds an image whose server raises
-    # AttributeError on first use.
+    # Same bound as pyproject.toml. The Tool-model differences are handled by
+    # mcp_compat.py, but 2.x removed the Server decorator registry and request_ctx, on
+    # which the HTTP authorization path depends. See pyproject.toml for the detail.
     "mcp>=1.10,<2.0" \
     "couchbase>=4.4.0,<5.0.0" \
     "uvicorn>=0.27" \
@@ -117,6 +117,7 @@ COPY --chown=mcp:mcp audit.py /app/audit.py
 COPY --chown=mcp:mcp authz.py /app/authz.py
 COPY --chown=mcp:mcp deployment.py /app/deployment.py
 COPY --chown=mcp:mcp logging_config.py /app/logging_config.py
+COPY --chown=mcp:mcp mcp_compat.py /app/mcp_compat.py
 COPY --chown=mcp:mcp profile_config.py /app/profile_config.py
 COPY --chown=mcp:mcp tls_config.py /app/tls_config.py
 COPY --chown=mcp:mcp handlers /app/handlers

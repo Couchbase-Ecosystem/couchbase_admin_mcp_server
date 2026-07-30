@@ -16,19 +16,32 @@ classifiers = [
 ]
 
 dependencies = [
-    # UPPER BOUND IS LOAD-BEARING, not caution.
+    # UPPER BOUND IS LOAD-BEARING, and the reason is NOT the one first assumed.
     #
-    # mcp 2.0 renamed the Tool model's fields: inputSchema -> input_schema, and the
-    # annotation hints likewise. This codebase uses the 1.x names in 400+ places, so with
-    # an unbounded ">=1.0.0" a fresh `pip install` resolved mcp 2.0.0 and the server died
-    # on first use with:
+    # The Tool model's field renames (inputSchema -> input_schema, and the annotation
+    # hints likewise) turned out to be the easy half, and mcp_compat.py now handles both
+    # spellings. Construction was never affected at all: 2.x keeps the camelCase names as
+    # pydantic aliases, so the ~150 Tool(...) and ~360 ToolAnnotations(...) calls here work
+    # unchanged. Only nineteen attribute READS broke.
     #
-    #     AttributeError: 'Tool' object has no attribute 'inputSchema'
+    # What actually blocks 2.x is the SERVER API:
     #
-    # The development environment had 1.29.0 and worked, so nothing surfaced it until a
-    # CI job installed the built wheel into a clean virtualenv and imported from THAT
-    # rather than from the source tree. Supporting 2.x needs a compatibility layer over
-    # the Tool model; it is not a constraint change.
+    #   * lowlevel.Server lost the decorator registry entirely. `@app.list_tools()` and
+    #     `@app.call_tool()` are gone in favour of add_request_handler(method, params_type,
+    #     handler), and the runner now owns `initialize`.
+    #   * mcp.server.lowlevel.server.request_ctx NO LONGER EXISTS. That contextvar is how
+    #     auth/request_auth.py resolves the caller's validated claims INSIDE the dispatch
+    #     task, which is the whole mechanism that makes HTTP authorization work here — see
+    #     the account in that module of why nothing else does. 2.x offers
+    #     ServerRequestContext and a request_state module instead.
+    #   * The HTTP transport wiring differs: Server.session_manager and
+    #     Server.streamable_http_app replace the StreamableHTTPSessionManager assembly in
+    #     server._main_http.
+    #
+    # So the port is a re-implementation of the authorization path, not an adaptation, and
+    # it needs the same adversarial review the current one got. Until then, pinning below
+    # 2.0 is the honest position: a range that resolves to a version the server cannot run
+    # is worse than a narrow one.
     "mcp>=1.10,<2.0",
     "couchbase>=4.4.0,<5.0.0",
 ]
@@ -179,6 +192,7 @@ packages = ["handlers", "auth", "gui"]
 "authz.py" = "authz.py"
 "deployment.py" = "deployment.py"
 "logging_config.py" = "logging_config.py"
+"mcp_compat.py" = "mcp_compat.py"
 "profile_config.py" = "profile_config.py"
 "tls_config.py" = "tls_config.py"
 

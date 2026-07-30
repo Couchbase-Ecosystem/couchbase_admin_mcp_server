@@ -77,6 +77,12 @@ jobs:
         run: uv run python scripts/mutation_rounds_1_3.py
       - name: Mutations, round 4
         run: uv run python scripts/mutation_round_4.py
+      - name: Mutations, round 5
+        # The session-cookie and mcp-version-compat guards, plus the cross-handler
+        # contract harness. Round 5 also mutates a TEST fixture: if the fixture goes
+        # back to short-circuiting the SQL++ handlers, the routing checks for three
+        # modules silently stop proving anything, and that is only detectable this way.
+        run: uv run python scripts/mutation_round_5.py
 
   package:
     # The image and the wheel both listed their top-level modules by hand and both once

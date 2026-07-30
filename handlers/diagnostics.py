@@ -427,9 +427,13 @@ def handle(name: str, args: dict) -> list[TextContent]:
     except Exception as exc:
         return err(f"Couchbase connection failed: {exc}", tool=name)
 
-    from couchbase.options import QueryOptions
-
     try:
+        # Inside the try. This import used to sit above it, so an ImportError escaped
+        # handle() uncaught and surfaced as a traceback out of the MCP transport rather than
+        # as an error response the model can read. Every other handler in this project
+        # returns err() for anything that goes wrong; this was the one exit that did not.
+        from couchbase.options import QueryOptions
+
         if name == "cb_get_schema_for_collection":
             return _schema(cluster, QueryOptions, args)
 

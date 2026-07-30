@@ -1025,6 +1025,46 @@ def _value_is_prose(value: str) -> bool:
     return len(inner.split()) >= 3
 
 
+#: A password inside a URI's userinfo component: scheme://user:PASSWORD@host.
+#:
+#: "/", "?", "#" and whitespace end the authority, so excluding them is what stops this
+#: matching an "@" that appears later in a path or query — `?filter=a@b.com` and
+#: `http://host:8080/a@b` both correctly fail to match.
+#:
+#: The password class deliberately ALLOWS "@" and is greedy, so it runs to the LAST "@"
+#: before the host. RFC 3986 requires a literal "@" in a password to be percent-encoded, but
+#: people do paste raw ones, and with "@" excluded the match stopped at the first one and
+#: left the rest of the password in the clear — `admin:p@ssword@host` masked as
+#: `admin:***REDACTED***@ssword@host`. Over-masking a host is harmless; under-masking a
+#: password is the whole bug.
+_URI_CREDENTIAL_RE = re.compile(
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)"
+    r"(?P<user>[^/?#@\s:]+)"
+    r":(?P<password>[^/?#\s]*)"
+    r"(?=@)"
+)
+
+
+def redact_uri_credentials(text: str) -> str:
+    """Mask the password in any `scheme://user:password@host` URI inside `text`.
+
+    None of the other rules catch this. `redact()` masks by KEY NAME, and the key here is
+    `connection_string`, which contains no credential-looking word. `redact_text()` masks
+    `key: value` assignments, and a URI is one value. So `cb_mcp_status` — annotated
+    read-only, and therefore loaded in the safest deployment — returned
+    CB_CONNECTION_STRING verbatim, handing the cluster password to any caller holding a
+    read-only token.
+
+    The username is deliberately KEPT. It is not the secret, and "which account is this
+    server using?" is the main reason someone reads this field.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    return _URI_CREDENTIAL_RE.sub(
+        lambda m: f"{m.group('scheme')}{m.group('user')}:{REDACTED}", text
+    )
+
+
 def redact_text(text: str) -> str:
     """Mask credential-looking assignments inside a free-form string.
 
@@ -1034,6 +1074,10 @@ def redact_text(text: str) -> str:
     """
     if not isinstance(text, str) or not text:
         return text
+
+    # Connection strings reach logs and error messages constantly — "failed to connect to
+    # couchbase://admin:pw@host" is the single most likely place this leaks.
+    text = redact_uri_credentials(text)
 
     fragments = "|".join(re.escape(part) for part in _SENSITIVE_KEY_PARTS)
     pattern = re.compile(

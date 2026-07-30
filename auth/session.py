@@ -28,11 +28,34 @@ from typing import Any
 # ── Config ────────────────────────────────────────────────────────────────────
 
 
+DEFAULT_TTL_SECONDS = 28800  # 8 h
+
+
 def _session_ttl() -> int:
+    """The session lifetime, in seconds.
+
+    An unparseable value falls back to the default rather than raising, because this is
+    read on every request and a typo must not turn every authenticated request into a 500.
+    `validate_startup()` is what reports the typo, once, at boot.
+    """
     try:
-        return int(os.environ.get("OAUTH_SESSION_TTL_SECONDS", "28800"))  # 8 h
+        return int(
+            os.environ.get("OAUTH_SESSION_TTL_SECONDS", str(DEFAULT_TTL_SECONDS))
+        )
     except (ValueError, TypeError):
-        return 28800
+        return DEFAULT_TTL_SECONDS
+
+
+def cookie_max_age() -> int:
+    """The `max_age` for the session cookie.
+
+    Exists so the browser-side cookie lifetime and the server-side session lifetime cannot
+    drift. They were previously two independent reads of OAUTH_SESSION_TTL_SECONDS with
+    DIFFERENT failure behaviour — this module fell back to 8 h, while the console did a bare
+    `int(...)` that raised. The raise landed in the OAuth callback, after the token exchange
+    had already succeeded, so a typo'd TTL made login impossible with a 500 and no clue why.
+    """
+    return _session_ttl()
 
 
 SESSION_COOKIE = "cb_mcp_session"
@@ -150,6 +173,80 @@ def delete_session(cookie_value: str) -> None:
     session_id = _unsign(cookie_value)
     if session_id:
         _store.pop(session_id, None)
+
+
+def cookie_is_secure() -> bool:
+    """Whether the session cookie must carry the `Secure` flag.
+
+    Decided from CONFIGURATION, never from the request.
+
+    The console previously used `secure=request.is_secure`, which reads the WSGI scheme.
+    Behind a TLS-terminating reverse proxy the scheme Flask sees is plain `http`, so the
+    session cookie was issued WITHOUT `Secure` — in precisely the enterprise shape the
+    runbook documents (`CB_ADMIN_TLS_TERMINATED_EXTERNALLY=1` behind nginx or Traefik). A
+    cookie without `Secure` is sent over cleartext, so any downgrade to http:// hands the
+    session ID to the network.
+
+    Reading `X-Forwarded-Proto` would be the obvious repair and is the wrong one. That
+    header is attacker-settable, and `_is_loopback_client` in the console already refuses to
+    trust forwarding headers for anything. Trusting one here to decide a security flag would
+    contradict that: an attacker who can set `X-Forwarded-Proto: http` would strip `Secure`
+    from their own cookie, and worse, the same header is the one a proxy is expected to set.
+
+    So: TLS anywhere in the path — terminated here or upstream — means `Secure`. The only
+    exception is the plain-HTTP loopback development case, where `Secure` would prevent the
+    browser sending the cookie back over http://127.0.0.1 and break local login outright.
+    """
+    import tls_config
+
+    settings = tls_config.from_env()
+    # SIM103 is suppressed below: ruff wants this collapsed to
+    # `return bool(cert_file or terminated_externally)`. Kept as two branches so the comment
+    # further down can explain why returning False is deliberate rather than an oversight —
+    # this decides a security flag, and the reasoning matters more than the line count.
+    if settings.cert_file or settings.terminated_externally:  # noqa: SIM103
+        return True
+
+    # No TLS configured at all. `tls_config.validate()` already refuses to start in this
+    # state on a non-loopback bind, so reaching here means local development over http://.
+    return False
+
+
+def validate_startup() -> list[str]:
+    """Configuration errors that must stop the console from starting. Empty list is OK.
+
+    `_signing_key()` raises when OAUTH_SESSION_SECRET is unset, but it raises lazily — the
+    console booted fine and then returned an opaque 500 to the first person who tried to log
+    in. Every other misconfiguration in this project is fatal at startup with a message that
+    names the variable; this one now is too.
+    """
+    errors: list[str] = []
+
+    if not os.environ.get("OAUTH_SESSION_SECRET", "").strip():
+        errors.append(
+            "OAUTH_SESSION_SECRET is not set. The console signs its session cookies with "
+            "it, so without it every login fails. Generate one with:\n"
+            '  python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+
+    raw_ttl = os.environ.get("OAUTH_SESSION_TTL_SECONDS")
+    if raw_ttl is not None and raw_ttl.strip():
+        try:
+            ttl = int(raw_ttl)
+        except (ValueError, TypeError):
+            errors.append(
+                f"OAUTH_SESSION_TTL_SECONDS={raw_ttl!r} is not an integer. Sessions would "
+                f"silently fall back to {DEFAULT_TTL_SECONDS}s, which is longer than you "
+                "probably meant if you were trying to shorten it."
+            )
+        else:
+            if ttl <= 0:
+                errors.append(
+                    f"OAUTH_SESSION_TTL_SECONDS={ttl} expires every session the instant it "
+                    "is created, so nobody can log in. Use a positive number of seconds."
+                )
+
+    return errors
 
 
 def _purge_expired() -> None:

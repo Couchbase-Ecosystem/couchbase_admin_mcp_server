@@ -219,6 +219,40 @@ air-gapped network, and an admin tool should not fetch its JavaScript from a thi
 request time. It was also served with no transpiler at all for a while, which meant the
 page rendered blank and no test noticed.
 
+### 10. Read `Tool` metadata through `mcp_compat`, never by attribute
+
+mcp 2.0 renamed `Tool.inputSchema` to `input_schema` and `annotations.readOnlyHint` to
+`read_only_hint`. **Constructions are fine** — 2.x keeps the camelCase spellings as pydantic
+aliases, so the several hundred `Tool(inputSchema=...)` calls need no change. Only attribute
+**reads** break, and there were nineteen of them.
+
+Use `mcp_compat.input_schema(tool)`, `is_read_only(tool)`, `is_destructive(tool)`,
+`is_idempotent(tool)`. `tests/test_mcp_compat.py` parses every module and fails on a direct
+read, so a twentieth cannot appear quietly.
+
+The pin is `mcp>=1.10,<2.0` for a separate reason, documented in `pyproject.toml`: 2.x also
+removed `Server`'s decorator registry and the `request_ctx` contextvar that
+`auth/request_auth.py` uses to resolve claims inside the dispatch task.
+
+### 11. Every handler group is tested by the shared contract harness
+
+`tests/test_handler_contract.py` discovers every module in `handlers/` and every tool in its
+`TOOLS`, then asserts the properties that are dangerous to get wrong and invisible when you
+do: valid schema, `required` ⊆ `properties`, annotations present and non-contradictory,
+globally unique namespaced names, every declared tool actually routed by `handle()`, no
+handler raising instead of returning `err()`, and no data-mutating SQL++ embedded in source.
+
+Two things to know before you touch it:
+
+- Add a module to `handlers/` and `MODULE_NAMES` must grow with it. A test compares the two
+  and fails if they diverge — otherwise a new group is silently skipped by ~140
+  parametrisations that all still pass.
+- The `no_cluster` fixture patches each seam **on every module that imported it**, including
+  the derived version predicates (`is_8x`, `is_7x`), not just the primitives they call.
+  Patching only `handlers.shared` is not enough: some suites reload that module, after which
+  a handler's imported function still closes over the old module's globals. This surfaced as
+  a failure in one module, in full-suite runs only.
+
 ---
 
 ## 🏗️ Project layout

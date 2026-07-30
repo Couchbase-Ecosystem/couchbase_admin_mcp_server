@@ -80,6 +80,7 @@ from flask_cors import CORS  # noqa: E402
 # an incoherent posture while this process started and served the full destructive
 # tool surface.
 import deployment  # noqa: E402
+import mcp_compat  # noqa: E402
 import profile_config  # noqa: E402
 
 
@@ -105,6 +106,18 @@ def _enforce_gui_posture() -> None:
     _sink_problem = _audit_mod.audit_sink_error()
     if _sink_problem:
         problems.append(_sink_problem)
+
+    # Session configuration, but only when OAuth is on — with auth disabled no session
+    # cookie is ever issued, so demanding a signing secret would be noise.
+    if os.environ.get("OAUTH_ENABLED", "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        from auth import session as _session_mod
+
+        problems.extend(_session_mod.validate_startup())
 
     host = (os.environ.get("GUI_HOST") or "127.0.0.1").strip()
     allow_remote = (os.environ.get("CB_GUI_ALLOW_REMOTE") or "").strip().lower() in (
@@ -291,11 +304,11 @@ TOOL_INDEX = {t.name: t for t in ALL_TOOLS}
 # Safety helpers (unchanged from original)
 # ---------------------------------------------------------------------------
 def _is_destructive(tool) -> bool:
-    return bool(tool and tool.annotations and tool.annotations.destructiveHint)
+    return bool(tool) and mcp_compat.is_destructive(tool)
 
 
 def _is_read_only(tool) -> bool:
-    return bool(tool and tool.annotations and tool.annotations.readOnlyHint)
+    return bool(tool) and mcp_compat.is_read_only(tool)
 
 
 #: Deployment gating, exactly as server.py applies it. The console ignored it
@@ -834,9 +847,13 @@ def auth_callback():
         _session.SESSION_COOKIE,
         cookie_val,
         httponly=True,
-        secure=request.is_secure,  # Secure flag when served over HTTPS
+        # From configuration, NOT request.is_secure — behind a TLS-terminating proxy the
+        # scheme Flask sees is http, which silently dropped this flag. See
+        # auth/session.py::cookie_is_secure.
+        secure=_session.cookie_is_secure(),
         samesite="Lax",
-        max_age=int(os.environ.get("OAUTH_SESSION_TTL_SECONDS", "28800")),
+        # One source of truth with the server-side session lifetime.
+        max_age=_session.cookie_max_age(),
         path="/",
     )
     return resp
@@ -924,7 +941,7 @@ def list_tools():
             {
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": tool.inputSchema,
+                "inputSchema": mcp_compat.input_schema(tool),
                 "readOnly": _is_read_only(tool),
                 "destructive": _is_destructive(tool),
             }

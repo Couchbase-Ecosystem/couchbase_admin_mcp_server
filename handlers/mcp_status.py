@@ -23,6 +23,8 @@ import sys
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+import mcp_compat
+
 from .shared import (
     DISABLED_TOOLS,
     ELICITATION_HINTS,
@@ -30,6 +32,7 @@ from .shared import (
     err,
     get_cluster_version,
     ok,
+    redact_uri_credentials,
 )
 
 TOOLS: list[Tool] = [
@@ -133,15 +136,9 @@ def _status_payload(server_module) -> dict:
     confirmation_required = getattr(server_module, "_CONFIRMATION_REQUIRED", set())
 
     by_category = {
-        "read": sum(
-            1 for t in loaded_tools if t.annotations and t.annotations.readOnlyHint
-        ),
-        "write": sum(
-            1 for t in loaded_tools if t.annotations and not t.annotations.readOnlyHint
-        ),
-        "destructive": sum(
-            1 for t in loaded_tools if t.annotations and t.annotations.destructiveHint
-        ),
+        "read": sum(1 for t in loaded_tools if mcp_compat.is_read_only(t)),
+        "write": sum(1 for t in loaded_tools if not mcp_compat.is_read_only(t)),
+        "destructive": sum(1 for t in loaded_tools if mcp_compat.is_destructive(t)),
     }
 
     return {
@@ -164,8 +161,11 @@ def _status_payload(server_module) -> dict:
             "by_category": by_category,
         },
         "connection": {
-            "connection_string": os.environ.get(
-                "CB_CONNECTION_STRING", "couchbase://localhost"
+            # redact() masks by key name and "connection_string" looks innocent, so a
+            # password in the URI's userinfo used to be returned in full by this
+            # read-only tool. Masked at the source rather than relying on the generic pass.
+            "connection_string": redact_uri_credentials(
+                os.environ.get("CB_CONNECTION_STRING", "couchbase://localhost")
             ),
             "default_bucket": os.environ.get("CB_BUCKET", "default"),
             "default_scope": os.environ.get("CB_SCOPE", "_default"),
@@ -183,9 +183,9 @@ def _category_of(t: Tool) -> str:
     """Classify a single Tool for the cb_mcp_list_tools filter."""
     if not t.annotations:
         return "write"
-    if t.annotations.destructiveHint:
+    if mcp_compat.is_destructive(t):
         return "destructive"
-    if t.annotations.readOnlyHint:
+    if mcp_compat.is_read_only(t):
         return "read"
     return "write"
 
@@ -210,13 +210,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
                     {
                         "name": t.name,
                         "category": cat,
-                        "read_only": bool(t.annotations and t.annotations.readOnlyHint),
-                        "destructive": bool(
-                            t.annotations and t.annotations.destructiveHint
-                        ),
-                        "idempotent": bool(
-                            t.annotations and t.annotations.idempotentHint
-                        ),
+                        "read_only": mcp_compat.is_read_only(t),
+                        "destructive": mcp_compat.is_destructive(t),
+                        "idempotent": mcp_compat.is_idempotent(t),
                     }
                 )
             return ok({"count": len(rows), "filter": category, "tools": rows})
@@ -237,17 +233,11 @@ def handle(name: str, args: dict) -> list[TextContent]:
                 {
                     "name": match.name,
                     "description": match.description,
-                    "input_schema": match.inputSchema,
+                    "input_schema": mcp_compat.input_schema(match),
                     "annotations": {
-                        "read_only": bool(
-                            match.annotations and match.annotations.readOnlyHint
-                        ),
-                        "destructive": bool(
-                            match.annotations and match.annotations.destructiveHint
-                        ),
-                        "idempotent": bool(
-                            match.annotations and match.annotations.idempotentHint
-                        ),
+                        "read_only": mcp_compat.is_read_only(match),
+                        "destructive": mcp_compat.is_destructive(match),
+                        "idempotent": mcp_compat.is_idempotent(match),
                     },
                     "currently_loaded": match.name in loaded_names,
                     "currently_disabled": match.name in DISABLED_TOOLS,

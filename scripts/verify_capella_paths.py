@@ -6,14 +6,21 @@ WHY THIS EXISTS
 ===============
 The 61 operations in handlers/capella/spec.py are tagged by provenance:
 
-    [TF]   read out of the official Terraform provider's Go source
-    [DOC]  taken from Capella's published API documentation
-    [PAT]  INFERRED from a confirmed sibling, not individually verified
+    [TF]           read out of the official Terraform provider's Go source
+    [DOC]          taken from Capella's published API documentation / OpenAPI spec
+    [LIVE]         path confirmed against a real organization by this script
+    [LIVE+METHOD]  path and method both confirmed
+    [PAT]          INFERRED from a confirmed sibling, not individually verified
 
-The [PAT] ones are the risk. They follow the pattern of endpoints that are confirmed,
-but nobody has watched them return a response. A wrong path fails with a 404 and carries
-no data risk — but `capella_env_ensure` would fail part-way through reconciling an
-environment, and collection creation sits squarely on the path this server was built for.
+The [PAT] ones are the risk: they follow the pattern of endpoints that are confirmed, but
+nobody has watched them return a response. A wrong path fails as an opaque 404 that looks
+like a missing resource.
+
+Running this against a live organization has already earned its keep. It found that
+`GET .../clusters/{id}/appservices` does not exist — that path is POST-only, App Services
+are listed organization-wide — which had made every App Services operation unreachable and
+was invisible from reading the code. It also found `/certificate` where the API wants
+`/certificates`.
 
 This script answers the question by asking Capella, which is the only authority.
 
@@ -61,8 +68,8 @@ the error mentions redirection rather than this script.
 
 The organization is discovered from the API key, which can only see organizations it
 belongs to. Pass --org only if the key can see more than one (the script will say so and
-list them). Add --project / --cluster to pin those if the org has several. Omit --only-pat
-to check all 61 operations rather than the four inferred ones. --json gives
+list them). Add --project / --cluster to pin those if the org has several. --only-pat
+narrows to the paths still tagged [PAT]; run with no selector to check all 61. --json gives
 machine-readable output.
 
 The key needs only read access for the default mode: create one under
@@ -98,13 +105,57 @@ _PATH_EXISTS = {200, 201, 202, 204, 400, 401, 403, 405, 409, 422, 429}
 #: Phrases in a 404 body that indicate the ROUTE matched and the OBJECT was absent.
 #: Without this, verifying a path that needs an id we could not discover would report a
 #: false MISSING — the most likely way for this script to be confidently wrong.
+#: Prose fallback, kept only as a second opinion behind the structural check below.
 _OBJECT_ABSENT_HINTS = (
     "not found in",
     "does not exist",
+    "does not have",
     "notfound",
     "could not be found",
+    "no existing",
 )
-_OBJECT_WORDS = ("bucket", "scope", "collection", "cluster", "user", "service", "index")
+
+#: The lowest value a CAPELLA DOMAIN error code takes. Capella's own codes are four or
+#: five digits (11040, 4025, ...); a bare HTTP status would be 404. Anything at or above
+#: this threshold identifies an error the API's own handler generated, which it can only
+#: do after routing the request.
+_DOMAIN_CODE_FLOOR = 1000
+
+
+def _capella_domain_error(body: str) -> int | None:
+    """The Capella error code in a response body, if it carries one.
+
+    THIS IS THE RELIABLE SIGNAL, and it replaced a keyword scan that got it wrong.
+
+    Capella answers a 404 in two quite different situations: the route does not exist, and
+    the route exists but the named object does not. Distinguishing them by looking for
+    phrases like "does not exist" failed on a real response —
+
+        {"code":11040,
+         "hint":"Returned from the API when a database does not have an existing On/Off
+                 schedule.",
+         "httpStatusCode":404,
+         "message":"Failed to get On/Off schedule..."}
+
+    — which says plainly that the route was reached and the schedule was absent, but
+    matched none of the phrases and named none of the object words. The tool reported
+    MISSING for a path that is correct, which is precisely the "confidently wrong" outcome
+    this script exists to avoid.
+
+    A structured error carrying a domain `code` is a much better discriminator: only the
+    API's own handlers produce those, and they cannot run before the request has been
+    routed.
+    """
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    code = parsed.get("code")
+    if isinstance(code, bool) or not isinstance(code, int):
+        return None
+    return code if code >= _DOMAIN_CODE_FLOOR else None
 
 
 class Result:
@@ -228,8 +279,34 @@ def discover(token: str, args) -> dict:
     else:
         print("  bucket       : NONE FOUND (bucket-scoped paths will be SKIPPED)")
 
-    _, body = _request("GET", f"{base}/appservices", token)
-    app = _first_id(body, "id", "appServiceId")
+    # App Services are listed ORGANIZATION-WIDE. The cluster-level /appservices path
+    # accepts POST only, so the GET this used to make returned 405 — and because a 405
+    # body yields no id, the result was reported as "NONE FOUND" exactly as an empty list
+    # would be. Every App Services path was therefore SKIPPED, and the discovery output
+    # gave no hint that the request had been rejected rather than answered.
+    status, body = _request(
+        "GET",
+        f"/v4/organizations/{args.org}/appservices?projectId={ids['project_id']}",
+        token,
+    )
+    if status is not None and status >= 400:
+        print(f"  app service  : list returned HTTP {status} — {body[:110]}")
+        return ids
+
+    # There is no clusterId query parameter, so narrow client-side. Taking the first item
+    # would pick an App Service belonging to some other cluster in the organization.
+    app = None
+    try:
+        parsed = json.loads(body)
+        items = parsed.get("data") if isinstance(parsed, dict) else parsed
+        for item in items or []:
+            data = item.get("data", item) if isinstance(item, dict) else {}
+            if str(data.get("clusterId") or "") == str(ids["cluster_id"]):
+                app = str(data.get("id") or "")
+                break
+    except Exception:
+        app = None
+
     if app:
         ids["app_service_id"] = app
         print(f"  app service  : {app}")
@@ -268,12 +345,35 @@ def fill(path: str, ids: dict) -> tuple[str | None, list[str]]:
 _PAYLOAD_REJECTED = {400, 422}
 
 
+#: Sentinel for "this field was never populated", as distinct from "declared false".
+_UNKNOWN = object()
+
+
 def _is_destructive(op) -> bool:
-    return bool(getattr(op, "destructive", False))
+    """Whether performing this operation destroys something.
+
+    Fails CLOSED. This was `getattr(op, "destructive", False)`, which defaults to "safe"
+    when the attribute is missing — backwards for a guard, since an operation we know
+    nothing about is precisely the one to refuse. Under the static fallback the attribute
+    was missing on all 61 operations, so the guard against a destructive --write-probe
+    never fired for anyone running without the SDK installed, which is the common case.
+    """
+    value = getattr(op, "destructive", _UNKNOWN)
+    if value is _UNKNOWN or value is None:
+        return True
+    return bool(value)
 
 
 def _has_required_body(op) -> bool:
-    return bool(getattr(op, "body_required", None))
+    """Whether an empty-body probe is guaranteed to be rejected.
+
+    Also fails closed: unknown means "cannot prove an empty body would be refused", so
+    --method-probe skips rather than risk a request that succeeds and mutates.
+    """
+    value = getattr(op, "body_required", _UNKNOWN)
+    if value is _UNKNOWN or value is None:
+        return False
+    return bool(value)
 
 
 def probe(op, ids: dict, token: str, mode: str = "options") -> Result:
@@ -337,10 +437,20 @@ def probe(op, ids: dict, token: str, mode: str = "options") -> Result:
         return Result(op, "ERROR", detail=body[:160])
 
     if status == 404:
+        # A Capella domain error code proves the request was ROUTED: only the API's own
+        # handlers emit those, and they run after routing. So the path is correct and the
+        # named object simply is not there.
+        code = _capella_domain_error(body)
+        if code is not None:
+            return Result(
+                op,
+                "VERIFIED",
+                status,
+                f"route matched; object absent (Capella error {code})",
+            )
+        # Second opinion for a 404 that is not a structured domain error.
         lowered = body.lower()
-        if any(h in lowered for h in _OBJECT_ABSENT_HINTS) and any(
-            w in lowered for w in _OBJECT_WORDS
-        ):
+        if any(h in lowered for h in _OBJECT_ABSENT_HINTS):
             return Result(op, "VERIFIED", status, "route matched; object absent")
         return Result(op, "MISSING", status, body[:160].replace("\n", " "))
 
@@ -349,18 +459,59 @@ def probe(op, ids: dict, token: str, mode: str = "options") -> Result:
     return Result(op, "ERROR", status, body[:160].replace("\n", " "))
 
 
+#: Every Op field this script reads. The static fallback MUST carry all of them.
+#:
+#: It carried six, and the two it omitted were `destructive` and `body_required` — the
+#: two that drive the safety decisions. `getattr(op, "destructive", False)` then
+#: defaulted to "not destructive", so under the fallback the guard against a destructive
+#: --write-probe was INERT, and --method-probe skipped every write operation with the
+#: message "no required body fields" about operations that plainly declare them.
+#:
+#: That is the worst shape this kind of bug takes: the control works when tested with the
+#: SDK installed, and is silently absent in the configuration someone without it runs.
+#: NOTE on `body`: only its TRUTHINESS is used (`body={} if op.body else None`), so the
+#: static parse need not reproduce nested schemas built from f-strings and constants —
+#: which ast.literal_eval cannot evaluate anyway.
+CONSULTED_FIELDS = (
+    "body",
+    "body_required",
+    "destructive",
+    "group",
+    "method",
+    "name",
+    "path",
+    "summary",
+)
+
+
 class _StaticOp:
     """An operation read straight out of the source, with no imports required."""
 
-    __slots__ = ("body", "group", "method", "name", "path", "summary")
+    __slots__ = CONSULTED_FIELDS
 
-    def __init__(self, name, method, path, summary, group, body):
-        self.name = name
-        self.method = method
-        self.path = path
-        self.summary = summary
-        self.group = group
-        self.body = body
+    def __init__(self, **fields):
+        missing = [f for f in CONSULTED_FIELDS if f not in fields]
+        if missing:
+            raise TypeError(
+                f"_StaticOp is missing {missing}; every field the script consults must "
+                "be populated, or a safety check silently reads a default"
+            )
+        for field in CONSULTED_FIELDS:
+            setattr(self, field, fields[field])
+
+
+#: Stands in for a body schema that is declared but not statically readable.
+_BODY_PRESENT_UNPARSED = {"__declared_but_not_statically_readable__": True}
+
+
+def _static_body(fields: dict, literal):
+    """The body schema, or a marker meaning "declared, contents unreadable"."""
+    if "body" not in fields:
+        return {}  # matches the Op dataclass default
+    value = literal(fields["body"])
+    if value is None:
+        return dict(_BODY_PRESENT_UNPARSED)
+    return value
 
 
 def _ops_by_static_parse(spec_path: str) -> list:
@@ -402,11 +553,30 @@ def _ops_by_static_parse(spec_path: str) -> list:
                 path=path,
                 # Concatenated string summaries are common here, and literal_eval
                 # handles them; anything it cannot read becomes empty, which only
-                # affects the [PAT] tag in the output.
+                # affects the provenance tag in the output.
                 summary=(literal(fields.get("summary")) if "summary" in fields else "")
                 or "",
                 group=(literal(fields.get("group")) if "group" in fields else "") or "",
-                body=(literal(fields.get("body")) if "body" in fields else None),
+                # PRESENCE is knowable even when the contents are not. Several body
+                # schemas embed f-strings and module constants in their descriptions, so
+                # literal_eval returns None for them — and None is falsey, which made the
+                # parse report "no body" for operations that plainly declare one. Since
+                # only truthiness is used, an unreadable-but-present body is recorded as a
+                # marker rather than dropped.
+                body=_static_body(fields, literal),
+                # These two drive the SAFETY decisions, so they are read explicitly.
+                # Absent from the declaration means the dataclass default applies, which
+                # for both is falsey — that is a real answer, not a missing one.
+                body_required=(
+                    literal(fields.get("body_required"))
+                    if "body_required" in fields
+                    else ()
+                ),
+                destructive=(
+                    literal(fields.get("destructive"))
+                    if "destructive" in fields
+                    else False
+                ),
             )
         )
     return ops
@@ -597,6 +767,16 @@ def main() -> int:
         ops = [o for o in ops if "[PAT]" in (o.summary or "")]
 
     if not ops:
+        if args.only_pat:
+            # Not an error — the opposite. Every path now has a primary source, so there
+            # is nothing left to infer. Exiting 2 here would fail a CI step for having
+            # succeeded.
+            print(
+                "No [PAT] paths remain: every operation in spec.py now cites a primary "
+                "source (Terraform provider, Couchbase's OpenAPI document, or a live "
+                "verification). Run without --only-pat to re-check the whole surface."
+            )
+            return 0
         print("no operations selected", file=sys.stderr)
         return 2
 

@@ -640,13 +640,27 @@ def _count_managed_environments(
 
 
 def _get_app_service(org: str, project: str, cluster_id: str) -> dict | None:
+    """The App Service attached to this cluster, or None.
+
+    The list endpoint is ORGANIZATION-WIDE. There is no cluster-scoped list — the
+    cluster-level ``/appservices`` path accepts POST only, which is why a GET against it
+    returned 405 and this function previously found nothing at all.
+
+    So the filter on ``clusterId`` is load-bearing, not a tidy-up. Taking ``services[0]``
+    from an org-wide list would attach the reconciler to whichever App Service happened to
+    be first in the organization — quite possibly one belonging to a different cluster,
+    and then park, resume or tear it down on the strength of that.
+    """
     services = _items(
         _invoke(
             "capella_app_services_list",
-            {"organization_id": org, "project_id": project, "cluster_id": cluster_id},
+            {"organization_id": org, "projectId": project},
         )
     )
-    return services[0] if services else None
+    for service in services:
+        if str(service.get("clusterId") or "") == str(cluster_id):
+            return service
+    return None
 
 
 def _state_of(resource: dict) -> str:

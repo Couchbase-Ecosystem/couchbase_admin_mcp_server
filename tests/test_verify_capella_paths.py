@@ -87,8 +87,30 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._send(200, {"data": [{"name": "inventory"}]})
         if path.endswith("/scopes/inventory/collections"):
             return self._send(200, {"data": [{"name": "airline"}]})
+        if path == "/v4/organizations/ORG/appservices":
+            # Org-wide list, as the real API defines it. Empty here, so App Services
+            # paths are SKIPPED downstream — which is what a project with no App
+            # Service should produce.
+            return self._send(200, {"data": []})
         if path == "/v4/organizations/ORG/projects/PROJ/clusters/CL/appservices":
-            return self._send(200, {"data": []})  # none exist -> SKIPPED downstream
+            # POST-only in the real API; a GET here is 405. Kept so a regression that
+            # re-points discovery at the cluster path fails loudly.
+            return self._send(405, {"message": "method not allowed"})
+        if path.endswith("/onOffSchedule"):
+            # Verbatim shape of the real response, which the first version of the
+            # detector misread as MISSING.
+            return self._send(
+                404,
+                {
+                    "code": 11040,
+                    "hint": (
+                        "Returned from the API when a database does not have an "
+                        "existing On/Off schedule."
+                    ),
+                    "httpStatusCode": 404,
+                    "message": "Failed to get On/Off schedule",
+                },
+            )
         if path.endswith("/buckets/GONE"):
             return self._send(
                 404, {"message": "bucket GONE does not exist in cluster CL"}
@@ -299,6 +321,23 @@ def test_an_unknown_operation_name_is_rejected(script, monkeypatch, capsys):
     assert "unknown operation" in capsys.readouterr().err
 
 
+def test_no_inferred_paths_left_is_a_success_not_an_error(script, monkeypatch, capsys):
+    """When every path cites a primary source, --only-pat has nothing to check.
+
+    Exiting non-zero for that would fail a CI step for having succeeded, which is how a
+    useful check gets removed from the pipeline.
+    """
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
+    if any("[PAT]" in (o.summary or "") for o in OPS_BY_NAME.values()):
+        pytest.skip("inferred paths still exist; the other test covers that case")
+
+    monkeypatch.setattr("sys.argv", ["verify", "--org", "ORG", "--only-pat"])
+    assert script.main() == 0
+    assert "No [PAT] paths remain" in capsys.readouterr().out
+
+
 def test_only_pat_selects_exactly_the_inferred_paths(script, monkeypatch, capsys):
     """The [PAT] operations are the whole reason this script exists, so the selector that
     isolates them is worth pinning.
@@ -312,6 +351,8 @@ def test_only_pat_selects_exactly_the_inferred_paths(script, monkeypatch, capsys
     from handlers.capella.spec import OPS_BY_NAME
 
     expected = {n for n, o in OPS_BY_NAME.items() if "[PAT]" in (o.summary or "")}
+    if not expected:
+        pytest.skip("no inferred paths remain; covered by the test above")
 
     monkeypatch.setattr("sys.argv", ["verify", "--org", "ORG", "--only-pat", "--json"])
     script.main()
@@ -346,6 +387,7 @@ def test_the_real_spec_has_no_unfillable_placeholders():
         "app_service_id",
         # Only exist after a create; SKIPPED for these is correct and expected.
         "collection_name",
+        "app_endpoint_keyspace",
         "admin_user_id",
         "credential_id",
         "app_endpoint_name",
@@ -448,7 +490,9 @@ def test_the_organization_is_discovered_when_not_supplied(script, monkeypatch, c
     `<organization_id>` still in it.
     """
     _Handler.orgs = [{"data": {"id": "ORG", "name": "the deployment"}}]
-    monkeypatch.setattr("sys.argv", ["verify", "--only-pat", "--json"])
+    monkeypatch.setattr(
+        "sys.argv", ["verify", "--only", "capella_projects_list", "--json"]
+    )
     script.main()
     out = capsys.readouterr().out
     assert "Discovered organization: ORG" in out
@@ -680,3 +724,154 @@ def test_the_two_probe_modes_are_mutually_exclusive(script, monkeypatch, capsys)
     )
     assert script.main() == 2
     assert "mutually exclusive" in capsys.readouterr().err
+
+
+# ── Two bugs a live run against real Capella exposed ─────────────────────────
+
+
+def test_a_capella_domain_error_404_is_not_reported_missing(script):
+    """The false positive, with the real response body.
+
+    `GET .../onOffSchedule` on a cluster with no schedule returns
+
+        {"code":11040,
+         "hint":"Returned from the API when a database does not have an existing On/Off
+                 schedule.",
+         "httpStatusCode":404, "message":"Failed to get On/Off schedule..."}
+
+    which says the route was reached and the object is absent. The original detector
+    matched on phrases like "does not exist" plus a list of object nouns, and this body
+    contains neither — so a correct path was reported MISSING. That is the "confidently
+    wrong" outcome the script exists to avoid.
+
+    A domain error CODE is the reliable signal: only the API's own handlers emit those,
+    and they run after routing.
+    """
+    op = _Op(
+        "cb_onoff_get",
+        "GET",
+        "/v4/organizations/{organization_id}/projects/{project_id}"
+        "/clusters/{cluster_id}/onOffSchedule",
+    )
+    ids = {"organization_id": "ORG", "project_id": "PROJ", "cluster_id": "CL"}
+    result = script.probe(op, ids, "k")
+    assert result.verdict == "VERIFIED", result.detail
+    assert "11040" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('{"code":11040,"message":"no schedule"}', 11040),
+        ('{"code":4025,"message":"x"}', 4025),
+        # An HTTP status in the code field is not a domain code.
+        ('{"code":404,"message":"not found"}', None),
+        ('{"message":"route not found"}', None),
+        ("<html>404</html>", None),
+        ('{"code":true}', None),
+        ("[]", None),
+    ],
+)
+def test_the_domain_error_detector_is_specific(script, body, expected):
+    """It must not classify every 404 as route-matched, or MISSING becomes unreachable
+    and the tool can never report a genuinely wrong path."""
+    assert script._capella_domain_error(body) == expected
+
+
+def test_a_genuinely_wrong_path_is_still_missing(script):
+    """The other half: the fix must not have made MISSING unreachable."""
+    op = _Op("cb_bogus", "GET", "/v4/organizations/{organization_id}/nope")
+    result = script.probe(op, {"organization_id": "ORG"}, "k")
+    assert result.verdict == "MISSING"
+
+
+# ── The static fallback must carry the SAFETY fields ────────────────────────
+
+
+def test_the_static_parse_carries_every_field_the_script_consults(script):
+    """The serious bug. The fallback carried six fields and omitted the two that drive
+    the safety decisions — `destructive` and `body_required`.
+
+    `getattr(op, "destructive", False)` then defaulted to "not destructive", so with no
+    SDK installed the guard against a destructive --write-probe was INERT, and
+    --method-probe skipped every write operation while claiming they had no required body
+    fields. The control worked when tested with the SDK present and was silently absent in
+    the configuration a user without it actually runs.
+    """
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    static = script._ops_by_static_parse(str(root / "handlers" / "capella" / "spec.py"))
+    by_name = {op.name: op for op in static}
+
+    # `body` is compared on TRUTHINESS only, because that is all the script uses it for
+    # (`body={} if op.body else None`), and some schemas build their descriptions from
+    # f-strings and module constants that ast.literal_eval cannot evaluate. Demanding
+    # exact equality there would fail for a reason with no bearing on correctness.
+    truthiness_only = {"body"}
+
+    for name, real in OPS_BY_NAME.items():
+        parsed = by_name[name]
+        for field in script.CONSULTED_FIELDS:
+            got, want = getattr(parsed, field), getattr(real, field)
+            if field in truthiness_only:
+                assert bool(got) == bool(want), (
+                    f"{name}.{field}: static parse {'has' if got else 'lacks'} a body, "
+                    f"registry {'has' if want else 'lacks'} one"
+                )
+            else:
+                assert got == want, (
+                    f"{name}.{field}: static parse has {got!r}, registry has {want!r}"
+                )
+
+
+def test_destructive_detection_agrees_across_both_sources(script):
+    """The specific consequence: the set of operations the guard protects must be the same
+    whether or not the SDK is importable."""
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    static = script._ops_by_static_parse(str(root / "handlers" / "capella" / "spec.py"))
+
+    from_static = {op.name for op in static if script._is_destructive(op)}
+    from_registry = {n for n, o in OPS_BY_NAME.items() if script._is_destructive(o)}
+    assert from_static == from_registry
+    assert from_static, "no destructive operations detected at all — the guard is inert"
+
+
+def test_method_probe_eligibility_agrees_across_both_sources(script):
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    static = script._ops_by_static_parse(str(root / "handlers" / "capella" / "spec.py"))
+
+    from_static = {op.name for op in static if script._has_required_body(op)}
+    from_registry = {n for n, o in OPS_BY_NAME.items() if script._has_required_body(o)}
+    assert from_static == from_registry
+    assert len(from_static) >= 10, (
+        f"only {len(from_static)} operations are method-probeable; the fallback is "
+        "probably dropping body_required again"
+    )
+
+
+def test_an_unknown_destructive_flag_fails_closed(script):
+    """An operation the script knows nothing about is exactly the one to refuse.
+    `getattr(..., False)` defaulted the other way, which is how the guard came to be
+    inert."""
+
+    class _Bare:
+        name = "mystery"
+        method = "DELETE"
+
+    assert script._is_destructive(_Bare()) is True
+    assert script._has_required_body(_Bare()) is False
+
+
+def test_static_op_refuses_to_be_built_with_missing_fields(script):
+    """Constructing one without every consulted field is how the omission happened. It is
+    now a TypeError rather than a silent default."""
+    with pytest.raises(TypeError, match="missing"):
+        script._StaticOp(name="x", method="GET", path="/p")

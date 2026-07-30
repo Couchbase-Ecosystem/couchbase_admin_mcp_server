@@ -90,12 +90,48 @@ def test_destructive_ops_are_guarded():
             assert op.guarded, f"{op.name} is destructive but not guarded"
 
 
-def test_app_services_are_under_clusters():
-    """Regression: the previous implementation pathed App Services under
-    /projects/{p}/appservices, which does not exist in v4."""
+def test_app_services_are_under_clusters_except_the_org_wide_list():
+    """Regression on the ORIGINAL bug, updated for what a live run then proved.
+
+    The previous implementation pathed App Services under /projects/{p}/appservices, which
+    does not exist. Everything moved under /clusters/{cluster_id}/appservices — correct for
+    every operation EXCEPT the list.
+
+    Probing the real API showed `GET .../clusters/{id}/appservices` returns 405: that path
+    accepts POST only. The sole list operation is organization-wide,
+    `GET /v4/organizations/{organizationId}/appservices`, confirmed in Couchbase's own
+    OpenAPI document. Because a 405 body yields no id, discovery reported "no App Service
+    found" exactly as an empty list would — so every App Services operation was silently
+    unreachable and nothing in the code hinted at it.
+    """
+    org_wide = {"capella_app_services_list"}
     for op in OPS:
-        if "appservices" in op.path:
-            assert "/clusters/{cluster_id}/appservices" in op.path, op.name
+        if "appservices" not in op.path:
+            continue
+        if op.name in org_wide:
+            assert op.path == "/v4/organizations/{organization_id}/appservices", op.name
+            continue
+        assert "/clusters/{cluster_id}/appservices" in op.path, op.name
+        assert "/projects/{project_id}/appservices" not in op.path, op.name
+
+
+def test_the_app_service_certificate_segment_is_plural():
+    """`/certificate` 404s; the API spells the segment `/certificates` while naming the
+    operation in the singular. Found by diffing against the OpenAPI document."""
+    op = OPS_BY_NAME["capella_app_service_certificate_get"]
+    assert op.path.endswith("/certificates"), op.path
+
+
+def test_the_access_control_function_is_keyed_on_a_keyspace():
+    """v4 keys this on endpoint.scope.collection, not a bare endpoint name. Passing a bare
+    name is accepted and silently interpreted as `<name>._default._default`, so on a
+    cluster with named scopes it would target the wrong collection."""
+    for name in (
+        "capella_app_endpoint_access_control_function_get",
+        "capella_app_endpoint_access_control_function_set",
+    ):
+        assert "{app_endpoint_keyspace}" in OPS_BY_NAME[name].path
+        assert "{app_endpoint_name}/accessControlFunction" not in OPS_BY_NAME[name].path
 
 
 def test_credential_ops_redact_their_response():
@@ -445,3 +481,138 @@ def test_guardrails_status_tool_reports_posture(monkeypatch):
     assert payload["posture"] == "sandboxed"
     assert payload["allowed_projects"] == ["p1"]
     assert payload["name_prefix"] == "mcptest-"
+
+
+# ── Diff against Couchbase's own OpenAPI document ────────────────────────────
+#
+# Every path below was read out of the spec at
+# docs.couchbase.com/cloud/management-api-reference (the embedded Redoc state, which is
+# the machine-readable OpenAPI document rather than scraped prose) and cross-checked
+# against the Terraform provider's Go string literals where one exists.
+#
+# This table exists because reading the code could not have found these. A live probe
+# returned 405 for the App Services list, and only then did diffing against the spec show
+# that the cluster-scoped collection is POST-only. Recording the authoritative shape here
+# means the next such divergence fails a test instead of failing in a production pipeline.
+
+_BASE = (
+    "/v4/organizations/{organization_id}/projects/{project_id}"
+    "/clusters/{cluster_id}/appservices"
+)
+
+#: (operation, expected method, expected path)
+AUTHORITATIVE_APP_SERVICE_PATHS = [
+    # The list is ORG-WIDE. There is no cluster-scoped list, and no clusterId query
+    # parameter — callers filter on each item's clusterId field.
+    (
+        "capella_app_services_list",
+        "GET",
+        "/v4/organizations/{organization_id}/appservices",
+    ),
+    ("capella_app_service_create", "POST", _BASE),
+    ("capella_app_service_get", "GET", f"{_BASE}/{{app_service_id}}"),
+    ("capella_app_service_delete", "DELETE", f"{_BASE}/{{app_service_id}}"),
+    # activationState, with a capital S and no trailing segment. POST resumes, DELETE
+    # suspends. Not to be confused with the App ENDPOINT equivalent, which is
+    # activationStatus.
+    (
+        "capella_app_service_turn_on",
+        "POST",
+        f"{_BASE}/{{app_service_id}}/activationState",
+    ),
+    (
+        "capella_app_service_turn_off",
+        "DELETE",
+        f"{_BASE}/{{app_service_id}}/activationState",
+    ),
+    (
+        "capella_app_service_admin_users_list",
+        "GET",
+        f"{_BASE}/{{app_service_id}}/adminUsers",
+    ),
+    (
+        "capella_app_service_admin_user_create",
+        "POST",
+        f"{_BASE}/{{app_service_id}}/adminUsers",
+    ),
+    (
+        "capella_app_service_admin_user_delete",
+        "DELETE",
+        f"{_BASE}/{{app_service_id}}/adminUsers/{{admin_user_id}}",
+    ),
+    # Plural segment, singular operation name — the trap that made this 404.
+    (
+        "capella_app_service_certificate_get",
+        "GET",
+        f"{_BASE}/{{app_service_id}}/certificates",
+    ),
+    # allowedcidrs is all lowercase, unlike its camelCase siblings.
+    (
+        "capella_app_service_allowed_cidrs_list",
+        "GET",
+        f"{_BASE}/{{app_service_id}}/allowedcidrs",
+    ),
+    (
+        "capella_app_service_allowed_cidr_create",
+        "POST",
+        f"{_BASE}/{{app_service_id}}/allowedcidrs",
+    ),
+    (
+        "capella_app_service_allowed_cidr_delete",
+        "DELETE",
+        f"{_BASE}/{{app_service_id}}/allowedcidrs/{{allowed_cidr_id}}",
+    ),
+    # App ENDPOINT activation is activationStatus — Status, not State.
+    (
+        "capella_app_endpoint_online",
+        "POST",
+        f"{_BASE}/{{app_service_id}}/appEndpoints/{{app_endpoint_name}}/activationStatus",
+    ),
+    (
+        "capella_app_endpoint_offline",
+        "DELETE",
+        f"{_BASE}/{{app_service_id}}/appEndpoints/{{app_endpoint_name}}/activationStatus",
+    ),
+    # Resync start and status share one path, distinguished only by method.
+    (
+        "capella_app_endpoint_resync_start",
+        "POST",
+        f"{_BASE}/{{app_service_id}}/appEndpoints/{{app_endpoint_name}}/resync",
+    ),
+    (
+        "capella_app_endpoint_resync_status",
+        "GET",
+        f"{_BASE}/{{app_service_id}}/appEndpoints/{{app_endpoint_name}}/resync",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "method", "path"),
+    AUTHORITATIVE_APP_SERVICE_PATHS,
+    ids=lambda v: str(v)[:40],
+)
+def test_app_service_paths_match_the_openapi_document(name, method, path):
+    op = OPS_BY_NAME[name]
+    assert op.method == method, f"{name}: method"
+    assert op.path == path, f"{name}: path"
+
+
+def test_the_authoritative_table_covers_every_app_service_operation():
+    """Guards the table above from silently going stale.
+
+    A new App Services operation added to spec.py without a line here would otherwise be
+    unverified while the suite stayed green — which is exactly how the list path went
+    wrong.
+    """
+    tabled = {name for name, _, _ in AUTHORITATIVE_APP_SERVICE_PATHS}
+    in_spec = {
+        op.name
+        for op in OPS
+        if "appservices" in op.path and "appEndpoints" not in op.path
+    }
+    # App Endpoint operations are a larger subtree; only the ones in the table are pinned.
+    missing = in_spec - tabled
+    assert not missing, (
+        f"App Services operations with no authoritative path pinned: {sorted(missing)}"
+    )

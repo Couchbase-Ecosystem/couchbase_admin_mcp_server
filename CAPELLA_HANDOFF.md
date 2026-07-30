@@ -757,3 +757,78 @@ python scripts\verify_capella_paths.py
 
 Exit status is 0 only if nothing is `MISSING`, so this belongs in CI against a
 long-lived test organization.
+
+---
+
+# The full sweep found a real bug — App Services were unreachable
+
+Running `--method-probe` across all 61 operations produced `MISSING=1 SKIPPED=45
+VERIFIED=15`, and both of the interesting numbers were wrong for reasons worth recording.
+
+## `GET .../clusters/{id}/appservices` does not exist
+
+It returned **405**, not 200. Diffing against Couchbase's own OpenAPI document (the
+embedded Redoc state at docs.couchbase.com/cloud/management-api-reference, cross-checked
+against the Terraform provider's Go string literals) settles it: the cluster-scoped
+`/appservices` collection defines **POST only**. The single list operation is
+organization-wide:
+
+    GET /v4/organizations/{organizationId}/appservices
+
+with an optional `projectId` query parameter and **no** `clusterId` parameter — callers
+filter on each item's `clusterId` field.
+
+**Why this mattered and why nothing caught it.** A 405 body carries no id, so the
+discovery step reported "app service: NONE FOUND" — byte-identical to what an empty list
+produces. Every one of the 21 App Services operations was therefore skipped, and
+`_get_app_service` in the reconciler found nothing on a cluster that had one. App Services
+is what Couchbase Lite sync testing needs, so this was directly on the critical
+path, and it was invisible from reading the code: the path had a `[TF]` provenance tag and
+looked right.
+
+Fixing the path forced a second fix. `_get_app_service` returned `services[0]`, which is
+correct for a cluster-scoped list and **wrong** for an org-wide one — it would have
+attached the reconciler to whichever App Service happened to be first in the
+organization, then parked, resumed or torn down that one. It now filters on `clusterId`.
+
+## Three more defects from the same diff
+
+| | |
+|---|---|
+| `/{appServiceId}/certificate` | The API spells the segment **`/certificates`**. The operation is named in the singular; the URL is plural. Would have 404'd. |
+| `accessControlFunction` keyed on `{app_endpoint_name}` | v4 keys it on a **keyspace** — `endpoint.scope.collection`. A bare name is accepted and silently read as `<name>._default._default`, so on a cluster with named scopes it targets the wrong collection. Now `{app_endpoint_keyspace}`, with the dotted form documented. |
+| `MISSING` for `capella_cluster_onoff_schedule_get` | **False positive in my script.** The 404 body said the route was reached and the schedule was absent; my detector matched on prose ("does not exist") and object nouns, and the real message said "does not have an existing On/Off schedule". Now keyed on the presence of a Capella **domain error code** (`{"code":11040,...}`), which only the API's own handlers emit and only after routing. |
+
+## No `[PAT]` paths remain
+
+The two App Services paths still tagged `[PAT]` are confirmed by the OpenAPI document and
+retagged `[DOC]`. Every path in `spec.py` now cites a primary source: `[TF]`, `[DOC]`,
+`[LIVE]`, or `[LIVE+METHOD]`.
+
+`--only-pat` consequently selects nothing, and now says so and exits **0** rather than
+treating an empty selection as an error — failing a CI step for having succeeded is how a
+useful check gets deleted.
+
+## A safety bug in the verifier itself
+
+The static-parse fallback (used whenever the MCP SDK is not installed, which is the common
+case for a fresh checkout) carried six `Op` fields and omitted the two that drive the
+safety decisions: `destructive` and `body_required`. Since the code read them with
+`getattr(op, "destructive", False)`, the default was "not destructive" — so:
+
+* the guard refusing a destructive `--write-probe` was **inert**, and
+* `--method-probe` skipped every write operation, reporting "no required body fields"
+  about operations that plainly declare them.
+
+Both accessors now fail **closed** (unknown means destructive; unknown means not
+probeable), `_StaticOp` raises rather than accepting a partial field set, and a test
+compares the two sources field by field. The worst shape for a bug of this kind is a
+control that works when tested one way and is silently absent in the configuration people
+actually run.
+
+## What is pinned now
+
+`tests/test_capella.py` carries an authoritative table of 17 App Services paths read out of
+the OpenAPI document, plus a guard that fails if a new App Services operation is added
+without a line in it. Reading the code could not have found any of these; a table that a
+test enforces can.

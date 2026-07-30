@@ -24,8 +24,9 @@ fails as an opaque 404 that looks like a missing resource. Sources:
   [DOC]  docs.couchbase.com/cloud/management-api-reference — verbatim paths as
          rendered in the API reference.
   [PAT]  Not individually verified; follows the confirmed sibling pattern
-         exactly (e.g. collections under a confirmed scopes path). Marked
-         inline. These are the ones to re-check first if a call 404s.
+         exactly. NONE REMAIN — every path now cites a primary source. The tag is
+         kept because it is how a newly-added path should be marked until it has
+         one, and scripts/verify_capella_paths.py --only-pat selects on it.
   [LIVE] Path confirmed against a real Capella organization with
          scripts/verify_capella_paths.py — the control plane matched the route
          and answered 405 to an OPTIONS probe, which it can only do after
@@ -131,6 +132,13 @@ _ID_DESCRIPTIONS: dict[str, str] = {
     "user_id": "Database credential UUID. See capella_database_credentials_list.",
     "app_service_id": "App Service UUID. See capella_app_services_list.",
     "app_endpoint_name": "App Endpoint name.",
+    "app_endpoint_keyspace": (
+        "A COLLECTION, written as endpoint.scope.collection — for example "
+        "'endpoint1.scope1.collection1'. Supplying a bare App Endpoint name is "
+        "accepted but v4 interprets it as 'endpoint1._default._default', so on a "
+        "cluster with named scopes it silently targets the wrong collection. Spell "
+        "the keyspace out unless you mean the default scope and collection."
+    ),
     "allowed_cidr_id": "Allowlist entry UUID.",
     "admin_user_id": "App Service admin user UUID.",
 }
@@ -753,16 +761,19 @@ OPS: tuple[Op, ...] = (
     Op(
         name="capella_app_services_list",
         method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices",
+        path="/v4/organizations/{organization_id}/appservices",
         summary=(
-            "List App Services on a cluster. NOTE: the path is under /clusters/ — "
-            "an earlier implementation used /projects/{p}/appservices, which does "
-            "not exist. [TF appservice.go]"
+            "List App Services visible to this API key, ORGANIZATION-WIDE. Narrow with "
+            "the projectId query parameter; there is NO clusterId parameter, so for a "
+            "single cluster filter the returned items on their `clusterId` field. "
+            "Each item carries id, name, clusterId, currentState, version and the "
+            "public hostname. [LIVE]"
         ),
         group="app_services",
         read_only=True,
         idempotent=True,
         paginated=True,
+        query=("projectId", *_PAGE_QUERY),
     ),
     Op(
         name="capella_app_service_get",
@@ -820,7 +831,7 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Park an App Service. Turning the cluster off with "
             "turnOnLinkedAppService handling is usually simpler than managing "
-            "both independently. [PAT]"
+            "both independently. [DOC openapi: DELETE .../activationState]"
         ),
         group="app_services",
         idempotent=True,
@@ -829,7 +840,7 @@ OPS: tuple[Op, ...] = (
     Op(
         name="capella_app_service_certificate_get",
         method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/certificate",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/certificates",
         summary=(
             "Get the App Service public certificate — what a mobile client pins "
             "or trusts when replicating. [PAT — verify if 404]"
@@ -910,7 +921,10 @@ OPS: tuple[Op, ...] = (
         name="capella_app_service_admin_user_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/adminUsers/{admin_user_id}",
-        summary="Delete an App Service admin user. [PAT]",
+        summary=(
+            "Delete an App Service admin user. "
+            "[DOC openapi: DELETE .../adminUsers/{userId}]"
+        ),
         group="app_services",
         destructive=True,
         guarded=True,
@@ -997,7 +1011,7 @@ OPS: tuple[Op, ...] = (
     Op(
         name="capella_app_endpoint_access_control_function_set",
         method="PUT",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/accessControlFunction",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/accessControlFunction",
         summary=(
             "Upsert the access control and validation function — the JavaScript "
             "that assigns documents to channels and authorizes writes. For a test "
@@ -1016,8 +1030,12 @@ OPS: tuple[Op, ...] = (
     Op(
         name="capella_app_endpoint_access_control_function_get",
         method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/accessControlFunction",
-        summary="Get the current access control and validation function. [DOC]",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/accessControlFunction",
+        summary=(
+            "Get the current access control and validation function for a COLLECTION. "
+            "The path segment is a keyspace (endpoint.scope.collection), not a bare "
+            "App Endpoint name — see app_endpoint_keyspace. [DOC]"
+        ),
         group="app_endpoints",
         read_only=True,
         idempotent=True,

@@ -45,6 +45,10 @@ class FakeCapella:
         self.calls: list[tuple[str, str]] = []
         self._seq = 0
 
+    def _only_cluster_id(self) -> str:
+        """The cluster in this fake, so an App Service can name its owner."""
+        return next(iter(self.clusters), "cluster-unknown")
+
     def _next_id(self, prefix: str) -> str:
         self._seq += 1
         return f"{prefix}-{self._seq}"
@@ -79,8 +83,20 @@ class FakeCapella:
                 "cursor": {"pages": {"page": 1, "last": 1}},
             }
 
-        if path.endswith("/appservices"):
+        if path.endswith("/appservices") or "/appservices?" in path:
+            # Two DIFFERENT routes share this suffix, and the real API treats them very
+            # differently:
+            #
+            #   POST /organizations/{o}/projects/{p}/clusters/{c}/appservices   create
+            #   GET  /organizations/{o}/appservices                             list, ORG-WIDE
+            #
+            # A GET against the cluster-scoped path returns 405 in the real API — that is
+            # what a live run found, and because a 405 body yields no id the reconciler
+            # read it as "no App Service exists" and looped forever creating one. The fake
+            # mirrors the real behaviour so the test can catch that class of bug.
             if method == "POST":
+                if "/clusters/" not in path:
+                    return {"__status__": 405, "message": "method not allowed"}
                 sid = self._next_id("appsvc")
                 self.app_services[sid] = {
                     "id": sid,
@@ -88,9 +104,17 @@ class FakeCapella:
                     "description": body.get("description", ""),
                     "currentState": "deploying",
                     "hostname": f"{sid}.apps.cloud.couchbase.com",
+                    # The org-wide list is the only list, so each item must say which
+                    # cluster it belongs to or a caller cannot narrow it.
+                    "clusterId": self._only_cluster_id(),
                     "_ticks": self.ticks_to_healthy,
                 }
                 return {"id": sid}
+            if "/clusters/" in path:
+                raise AssertionError(
+                    "GET on the cluster-scoped /appservices path: the real API answers "
+                    "405 there, App Services are listed organization-wide"
+                )
             for svc in self.app_services.values():
                 self._advance(svc)
             return {

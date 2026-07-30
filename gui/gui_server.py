@@ -194,6 +194,9 @@ from handlers.shared import (  # noqa: E402
     READ_ONLY_MODE,
     require_confirmation,
 )
+from handlers.shared import (  # noqa: E402
+    redact_uri_credentials as _shared_redact_uri_credentials,
+)
 from logging_config import configure_from_env  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -369,9 +372,23 @@ _REDACTED_FIELDS = {"CB_PASSWORD", "CAPELLA_API_KEY_SECRET", "CB_CLIENT_KEY_PATH
 
 
 def _redact(key: str, value: str) -> str:
+    """Mask a configuration value before it is shown in the console.
+
+    Masking by KEY NAME alone is not enough, and this leaked because of it:
+    `CB_PASSWORD` was masked while `CB_CONNECTION_STRING` was returned verbatim — and a
+    Couchbase connection string can carry the password in its URI userinfo
+    (`couchbases://admin:secret@host`). So /api/config handed the cluster password to the
+    browser while displaying `********` beside it, which is worse than not masking at all
+    because it looks handled.
+
+    Exactly the same shape as the `cb_mcp_status` disclosure: `redact()` masks on key names,
+    and "connection_string" resembles nothing sensitive.
+    """
     if not value:
         return ""
-    return "********" if key in _REDACTED_FIELDS else value
+    if key in _REDACTED_FIELDS:
+        return "********"
+    return _shared_redact_uri_credentials(value)
 
 
 # ---------------------------------------------------------------------------

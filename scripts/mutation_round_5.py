@@ -23,6 +23,10 @@ STATUS = "tests/test_mcp_status.py"
 CONTRACT = "tests/test_handler_contract.py"
 CAPELLA = "tests/test_capella.py tests/test_verify_capella_paths.py"
 TOKEN = "tests/test_token_validation.py"
+SHARED = "tests/test_shared_http.py tests/test_shared_helpers.py"
+GUI_OAUTH = "tests/test_gui_oauth_routes.py"
+SQLB = "tests/test_sql_builders.py"
+DISPATCH = "tests/test_server_dispatch.py"
 
 MUTATIONS = [
     # ── Defect 1: the Secure flag behind a TLS-terminating proxy ────────────
@@ -788,6 +792,264 @@ MUTATIONS = [
         '    client_id = _env("OAUTH_CC_CLIENT_ID") or _env_required("OAUTH_CLIENT_ID")',
         '    client_id = _env_required("OAUTH_CLIENT_ID")',
         TOKEN,
+    ),
+    # ── admin_request retry safety ──────────────────────────────────────────
+    (
+        "shared: a POST is retried on a 5xx, so a failover may run twice",
+        "handlers/shared.py",
+        "    if status in (500, 502, 503, 504):\n        return method.upper() in _IDEMPOTENT_METHODS",
+        "    if status in (500, 502, 503, 504):\n        return True",
+        SHARED,
+    ),
+    (
+        "shared: POST joins the idempotent set",
+        "handlers/shared.py",
+        '_IDEMPOTENT_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "PUT", "DELETE"})',
+        '_IDEMPOTENT_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "PUT", "DELETE", "POST"})',
+        SHARED,
+    ),
+    (
+        "shared: a network error on a POST is retried",
+        "handlers/shared.py",
+        "            if method.upper() in _IDEMPOTENT_METHODS and attempt < _MAX_ATTEMPTS:",
+        "            if attempt < _MAX_ATTEMPTS:",
+        SHARED,
+    ),
+    (
+        "shared: a client error is retried, tripling the latency of every mistake",
+        "handlers/shared.py",
+        "    if status in _UNPROCESSED_STATUSES:\n        return True",
+        "    if status >= 400:\n        return True",
+        SHARED,
+    ),
+    (
+        "shared: the retry backoff becomes a tight loop",
+        "handlers/shared.py",
+        "_BASE_BACKOFF = 0.5",
+        "_BASE_BACKOFF = 0.0",
+        SHARED,
+    ),
+    (
+        "shared: mTLS also sends the password it was meant to replace",
+        "handlers/shared.py",
+        "    if cert_path and key_path:\n        return {}",
+        "    if False:\n        return {}",
+        SHARED,
+    ),
+    (
+        "shared: a half-configured certificate pair selects mTLS and cannot authenticate",
+        "handlers/shared.py",
+        "    if cert_path and key_path:\n        auth = CertificateAuthenticator(",
+        "    if cert_path or key_path:\n        auth = CertificateAuthenticator(",
+        SHARED,
+    ),
+    (
+        "shared: TLS verification is disabled without the opt-in",
+        "handlers/shared.py",
+        '    if get_env_bool("CB_ADMIN_TLS_INSECURE", False):',
+        "    if True:",
+        SHARED,
+    ),
+    (
+        "shared: booleans reach the REST API as Python reprs",
+        "handlers/shared.py",
+        '    if isinstance(v, bool):\n        return "true" if v else "false"',
+        "    if False:\n        return str(v)",
+        SHARED,
+    ),
+    (
+        "shared: a list is sent as a Python repr, silently downgrading TLS ciphers",
+        "handlers/shared.py",
+        "    if isinstance(v, (list, tuple, dict)):",
+        "    if False:",
+        SHARED,
+    ),
+    (
+        "shared: a path segment can escape itself",
+        "handlers/shared.py",
+        "def quote_path(segment: str) -> str:",
+        "def quote_path(segment: str) -> str:\n    return segment",
+        SHARED,
+    ),
+    (
+        "shared: the index-create guard accepts arbitrary SQL++",
+        "handlers/shared.py",
+        '    if not _INDEX_DDL_RE.match(stmt or ""):',
+        "    if False:",
+        SHARED,
+    ),
+    (
+        "shared: an unterminated quote is forwarded unparsed",
+        "handlers/shared.py",
+        "    if unterminated:\n        return (",
+        "    if False:\n        return (",
+        SHARED,
+    ),
+    (
+        "shared: a truthy string satisfies the destructive confirmation gate",
+        "handlers/shared.py",
+        '    if args.get("confirm") is True:',
+        '    if args.get("confirm"):',
+        SHARED,
+    ),
+    (
+        "shared: read-only mode defaults to off",
+        "handlers/shared.py",
+        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True)',
+        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", False)',
+        SHARED,
+    ),
+    # ── The console's browser login flow ────────────────────────────────────
+    (
+        "console: /api/config hands the connection-string password to the browser",
+        "gui/gui_server.py",
+        "    return _shared_redact_uri_credentials(value)",
+        "    return value",
+        GUI_OAUTH,
+    ),
+    (
+        "console: the callback no longer checks state, so login CSRF works",
+        "gui/gui_server.py",
+        "    pkce = _pkce_store.pop(state, None)",
+        '    pkce = _pkce_store.pop(state, None) or {"verifier": "", "next": "/"}',
+        GUI_OAUTH,
+    ),
+    (
+        "console: state is reusable, so a captured callback URL is a reusable login",
+        "gui/gui_server.py",
+        "    pkce = _pkce_store.pop(state, None)",
+        "    pkce = _pkce_store.get(state, None)",
+        GUI_OAUTH,
+    ),
+    (
+        "console: next becomes an open redirect on an authenticated endpoint",
+        "gui/gui_server.py",
+        '    next_url = raw_next if (not parsed.scheme and not parsed.netloc) else "/"',
+        "    next_url = raw_next",
+        GUI_OAUTH,
+    ),
+    (
+        "console: a failed token refresh leaves the dead session alive",
+        "gui/gui_server.py",
+        "        except Exception:\n            # Refresh or re-validation failed — session is dead\n            _session.delete_session(cookie)\n            return None",
+        '        except Exception:\n            return sess.get("claims")',
+        GUI_OAUTH,
+    ),
+    (
+        "console: a session with no refresh token stays authenticated after expiry",
+        "gui/gui_server.py",
+        "        if not refresh_token:\n            # No way to refresh an expired session — treat as logged out\n            _session.delete_session(cookie)\n            return None",
+        '        if not refresh_token:\n            return sess.get("claims")',
+        GUI_OAUTH,
+    ),
+    (
+        "console: refreshed tokens keep the pre-refresh claims, so a revoked role persists",
+        "gui/gui_server.py",
+        "            new_claims = _oidc.validate_token(new_token)",
+        '            new_claims = sess.get("claims") or {}',
+        GUI_OAUTH,
+    ),
+    # ── SQL++ identifier quoting: the injection boundary ────────────────────
+    (
+        "sql: identifier quoting stops doubling backticks, so a name can escape",
+        "handlers/indexes.py",
+        '    return "`" + (s or "").replace("`", "``") + "`"',
+        '    return "`" + (s or "") + "`"',
+        SQLB,
+    ),
+    (
+        "sql: identifiers are interpolated unquoted",
+        "handlers/indexes.py",
+        '    return "`" + (s or "").replace("`", "``") + "`"',
+        '    return s or ""',
+        SQLB,
+    ),
+    (
+        "sql: the replica count is interpolated without coercion",
+        "handlers/indexes.py",
+        '                withs.append(f\'"num_replica": {int(args["num_replica"])}\')',
+        '                withs.append(f\'"num_replica": {args["num_replica"]}\')',
+        SQLB,
+    ),
+    (
+        "sql: the index list interpolates its filters instead of binding them",
+        "handlers/indexes.py",
+        '                wheres.append("bucket_id = $bucket")',
+        "                wheres.append(f\"bucket_id = '{args['bucket_name']}'\")",
+        SQLB,
+    ),
+    (
+        "sql: a raw index drop skips the read-only guard",
+        "handlers/indexes.py",
+        '                blocked = block_dml_if_readonly(args["statement"])\n                if blocked:\n                    return err(blocked, tool=name)\n                return _run_n1ql(args["statement"])\n\n            if not args.get("bucket_name"):\n                return err(\n                    "bucket_name is required when statement is not provided", tool=name\n                )',
+        '                return _run_n1ql(args["statement"])\n\n            if not args.get("bucket_name"):\n                return err(\n                    "bucket_name is required when statement is not provided", tool=name\n                )',
+        SQLB,
+    ),
+    # ── Audit classification ────────────────────────────────────────────────
+    (
+        "audit: a successful non-JSON response is recorded as a denial",
+        "server.py",
+        '        if not isinstance(text, str):\n            return "allowed", ""',
+        '        if not isinstance(text, str):\n            return "denied_handler", "unreadable"',
+        DISPATCH,
+    ),
+    (
+        "audit: a guardrail refusal is indistinguishable from a cluster error",
+        "server.py",
+        '            if payload.get("guardrail"):',
+        "            if False:",
+        DISPATCH,
+    ),
+    (
+        "audit: an egress refusal is indistinguishable from a cluster error",
+        "server.py",
+        '            if "EgressDenied" in reason or "EGRESS_ALLOWED_HOSTS" in reason:',
+        "            if False:",
+        DISPATCH,
+    ),
+    (
+        "audit: the reason is no longer truncated",
+        "server.py",
+        '            reason = str(payload.get("error"))[:400]',
+        '            reason = str(payload.get("error"))',
+        DISPATCH,
+    ),
+    (
+        "audit: an unparseable result is invented as a denial",
+        "server.py",
+        '    except Exception:\n        # Not JSON, or an unexpected shape. Treat as success rather than inventing a\n        # denial; the handler returned normally.\n        return "allowed", ""',
+        '    except Exception:\n        return "denied_handler", "unparseable"',
+        DISPATCH,
+    ),
+    # ── DNS-rebinding allowlist ─────────────────────────────────────────────
+    (
+        "transport: a configured hostname is allowed only without its port",
+        "server.py",
+        '        if ":" not in entry:\n            extra.append(f"{entry}:{port}")',
+        '        if False:\n            extra.append(f"{entry}:{port}")',
+        DISPATCH,
+    ),
+    (
+        "transport: the wildcard-bind warning is silent",
+        "server.py",
+        '    if host in ("0.0.0.0", "::", "") and not extra:',
+        "    if False:",
+        DISPATCH,
+    ),
+    # ── Dispatch refusals name the right cause ──────────────────────────────
+    (
+        "dispatch: an unknown tool is not audited",
+        "server.py",
+        '        _audit("denied_unknown_tool", reason="no handler registered")',
+        "        pass",
+        DISPATCH,
+    ),
+    (
+        "dispatch: a deployment-gated tool is reported as read-only filtered",
+        "server.py",
+        "        if _GATING and not deployment.tool_is_available(name, _DEPLOYMENT_MODE):",
+        "        if False:",
+        DISPATCH,
     ),
 ]
 

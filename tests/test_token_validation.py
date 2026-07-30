@@ -873,3 +873,33 @@ def test_stripping_every_scope_leaves_a_usable_default(
 
     oidc.client_credentials_token()
     assert token_endpoint.calls[0][1]["scope"].strip()
+
+
+# ── A canary for stub leakage ────────────────────────────────────────────────
+
+
+def test_validate_token_is_still_the_real_function():
+    """Fails loudly if another test module has replaced it by assignment.
+
+    This is not hypothetical. The console's OAuth fixture originally did
+
+        module._oidc.validate_token = lambda token: {...}
+
+    and `module._oidc` IS `auth.oidc`, so the replacement outlived the test — every later
+    test in the process "validated" any token by returning a fixed claims dict. It surfaced as
+    47 unrelated failures here, plus an HTTP-auth test that passed while accepting an
+    unauthenticated caller. That second symptom is the dangerous one: a leaked stub makes an
+    authorization test pass for the wrong reason.
+
+    Anything that needs to stub it must go through monkeypatch, which undoes itself.
+    """
+    import auth.oidc
+
+    function = auth.oidc.validate_token
+    assert function.__module__ == "auth.oidc", (
+        f"validate_token has been replaced by something from {function.__module__}"
+    )
+    assert function.__name__ == "validate_token", (
+        f"validate_token has been replaced by {function.__name__!r} — a test module assigned "
+        "over it instead of using monkeypatch"
+    )

@@ -515,3 +515,68 @@ def test_read_only_mode_defaults_to_on():
     finally:
         if snapshot is not None:
             os.environ["CB_ADMIN_READ_ONLY_MODE"] = snapshot
+
+
+# ── The required-variable marker survives a module reload ────────────────────
+
+
+def test_a_missing_required_variable_raises_rather_than_returning_a_sentinel(
+    monkeypatch,
+):
+    monkeypatch.delenv("CB_TEST_REQUIRED", raising=False)
+    with pytest.raises(RuntimeError, match="CB_TEST_REQUIRED"):
+        shared.get_env("CB_TEST_REQUIRED")
+
+
+def test_the_required_marker_still_works_after_the_module_is_reloaded(monkeypatch):
+    """THE BUG this pins.
+
+    `_REQUIRED = object()` with an `is` check compares a default bound at DEFINITION time
+    against the CURRENT module global. Reload the module and they are two different objects,
+    the identity check fails, and `get_env` returns THE SENTINEL rather than raising.
+
+    That is the worst failure available to this function: a missing credential comes back as a
+    truthy object and is passed onward. It showed up as
+    `handlers.capella.client._secret()` returning `<object object at 0x...>` for an unset
+    CAPELLA_API_KEY_SECRET — which would have been sent as a Bearer token.
+
+    Found because another test reloads `handlers.shared`, so the failure was real and already
+    reachable in this suite rather than hypothetical.
+    """
+    import importlib
+    import sys
+
+    monkeypatch.delenv("CB_TEST_REQUIRED", raising=False)
+
+    # Reload WHATEVER is currently registered under the name, not the object this file
+    # imported at collection time. `importlib.reload` requires
+    # `sys.modules[m.__name__] is m`, and the console's OAuth fixture pops
+    # `handlers.shared` to force a fresh import — so by the time this runs, the registered
+    # module can be a different object, or absent entirely. Depending on which was true made
+    # this fail only in a full-suite run.
+    registered = sys.modules.get("handlers.shared", shared)
+    monkeypatch.setitem(sys.modules, "handlers.shared", registered)
+
+    # The PRE-reload function object. This is the reference that actually breaks, and the one
+    # every handler holds: `from .shared import get_env` binds the function, so a later reload
+    # leaves fourteen modules calling this object while the module global it compares against
+    # has been replaced. Asserting only on the reloaded module's own `get_env` would pass
+    # either way — that version of this test let the identity-check mutation survive.
+    before_reload = registered.get_env
+
+    importlib.reload(registered)
+
+    with pytest.raises(RuntimeError, match="CB_TEST_REQUIRED"):
+        before_reload("CB_TEST_REQUIRED")
+
+    # And a required variable that IS set must still come back rather than raise.
+    monkeypatch.setenv("CB_TEST_REQUIRED", "value")
+    assert before_reload("CB_TEST_REQUIRED") == "value"
+
+
+def test_an_explicit_default_is_not_mistaken_for_the_required_marker(monkeypatch):
+    """Guards the fix from over-reaching: a real default must still be returned."""
+    monkeypatch.delenv("CB_TEST_OPTIONAL", raising=False)
+    assert shared.get_env("CB_TEST_OPTIONAL", "fallback") == "fallback"
+    assert shared.get_env("CB_TEST_OPTIONAL", None) is None
+    assert shared.get_env("CB_TEST_OPTIONAL", "") == ""

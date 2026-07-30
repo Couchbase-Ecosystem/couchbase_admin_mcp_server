@@ -45,14 +45,44 @@ _log = get_logger("handlers.shared")
 
 # ── Sentinels for "must be set" environment variables ────────────────────────
 
-_REQUIRED = object()
+
+class _RequiredSentinel:
+    """Marks a variable as REQUIRED, recognised by type name rather than by identity.
+
+    `_REQUIRED = object()` looked fine and had a sharp edge. A function's default argument is
+    bound once, at definition time, while the `is _REQUIRED` check inside reads the CURRENT
+    module global. Reload this module — a test does, and so does any tooling that reloads —
+    and those become two different objects. The identity check then fails, and `get_env`
+    returns THE SENTINEL OBJECT instead of raising.
+
+    That is the worst possible failure for this function: a missing required credential comes
+    back as a truthy object and is passed onward. It surfaced as
+    `handlers.capella.client._secret()` quietly returning `<object object at 0x...>` for an
+    unset CAPELLA_API_KEY_SECRET, which would then be sent as a Bearer token.
+
+    Comparing the TYPE NAME survives a reload, because the name is what is stable across
+    re-execution of the module.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return "<required>"
+
+
+_REQUIRED = _RequiredSentinel()
+
+
+def _is_required(default: Any) -> bool:
+    """Whether `default` is the required-marker, across module reloads."""
+    return type(default).__name__ == "_RequiredSentinel"
 
 
 def get_env(key: str, default: Any = _REQUIRED) -> str | None:
-    """Get an env var. If default is _REQUIRED and unset, raise at call time."""
+    """Get an env var. If no default is given and it is unset, raise at call time."""
     val = os.environ.get(key)
     if val is None or val == "":
-        if default is _REQUIRED:
+        if _is_required(default):
             raise RuntimeError(
                 f"Required environment variable {key} is not set. "
                 f"Set it before starting the MCP server."

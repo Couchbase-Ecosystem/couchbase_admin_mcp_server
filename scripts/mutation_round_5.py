@@ -27,6 +27,8 @@ SHARED = "tests/test_shared_http.py tests/test_shared_helpers.py"
 GUI_OAUTH = "tests/test_gui_oauth_routes.py"
 SQLB = "tests/test_sql_builders.py"
 DISPATCH = "tests/test_server_dispatch.py"
+PLAN = "tests/test_plan_analysis.py"
+INFRA = "tests/test_logging_and_client.py"
 
 MUTATIONS = [
     # ── Defect 1: the Secure flag behind a TLS-terminating proxy ────────────
@@ -1051,6 +1053,179 @@ MUTATIONS = [
         "        if False:",
         DISPATCH,
     ),
+    # ── Query-plan analysis: the advice an operator acts on ─────────────────
+    (
+        "plan: only the newest PrimaryScan spelling is recognised",
+        "handlers/diagnostics.py",
+        '_PRIMARY_SCAN_OPS = {"PrimaryScan", "PrimaryScan2", "PrimaryScan3"}',
+        '_PRIMARY_SCAN_OPS = {"PrimaryScan3"}',
+        PLAN,
+    ),
+    (
+        "plan: only the newest IndexScan spelling is recognised",
+        "handlers/diagnostics.py",
+        '_INDEX_SCAN_OPS = {"IndexScan", "IndexScan2", "IndexScan3"}',
+        '_INDEX_SCAN_OPS = {"IndexScan3"}',
+        PLAN,
+    ),
+    (
+        "plan: the walker stops descending, so nested operators are missed",
+        "handlers/diagnostics.py",
+        "            if isinstance(v, (dict, list)):\n                yield from _walk_plan(v)",
+        "            if False:\n                yield from _walk_plan(v)",
+        PLAN,
+    ),
+    (
+        "plan: a filter before any scan is reported as a missed pushdown",
+        "handlers/diagnostics.py",
+        '        if op == "Filter" and saw_scan:',
+        '        if op == "Filter":',
+        PLAN,
+    ),
+    (
+        "plan: an unreadable plan reports no problems, which reads as no problems",
+        "handlers/diagnostics.py",
+        '    if not summary["operators"]:',
+        "    if False:",
+        PLAN,
+    ),
+    (
+        "plan: index names are not deduplicated in the finding",
+        "handlers/diagnostics.py",
+        '        f.append("Indexes used: " + ", ".join(sorted(set(summary["indexes_used"]))))',
+        '        f.append("Indexes used: " + ", ".join(summary["indexes_used"]))',
+        PLAN,
+    ),
+    (
+        "plan: the EXPLAIN fallback keeps going past the limit",
+        "handlers/diagnostics.py",
+        "            if len(flagged) >= limit:\n                break",
+        "            if False:\n                break",
+        PLAN,
+    ),
+    (
+        "plan: one unexplainable statement aborts the whole probe",
+        "handlers/diagnostics.py",
+        '            _log.debug("skipping un-explainable statement: %s", e)\n            continue',
+        "            raise",
+        PLAN,
+    ),
+    # ── Log file preparation ────────────────────────────────────────────────
+    (
+        # Targeted at the EXISTING-FILE branch, where fchmod is the only thing tightening
+        # the mode. In the create branch `os.open` already passes 0o600, so removing fchmod
+        # there is a no-op — and that version of this mutation "survived" for that reason.
+        "logging: an existing log file is left at whatever mode it had",
+        "logging_config.py",
+        "            # fchmod on an fd we opened without following links, not chmod on a path.\n"
+        '            fd = os.open(path, os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))\n'
+        "            try:\n"
+        "                os.fchmod(fd, 0o600)",
+        '            fd = os.open(path, os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))\n'
+        "            try:\n"
+        "                pass",
+        INFRA,
+    ),
+    (
+        # BOTH symlink defences at once. Removing only the `islink` check survives, and
+        # correctly: `O_NOFOLLOW` on the open refuses the link independently, so the outcome
+        # is unchanged. That is what defence in depth means, and a mutation that leaves
+        # behaviour identical tests nothing. Removing both is the mutation that matters.
+        "logging: both symlink defences removed, so an arbitrary file is chmodded",
+        "logging_config.py",
+        # O_NOFOLLOW appears at THREE sites (the shared opener, the create branch, the
+        # existing-file branch) and each edit replaces the first remaining occurrence, so it
+        # is listed three times. A symlink pointing at an existing file takes the last of
+        # them, which is why leaving any single one in place changes nothing.
+        [
+            "        if os.path.islink(path):",
+            'getattr(os, "O_NOFOLLOW", 0)',
+            'getattr(os, "O_NOFOLLOW", 0)',
+            'getattr(os, "O_NOFOLLOW", 0)',
+        ],
+        ["        if False:", "0", "0", "0"],
+        INFRA,
+    ),
+    (
+        "logging: a hard-linked log file is no longer reported",
+        "logging_config.py",
+        "            if info.st_nlink > 1:",
+        "            if False:",
+        INFRA,
+    ),
+    (
+        "logging: an unusable path claims success, so the sink logs nowhere",
+        "logging_config.py",
+        "    except OSError:",
+        "    except OSError if False else ():",
+        INFRA,
+    ),
+    # ── The Capella client ──────────────────────────────────────────────────
+    (
+        "capella: a CREATE is retried on a 5xx, so a second cluster is billed",
+        "handlers/capella/client.py",
+        "    if status in _SERVER_ERROR:\n        return method.upper() in _IDEMPOTENT_METHODS",
+        "    if status in _SERVER_ERROR:\n        return True",
+        INFRA,
+    ),
+    (
+        "capella: POST joins the idempotent set",
+        "handlers/capella/client.py",
+        '_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE"})',
+        '_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "POST"})',
+        INFRA,
+    ),
+    (
+        "capella: a 403 loses the role hint and reads like a missing resource",
+        "handlers/capella/client.py",
+        "    if status == 403:",
+        "    if False:",
+        INFRA,
+    ),
+    (
+        "capella: a 404 no longer explains the project-id trap",
+        "handlers/capella/client.py",
+        "    if status == 404:",
+        "    if False:",
+        INFRA,
+    ),
+    (
+        "capella: an unretried CREATE no longer says the outcome is unknown",
+        "handlers/capella/client.py",
+        "            if not safe_to_repeat:",
+        "            if False:",
+        INFRA,
+    ),
+    (
+        "capella: the API key secret is defaulted instead of demanded",
+        "handlers/capella/client.py",
+        '    return get_env("CAPELLA_API_KEY_SECRET")',
+        '    return os.environ.get("CAPELLA_API_KEY_SECRET", "")',
+        INFRA,
+    ),
+    (
+        "capella: pagination stops after the first page",
+        "handlers/capella/client.py",
+        "def capella_list(",
+        "def _dead_capella_list(",
+        INFRA,
+    ),
+    # ── The required-variable marker across a module reload ─────────────────
+    (
+        "shared: the required marker reverts to identity, so a missing credential "
+        "returns a sentinel object instead of raising",
+        "handlers/shared.py",
+        '    return type(default).__name__ == "_RequiredSentinel"',
+        "    return default is _REQUIRED",
+        SHARED,
+    ),
+    (
+        "shared: a missing required variable is no longer fatal at all",
+        "handlers/shared.py",
+        "        if _is_required(default):",
+        "        if False:",
+        SHARED,
+    ),
 ]
 
 
@@ -1091,15 +1266,31 @@ def main() -> int:
                 work,
                 ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".git"),
             )
+            # `old`/`new` may each be a LIST, applying several edits as ONE mutation.
+            #
+            # Needed for LAYERED guards. The symlink protection in logging_config is both an
+            # `islink` check and `O_NOFOLLOW` on the open; removing either alone leaves the
+            # outcome identical, because the other still refuses. A single-edit mutation
+            # therefore "survives" while the guard is perfectly well tested — the mutation is
+            # the thing at fault, not the test. Removing both together is the edit that
+            # actually changes behaviour, and it is caught.
+            edits = (
+                list(zip(old, new, strict=False))
+                if isinstance(old, list)
+                else [(old, new)]
+            )
             path = work / relpath
             text = path.read_text()
-            if old not in text:
+            missing = [o for o, _ in edits if o not in text]
+            if missing:
                 # Not a pass. An anchor that no longer matches means this mutation tested
                 # nothing, and the guard it was written for is now unverified.
                 print(f"  ANCHOR-GONE  {label} ({relpath})", flush=True)
                 survivors.append((label, "anchor not found"))
                 continue
-            path.write_text(text.replace(old, new, 1))
+            for one_old, one_new in edits:
+                text = text.replace(one_old, one_new, 1)
+            path.write_text(text)
             if run(target, work):
                 print(f"  SURVIVED     {label}", flush=True)
                 survivors.append((label, "no test caught it"))

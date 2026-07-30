@@ -832,3 +832,50 @@ actually run.
 the OpenAPI document, plus a guard that fails if a new App Services operation is added
 without a line in it. Reading the code could not have found any of these; a table that a
 test enforces can.
+
+---
+
+# Full sweep, clean: 36 verified, 0 missing
+
+Re-run after the App Services fix, all 61 operations:
+
+```
+  MISSING=0   VERIFIED=36   SKIPPED=25
+  VERIFIED  GET  capella_app_services_list                200   <- was 405
+  VERIFIED  GET  capella_cluster_onoff_schedule_get       404 route matched;
+                                                          object absent (Capella error 11040)
+```
+
+Both of the previous round's findings are confirmed fixed against the live API: the
+org-wide App Services list answers 200, and the false-positive `MISSING` is now correctly
+read as a routed request for an object that does not exist.
+
+**Every path with a discoverable identifier is verified. Nothing is MISSING.** The 405s on
+write operations are the OPTIONS probe working as designed — route matched, method not
+OPTIONS, nothing mutated.
+
+## The 25 skips, and which are real
+
+Three were a gap in the script rather than an absence: `user_id` and `allowed_cidr_id` come
+from lists that already answered 200, and discovery simply never read them. In the output
+that is indistinguishable from an id that genuinely does not exist — it read as "cannot be
+verified" when it meant "did not look". Discovery now reads both.
+
+The remaining 22 all need one thing: **an App Service in the target project.** That
+organization has none, which the org-wide list now proves rather than merely suggesting.
+Creating one — which Couchbase Lite sync testing needs anyway — would let a single re-run
+verify all 22, including the App Endpoint subtree.
+
+The skip summary is now grouped by cause, with a closing line naming the missing object.
+Previously each of the 22 printed the same sentence, twice over, which buried the one
+actionable fact.
+
+## Standing recommendation
+
+```powershell
+python scripts\verify_capella_paths.py            # all 61, read-only
+python scripts\verify_capella_paths.py --method-probe   # + proves 12 write methods
+```
+
+Exit status is 0 only when nothing is `MISSING`. Worth running in CI against a long-lived
+test organization that has an App Service, which would close the last 22.

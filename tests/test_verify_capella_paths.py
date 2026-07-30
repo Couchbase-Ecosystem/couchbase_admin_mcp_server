@@ -875,3 +875,59 @@ def test_static_op_refuses_to_be_built_with_missing_fields(script):
     now a TypeError rather than a silent default."""
     with pytest.raises(TypeError, match="missing"):
         script._StaticOp(name="x", method="GET", path="/p")
+
+
+# ── Discovery must not leave ids on the table ────────────────────────────────
+
+
+def test_credential_and_cidr_ids_are_discovered(script, monkeypatch):
+    """Three operations reported SKIPPED for want of an identifier that was sitting in a
+    list the script already knew how to call.
+
+    In the output that is indistinguishable from an identifier that genuinely does not
+    exist, so it read as "cannot be verified" when it meant "did not look".
+    """
+    calls: list[str] = []
+    real = script._request
+
+    def _spy(method, path, token, body=None):
+        calls.append(f"{method} {path}")
+        if path.endswith("/users"):
+            return 200, json.dumps({"data": [{"id": "CRED-1"}]})
+        if path.endswith("/allowedcidrs"):
+            return 200, json.dumps({"data": [{"id": "CIDR-1"}]})
+        return real(method, path, token, body)
+
+    monkeypatch.setattr(script, "_request", _spy)
+    ids = script.discover("fake-secret", _Args())
+
+    assert ids["user_id"] == "CRED-1"
+    assert ids["allowed_cidr_id"] == "CIDR-1"
+    assert any(c.endswith("/users") for c in calls)
+    assert any(c.endswith("/allowedcidrs") for c in calls)
+
+
+def test_an_empty_credential_list_leaves_the_id_absent(script, monkeypatch):
+    """Absent means SKIPPED, which is right. It must not invent a placeholder id — that
+    would 404 and be reported as MISSING for a correct path."""
+    real = script._request
+
+    def _spy(method, path, token, body=None):
+        if path.endswith(("/users", "/allowedcidrs")):
+            return 200, json.dumps({"data": []})
+        return real(method, path, token, body)
+
+    monkeypatch.setattr(script, "_request", _spy)
+    ids = script.discover("fake-secret", _Args())
+    assert "user_id" not in ids
+    assert "allowed_cidr_id" not in ids
+
+
+def test_skips_are_grouped_by_cause_in_the_summary(script, monkeypatch, capsys):
+    """22 operations skipped for one shared reason printed that sentence 22 times, twice
+    over, burying the actionable part: which single missing object unlocks the group."""
+    monkeypatch.setattr("sys.argv", ["verify", "--org", "ORG"])
+    script.main()
+    out = capsys.readouterr().out
+    assert "Not exercised" in out
+    assert "operation(s):" in out, "the skip summary is not grouped by cause"

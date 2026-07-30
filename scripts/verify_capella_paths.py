@@ -279,6 +279,26 @@ def discover(token: str, args) -> dict:
     else:
         print("  bucket       : NONE FOUND (bucket-scoped paths will be SKIPPED)")
 
+    # Two more cluster-scoped ids, both from lists that already answer 200. Without these
+    # three operations reported SKIPPED for want of an identifier that was sitting in a
+    # list the script had not thought to read — indistinguishable in the output from an
+    # identifier that genuinely does not exist.
+    _, body = _request("GET", f"{base}/users", token)
+    credential = _first_id(body, "id", "userId")
+    if credential:
+        ids["user_id"] = credential
+        print(f"  db credential: {credential}")
+    else:
+        print("  db credential: none (credential paths SKIPPED)")
+
+    _, body = _request("GET", f"{base}/allowedcidrs", token)
+    cidr = _first_id(body, "id", "allowedCidrId")
+    if cidr:
+        ids["allowed_cidr_id"] = cidr
+        print(f"  allowed cidr : {cidr}")
+    else:
+        print("  allowed cidr : none (CIDR delete SKIPPED)")
+
     # App Services are listed ORGANIZATION-WIDE. The cluster-level /appservices path
     # accepts POST only, so the GET this used to make returned 405 — and because a 405
     # body yields no id, the result was reported as "NONE FOUND" exactly as an empty list
@@ -877,10 +897,29 @@ def main() -> int:
 
     skipped = [r for r in results if r.verdict == "SKIPPED"]
     if skipped:
-        print()
-        print("  Not exercised (no identifier available — not a failure):")
+        # Grouped by CAUSE. Listing each operation with its own copy of the same reason
+        # printed the same sentence 22 times and buried the one thing an operator can act
+        # on: which single missing object would unlock the whole group.
+        by_reason: dict[str, list[str]] = {}
         for r in skipped:
-            print(f"    {r.op.name}: {r.detail}")
+            by_reason.setdefault(r.detail, []).append(r.op.name)
+
+        print()
+        print("  Not exercised — no identifier available. NOT failures:")
+        for reason, names in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
+            print(f"    {len(names):>2} operation(s): {reason}")
+            for name in sorted(names):
+                print(f"        {name}")
+
+    if skipped and not [r for r in results if r.verdict == "MISSING"]:
+        needs_app_service = [r for r in skipped if "app_service_id" in r.detail]
+        if needs_app_service:
+            print()
+            print(
+                f"  {len(needs_app_service)} of the skips need an App Service to exist in "
+                "the target project. Creating one there — which Couchbase Lite sync "
+                "testing needs anyway — would let a re-run verify all of them."
+            )
 
     errors = [r for r in results if r.verdict == "ERROR"]
     if errors:

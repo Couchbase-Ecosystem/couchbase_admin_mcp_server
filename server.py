@@ -91,6 +91,7 @@ import audit
 import authz
 import deployment
 import profile_config
+import tls_config
 from auth import request_auth
 from auth.scope_gate import (
     check_scope,
@@ -567,6 +568,17 @@ def _enforce_profile() -> None:
     if sink_problem:
         problems.append(sink_problem)
 
+    # Transport encryption. A non-loopback HTTP bind with neither a certificate nor an
+    # explicit "something in front handles it" is fatal: cleartext bearer tokens are
+    # the one exposure that defeats every other control at once, and the two situations
+    # are indistinguishable from inside the process.
+    problems.extend(
+        tls_config.validate(
+            os.environ.get("CB_ADMIN_HOST", "127.0.0.1"),
+            os.environ.get("CB_ADMIN_TRANSPORT", "stdio").lower(),
+        )
+    )
+
     if not problems:
         return
     print(
@@ -924,9 +936,12 @@ async def _main_http() -> None:
         security_settings=security_settings,
     )
 
+    _tls = tls_config.from_env()
     print(
-        f"[couchbase-admin-mcp] HTTP transport on http://{host}:{port}/mcp "
+        f"[couchbase-admin-mcp] HTTP transport on "
+        f"{'https' if _tls.direct else 'http'}://{host}:{port}/mcp "
         f"(auth_required={require_auth}, per-client sessions, "
+        f"tls={_tls.describe()}, "
         f"allowed_origins={origins or 'none configured'})",
         file=sys.stderr,
         flush=True,
@@ -978,7 +993,18 @@ async def _main_http() -> None:
         # auth-failure audit event.
         middleware=[Middleware(_ScopeAuthMiddleware)],
     )
-    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+    # TLS, when this process is the one terminating it. The posture was validated at
+    # startup (_enforce_profile), so reaching here means it is coherent: either a
+    # certificate pair is present, or the operator has acknowledged that something in
+    # front terminates TLS, or the bind is loopback.
+    tls = tls_config.from_env()
+    config = uvicorn.Config(
+        starlette_app,
+        host=host,
+        port=port,
+        log_level="info",
+        **tls.uvicorn_kwargs(),
+    )
     server = uvicorn.Server(config)
 
     async with manager.run():

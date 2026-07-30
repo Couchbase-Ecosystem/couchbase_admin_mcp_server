@@ -167,6 +167,7 @@ packages = ["handlers", "auth", "gui"]
 "deployment.py" = "deployment.py"
 "logging_config.py" = "logging_config.py"
 "profile_config.py" = "profile_config.py"
+"tls_config.py" = "tls_config.py"
 
 [tool.uv]
 package = true

@@ -115,6 +115,7 @@ COPY --chown=mcp:mcp authz.py /app/authz.py
 COPY --chown=mcp:mcp deployment.py /app/deployment.py
 COPY --chown=mcp:mcp logging_config.py /app/logging_config.py
 COPY --chown=mcp:mcp profile_config.py /app/profile_config.py
+COPY --chown=mcp:mcp tls_config.py /app/tls_config.py
 COPY --chown=mcp:mcp handlers /app/handlers
 COPY --chown=mcp:mcp auth /app/auth
 COPY --chown=mcp:mcp gui /app/gui

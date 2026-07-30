@@ -4,8 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Couchbase Admin MCP Console</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<!-- No webfont <link> here, deliberately. A hosted font service is unreachable in an
+     air-gapped network and is a third-party runtime request from an administration
+     console. The stacks below name the intended faces first, so they are used if the
+     operator has them installed or vendors them locally, and fall back to system fonts
+     otherwise. -->
 <style>
   :root {
     --bg:        #0a0c10;
@@ -24,8 +27,8 @@
     --warning:   #f0a500;
     --error:     #ff5c5c;
     --radius:    6px;
-    --font-ui:   'Syne', sans-serif;
-    --font-mono: 'DM Mono', monospace;
+    --font-ui:   'Syne', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-ui); }
@@ -377,9 +380,25 @@
 </div>
 <div id="root" style="padding-top:34px;"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script>
+<!--
+  VENDORED LOCALLY, ON PURPOSE.
+
+  These were loaded from cdnjs.cloudflare.com, which meant (a) the console could not
+  load at all inside an air-gapped or egress-restricted network, and (b) an
+  administration tool for a production database took its JavaScript from a third-party
+  CDN at runtime. Both are unacceptable for the deployment this ships into.
+
+  Babel is required, not optional: the application script below is JSX, and it was
+  previously served as a plain <script> with no transpiler at all. The browser threw
+  `SyntaxError: Unexpected token '<'` on the first tag and React never mounted, so the
+  console rendered a blank page. It had never worked.
+
+  Licences for the vendored files are in vendor/*.LICENSE (both MIT).
+-->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+<script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
 // ── Constants ─────────────────────────────────────────────────────────────────

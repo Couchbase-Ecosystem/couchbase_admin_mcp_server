@@ -60,8 +60,10 @@ the project you point it at.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
+import pathlib
 import re
 import sys
 import time
@@ -274,6 +276,95 @@ def probe(op, ids: dict, token: str, allow_writes: bool) -> Result:
     return Result(op, "ERROR", status, body[:160].replace("\n", " "))
 
 
+class _StaticOp:
+    """An operation read straight out of the source, with no imports required."""
+
+    __slots__ = ("body", "group", "method", "name", "path", "summary")
+
+    def __init__(self, name, method, path, summary, group, body):
+        self.name = name
+        self.method = method
+        self.path = path
+        self.summary = summary
+        self.group = group
+        self.body = body
+
+
+def _ops_by_static_parse(spec_path: str) -> list:
+    """Read the Op(...) declarations out of spec.py with the ast module.
+
+    WHY THIS EXISTS
+    ---------------
+    spec.py imports mcp.types to BUILD MCP tool objects, so importing it requires the
+    MCP SDK and, transitively, a working project install. This script only needs the
+    URL templates. Demanding a full dependency install in order to read a list of
+    strings is friction in exactly the wrong place: the natural time to run this is on
+    a laptop with a fresh checkout, or in a CI step that has installed nothing yet.
+
+    Parsing the AST needs nothing but the standard library, and it cannot drift from
+    the real registry because it reads the same declarations the server does.
+    """
+    tree = ast.parse(pathlib.Path(spec_path).read_text(encoding="utf-8"))
+    ops = []
+
+    def literal(node):
+        try:
+            return ast.literal_eval(node)
+        except Exception:
+            return None
+
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Op"):
+            continue
+        fields = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+        name = literal(fields.get("name")) if "name" in fields else None
+        path = literal(fields.get("path")) if "path" in fields else None
+        if not name or not path:
+            continue
+        ops.append(
+            _StaticOp(
+                name=name,
+                method=(literal(fields.get("method")) if "method" in fields else "GET")
+                or "GET",
+                path=path,
+                # Concatenated string summaries are common here, and literal_eval
+                # handles them; anything it cannot read becomes empty, which only
+                # affects the [PAT] tag in the output.
+                summary=(literal(fields.get("summary")) if "summary" in fields else "")
+                or "",
+                group=(literal(fields.get("group")) if "group" in fields else "") or "",
+                body=(literal(fields.get("body")) if "body" in fields else None),
+            )
+        )
+    return ops
+
+
+def load_ops() -> list:
+    """Every operation, preferring the real registry and falling back to a static parse.
+
+    The import is tried first because it is the authority — it is what the server
+    actually runs. The fallback exists so a missing dependency does not stop someone
+    verifying paths.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, root)
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    try:
+        from handlers.capella.spec import OPS_BY_NAME
+
+        return list(OPS_BY_NAME.values())
+    except Exception as exc:
+        spec_path = os.path.join(root, "handlers", "capella", "spec.py")
+        ops = _ops_by_static_parse(spec_path)
+        print(
+            f"note: could not import the op registry ({type(exc).__name__}: {exc}); "
+            f"read {len(ops)} operations directly from spec.py instead. "
+            "Install the project to use the registry itself.",
+            file=sys.stderr,
+        )
+        return ops
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -310,11 +401,7 @@ def main() -> int:
         )
         return 2
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
-    from handlers.capella.spec import OPS_BY_NAME
-
-    ops = list(OPS_BY_NAME.values())
+    ops = load_ops()
     if args.only:
         wanted = set(args.only)
         ops = [o for o in ops if o.name in wanted]

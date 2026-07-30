@@ -70,14 +70,19 @@ security audit at the end of this document.
     `License: MIT — Copyright (c) 2026 Chris Ahrendt` header in
     `auth/scope_gate.py` was also corrected — it was the last stale attribution
     in the tree.
-3. **Decide the target org.** The official `mcp-server-couchbase` was graduated
-    out of `Couchbase-Ecosystem` into `couchbase/`, and all its internal links
-    now point there. An admin server may belong in `couchbase/` too. Worth
-    settling with the org owners before a repo is created — the README support
-    policy block and the issue URL both encode the answer.
+3. ~~**Decide the target org.**~~ **DECIDED: `Couchbase-Ecosystem`.** Every URL in
+    the tree points there and a test pins it (`tests/test_project_metadata.py`), so
+    it cannot drift back.
+
+    Correcting my earlier claim in this section: I wrote that the official
+    `mcp-server-couchbase` had been graduated out of `Couchbase-Ecosystem` into
+    `couchbase/`. That was wrong — it is still at
+    `github.com/Couchbase-Ecosystem/mcp-server-couchbase`, verified by fetching it.
+    The decision and the precedent therefore agree.
 4. **Add `CONTRIBUTING.md`.** The one standard file the org's better-maintained
     repos consistently carry. `CODE_OF_CONDUCT.md`, `SECURITY.md` and
     `CODEOWNERS` are absent org-wide, so they are not needed for parity.
+    STILL OPEN.
 
 ## Verify against your own organization before relying on it
 

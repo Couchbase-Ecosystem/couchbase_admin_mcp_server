@@ -349,3 +349,55 @@ def test_the_real_spec_has_no_unfillable_placeholders():
         "paths use placeholders the verification script cannot supply: "
         + str({k: sorted(v) for k, v in unknown.items()})
     )
+
+
+# ── The zero-dependency fallback ─────────────────────────────────────────────
+
+
+def test_the_static_parse_matches_the_real_registry(script):
+    """The fallback must agree with the authority, or it is worse than not having one.
+
+    spec.py imports mcp.types to build MCP tool objects, so importing the registry needs
+    the SDK and a working project install. This script only needs the URL templates, and
+    the natural time to run it is on a fresh checkout or in a CI step that has installed
+    nothing — so it falls back to reading the Op(...) declarations with `ast`.
+
+    A fallback that disagreed with the registry would verify paths the server does not
+    actually use, which is the one failure that would make the whole tool misleading. So
+    the two are compared field by field.
+    """
+    os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
+    from handlers.capella.spec import OPS_BY_NAME
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    static = script._ops_by_static_parse(str(root / "handlers" / "capella" / "spec.py"))
+
+    assert len(static) == len(OPS_BY_NAME), (
+        f"static parse found {len(static)} ops, the registry has {len(OPS_BY_NAME)}"
+    )
+
+    by_name = {op.name: op for op in static}
+    assert set(by_name) == set(OPS_BY_NAME)
+    for name, real in OPS_BY_NAME.items():
+        assert by_name[name].path == real.path, f"{name}: path differs"
+        assert by_name[name].method == real.method, f"{name}: method differs"
+
+
+def test_the_static_parse_preserves_the_pat_tags(script):
+    """--only-pat selects on the summary text, so the fallback has to carry it or the
+    four inferred paths could not be isolated without the SDK installed."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    static = script._ops_by_static_parse(str(root / "handlers" / "capella" / "spec.py"))
+    inferred = [op for op in static if "[PAT]" in (op.summary or "")]
+    assert len(inferred) == 4, [op.name for op in inferred]
+
+
+def test_load_ops_prefers_the_real_registry(script):
+    """The import is the authority and must be tried first; the parse is only a
+    fallback. If this inverted, the tool would stop reflecting what the server runs."""
+    ops = script.load_ops()
+    from handlers.capella.spec import Op
+
+    assert ops and isinstance(ops[0], Op), (
+        "load_ops returned statically-parsed ops even though the registry imports"
+    )

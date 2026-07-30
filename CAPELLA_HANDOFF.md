@@ -949,3 +949,69 @@ each enterprise requirement is individually load-bearing.
 
 The README also gained a **Deployment profiles** section, because the profile model was
 enforced in code and explained nowhere an operator would look.
+
+---
+
+# Publication readiness
+
+Checked rather than assumed. Two things were found and fixed; one remains and needs a
+decision before the first push.
+
+## Clean
+
+- **No credentials anywhere**, in the working tree or in the git history. No `.env` file, no
+  private keys, no credential-shaped strings (checked with `git log --all -p`).
+- **Licensing** is coherent: stock Apache-2.0 `LICENSE`, `NOTICE` with the Couchbase
+  copyright, both shipped in the wheel and the image, `pyproject.toml` agreeing, and a test
+  that fails if they diverge.
+- **677 tests** pass in both orderings, 9 live tests separately, `ruff check` and
+  `ruff format --check` clean, **45/45 mutations caught**.
+- **The wheel and the image both start**, verified by installing into an empty virtualenv
+  and importing from the installed copy rather than the source tree.
+- **Every documented configuration starts**, extracted from the README and the runbook and
+  run through the real startup validation.
+
+## Fixed for publication
+
+**The customer name appeared in 11 files.** Naming an engagement publicly is the customer's
+to consent to, and the reasoning did not need it — every case was really about an unattended
+agent chain doing mobile-app testing. Replaced in prose, docstrings, and the test fixtures
+that used the name as sample cluster data.
+
+**Live infrastructure identifiers.** The verification runs recorded a real organization,
+project and cluster UUID, the organization's name, and a bucket id. Not credentials — they
+authorise nothing — but they identify real infrastructure. Replaced with obviously-synthetic
+UUIDs.
+
+## STILL OPEN — decide before the first push
+
+**The git history still contains both.** Two commit messages name the customer, and earlier
+commits contain the pre-redaction file content. Rewriting the working tree does not touch
+either, and `git push` publishes the history.
+
+Three options, in descending preference:
+
+1. **Rewrite the two commit messages and redact history**, keeping the commit trail. The
+   reasoning in these messages is genuinely useful to a future maintainer, and it is worth
+   preserving. `git filter-repo --message-callback` plus a content replacement, then force-push
+   to a fresh remote.
+2. **Squash to a single initial commit** for the public repository, keeping this repository
+   private as the working history. Simplest and safest; loses the review trail publicly.
+3. **Publish as-is** only if the customer has agreed to be named. The identifiers should be
+   redacted regardless.
+
+Nothing here is a security issue — no credential is exposed either way. It is a
+confidentiality and professionalism question, which is why it is a decision rather than a fix
+already applied.
+
+## Also worth knowing before it ships
+
+- **22 of 61 Capella paths are unverified**, all App Services sub-paths, because the test
+  organization has no App Service. Not a defect — they are `[DOC]`-sourced from Couchbase's
+  own OpenAPI document. One re-run of `scripts/verify_capella_paths.py` closes them once an
+  App Service exists.
+- **mcp 2.x is not supported.** The dependency is pinned `<2.0` because 2.0 renamed the Tool
+  model's fields and this code reads the 1.x names in 400+ places. Supporting it needs a
+  compatibility layer — a real piece of work, and a likely first issue in the public repo.
+- **The `capella-paths` CI job is inert** until `CB_CAPELLA_API_KEY` is set as a repository
+  secret. It skips cleanly rather than failing, so a fork's PR still passes.

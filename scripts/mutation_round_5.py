@@ -456,8 +456,8 @@ MUTATIONS = [
     (
         "capella: the keyspace collapses to a bare endpoint name",
         "scripts/verify_capella_paths.py",
-        '        ids["app_endpoint_keyspace"] = f"{endpoint_id}.{scope}.{collection}"',
-        '        ids["app_endpoint_keyspace"] = endpoint_id',
+        '            f"{endpoint_id}.{verify_scope}.{verify_collection}"',
+        "            endpoint_id",
         CAPELLA,
     ),
     (
@@ -543,7 +543,7 @@ MUTATIONS = [
     (
         "capella: the bootstrap stops sending the admin user access oneOf",
         "scripts/verify_capella_paths.py",
-        '            "access": {"accessAllEndpoints": False},',
+        '            "access": {"accessAllEndpoints": True},',
         "",
         CAPELLA,
     ),
@@ -566,6 +566,42 @@ MUTATIONS = [
         "scripts/verify_capella_paths.py",
         'print(f"  {label:14s}: create failed HTTP {status} — {body[:500]}")',
         'print(f"  {label:14s}: create failed HTTP {status} — {body[:60]}")',
+        CAPELLA,
+    ),
+    # ── App Endpoint must not bind real data (409 + a safety problem) ───────
+    (
+        "capella: the endpoint binds the discovered scope, syncing real data",
+        "scripts/verify_capella_paths.py",
+        '            "scopes": {verify_scope: {"collections": {verify_collection: {}}}},',
+        '            "scopes": {scope: {"collections": {collection: {}}}},',
+        CAPELLA,
+    ),
+    (
+        "capella: no throwaway scope is created for the endpoint to bind",
+        "scripts/verify_capella_paths.py",
+        '        {"name": verify_scope},\n        fallback_id=verify_scope,',
+        '        {"name": verify_scope},\n        fallback_id=None,',
+        CAPELLA,
+    ),
+    (
+        "capella: the keyspace names the discovered scope instead of the created one",
+        "scripts/verify_capella_paths.py",
+        '            f"{endpoint_id}.{verify_scope}.{verify_collection}"',
+        '            f"{endpoint_id}.{scope}.{collection}"',
+        CAPELLA,
+    ),
+    (
+        "capella: the admin user grant reverts to the rejected false form",
+        "scripts/verify_capella_paths.py",
+        '            "access": {"accessAllEndpoints": True},',
+        '            "access": {"accessAllEndpoints": False},',
+        CAPELLA,
+    ),
+    (
+        "capella: the spec stops warning that accessAllEndpoints false is rejected",
+        "handlers/capella/spec.py",
+        "                    \"{'accessAllEndpoints': false} is NEITHER — it grants nothing, and \"",
+        '                    "false disables it. "',
         CAPELLA,
     ),
 ]

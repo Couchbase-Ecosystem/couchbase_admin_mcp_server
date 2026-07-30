@@ -753,6 +753,36 @@ def test_the_admin_user_access_field_documents_its_one_of():
     assert "both" in description.lower()
 
 
+def test_the_spec_warns_that_a_false_all_endpoints_flag_is_rejected():
+    """The trap that caught me.
+
+    `{'accessAllEndpoints': false}` looks like the least-privilege choice and is in fact
+    NEITHER of the two valid shapes: it grants nothing, and Capella rejects it with the same
+    422 as omitting `access` entirely —
+
+        "contains or lacks both, list of endpoints and all endpoints flag."
+
+    There is no "no access" form; to restrict a user you list endpoints. A careful reader
+    reaching for the safer-looking option gets an error that does not explain itself, so the
+    description has to say so.
+    """
+    from handlers.capella import spec
+
+    description = spec.OPS_BY_NAME["capella_app_service_admin_user_create"].body[
+        "access"
+    ]["description"]
+    # The exact rejected form, spelled out. Asserting merely that the word "false" appears
+    # is not enough — an earlier version of this test passed while the sentence tying
+    # `false` to "grants nothing, and is rejected" had been deleted, because "never both and
+    # never neither" elsewhere still contained the words being matched.
+    assert "'accessAllEndpoints': false" in description
+    assert "rejects" in description
+    assert "no access" in description, (
+        "the description should say there is no 'no access' form, since that is the thing a "
+        "careful reader will look for"
+    )
+
+
 def test_the_app_endpoint_delta_sync_field_is_named_correctly():
     """`deltaSyncEnabled`, not `deltaSync`.
 

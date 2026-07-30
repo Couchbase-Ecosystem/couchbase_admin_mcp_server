@@ -972,7 +972,10 @@ OPS: tuple[Op, ...] = (
                     "REQUIRED. Exactly one of two shapes, never both and never neither: "
                     "{'accessAllEndpoints': true} for every App Endpoint, or "
                     "{'endpoints': ['endpoint1', 'endpoint2']} to name them. Supplying "
-                    "both or neither is a 422."
+                    "both or neither is a 422. Note that "
+                    "{'accessAllEndpoints': false} is NEITHER — it grants nothing, and "
+                    "Capella rejects it with the same error as omitting the field. To "
+                    "restrict a user, list the endpoints; there is no 'no access' form."
                 ),
             },
             "enableBucketLevelAccess": {

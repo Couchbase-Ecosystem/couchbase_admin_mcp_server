@@ -559,18 +559,28 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
         }
 
     # ── App Services admin user ─────────────────────────────────────────────
-    # `access` is REQUIRED and is a oneOf — exactly one of `accessAllEndpoints` or
-    # `endpoints`, never both and never neither. Omitting it produced
-    #   422 "... contains or lacks both ..."
-    # `accessAllEndpoints: false` is the narrower of the two: it satisfies the schema while
-    # granting the throwaway user nothing.
+    # `accessAllEndpoints` must be TRUE, not false. The full message is:
+    #
+    #   422 "Payload for creating or modifying app service admin user contains or lacks
+    #        both, list of endpoints and all endpoints flag."
+    #
+    # `false` with no `endpoints` list is not "the narrow option", it is NEITHER option: the
+    # user would be granted access to nothing, and Capella counts that as failing to specify
+    # access at all. Trying to be least-privilege here produced the same 422 as omitting the
+    # field entirely.
+    #
+    # The grant is acceptable because the App Service is the one this run just created and
+    # deletes minutes later, and the user's password is random and never printed. On the
+    # REUSE path — an App Service the project already had — this grants a throwaway admin
+    # access to that App Service's endpoints for the length of the run, which is why it is
+    # created last and deleted first.
     admin_id = _create(
         "as admin user",
         f"{as_base}/adminUsers",
         {
             "name": f"verify{stamp}",
             "password": _throwaway_password(),
-            "access": {"accessAllEndpoints": False},
+            "access": {"accessAllEndpoints": True},
         },
     )
     if admin_id:
@@ -585,8 +595,52 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
         print("  app endpoint  : skipped, could not resolve the bucket NAME")
         return created
 
-    scope = str(ids.get("scope_name") or "_default")
-    collection = str(ids.get("collection_name") or "_default")
+    # A THROWAWAY scope and collection, not the ones discovery found.
+    #
+    # This originally bound the endpoint to the discovered scope and collection, which on a
+    # real cluster means `_default._default` of a bucket holding real data. That is wrong on
+    # two counts:
+    #
+    #   1. Configuring an App Endpoint over a collection turns on Sync Gateway for it and
+    #      writes sync metadata into the bucket. A verification tool must not start syncing
+    #      somebody's data as a side effect of checking a URL.
+    #   2. It does not even work twice. The metadata outlives the App Service, so a second
+    #      run answered
+    #        409 "App Endpoint config value or collection conflicts with one already in use"
+    #      on a freshly created App Service — the conflict being the leftovers of the first.
+    #
+    # A scope created for this run is inert, unique per run, and removed afterwards. The
+    # endpoint is skipped entirely if it cannot be made, because falling back to the real
+    # collection is the behaviour being fixed.
+    verify_scope = f"verify{stamp}"
+    verify_collection = "sync"
+    scope_id = _create(
+        "verify scope",
+        f"{base}/buckets/{urllib.parse.quote(str(bucket_id), safe='')}/scopes",
+        {"name": verify_scope},
+        fallback_id=verify_scope,
+    )
+    if not scope_id:
+        print(
+            "  app endpoint  : skipped — no throwaway scope, and binding the real "
+            "collection is what this avoids"
+        )
+        return created
+
+    scope_base = (
+        f"{base}/buckets/{urllib.parse.quote(str(bucket_id), safe='')}"
+        f"/scopes/{urllib.parse.quote(verify_scope, safe='')}"
+    )
+    collection_id = _create(
+        "verify collection",
+        f"{scope_base}/collections",
+        {"name": verify_collection},
+        fallback_id=verify_collection,
+    )
+    if not collection_id:
+        print("  app endpoint  : skipped — no throwaway collection")
+        return created
+
     endpoint_name = f"verify{stamp}"
     endpoint_id = _create(
         "app endpoint",
@@ -595,8 +649,8 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
             "name": endpoint_name,
             "bucket": bucket,
             # Only ONE scope is permitted per App Endpoint, so this names exactly the one
-            # discovery found rather than mapping several.
-            "scopes": {scope: {"collections": {collection: {}}}},
+            # created above.
+            "scopes": {verify_scope: {"collections": {verify_collection: {}}}},
             # `deltaSyncEnabled`, not `deltaSync` — the short name is silently ignored.
             "deltaSyncEnabled": False,
         },
@@ -610,7 +664,9 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
         # A keyspace is endpoint.scope.collection. A bare endpoint name is accepted but v4
         # reads it as `<endpoint>._default._default`, which silently targets the wrong
         # collection on a cluster with named scopes — so it is spelled out.
-        ids["app_endpoint_keyspace"] = f"{endpoint_id}.{scope}.{collection}"
+        ids["app_endpoint_keyspace"] = (
+            f"{endpoint_id}.{verify_scope}.{verify_collection}"
+        )
 
     return created
 

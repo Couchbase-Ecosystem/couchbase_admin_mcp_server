@@ -1625,8 +1625,14 @@ def test_the_admin_user_is_created_with_exactly_one_access_shape(script, monkeyp
     assert len(keys & {"accessAllEndpoints", "endpoints"}) == 1, (
         f"access must carry exactly one of the two shapes, got {sorted(keys)}"
     )
-    # The narrower of the two for a throwaway user: satisfies the schema, grants nothing.
-    assert access.get("accessAllEndpoints") is False
+    # TRUE, not false. `accessAllEndpoints: false` with no `endpoints` list is not the
+    # narrow option, it is NEITHER option — the user would be granted nothing, and Capella
+    # counts that as failing to specify access:
+    #
+    #   422 "... contains or lacks both, list of endpoints and all endpoints flag."
+    #
+    # Trying to be least-privilege produced the same rejection as omitting the field.
+    assert access.get("accessAllEndpoints") is True
 
 
 def test_the_app_endpoint_uses_the_field_name_capella_reads(script, monkeypatch):
@@ -1676,15 +1682,92 @@ def test_the_app_endpoint_keyspace_is_spelled_out(script, monkeypatch):
     """A bare endpoint name is ACCEPTED by v4 and read as `<name>._default._default`, so on a
     cluster with named scopes it silently targets the wrong collection. The two
     accessControlFunction paths take a keyspace, so getting this wrong would verify the right
-    route against the wrong object."""
+    route against the wrong object.
+
+    The keyspace names the scope and collection this run CREATED, not the ones discovery
+    found — see the next test for why.
+    """
     rec = _ChildRecorder()
     monkeypatch.setattr(script, "_request", rec)
     ids = dict(BASE_IDS)
     script.bootstrap_child_objects("tok", "/base", ids, {})
 
-    assert (
-        ids["app_endpoint_keyspace"] == f"{ids['app_endpoint_name']}.inventory.airline"
+    endpoint = ids["app_endpoint_name"]
+    keyspace = ids["app_endpoint_keyspace"]
+    assert keyspace.startswith(f"{endpoint}.")
+    assert keyspace.count(".") == 2, f"not endpoint.scope.collection: {keyspace}"
+    # NOT the discovered inventory.airline — a scope made for this run.
+    assert ".inventory.airline" not in keyspace
+
+
+def test_the_endpoint_binds_a_throwaway_scope_not_the_discovered_one(
+    script, monkeypatch
+):
+    """THE correctness AND safety fix.
+
+    Configuring an App Endpoint over a collection turns on Sync Gateway for it and writes
+    sync metadata into the bucket. Binding the DISCOVERED scope and collection meant binding
+    `_default._default` of a bucket holding real data — a verification tool must not start
+    syncing somebody's data as a side effect of checking a URL.
+
+    It also did not work twice: the metadata outlives the App Service, so a second run got
+        409 "App Endpoint config value or collection conflicts with one already in use"
+    on a freshly created App Service, conflicting with the first run's leftovers.
+    """
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    ids = dict(BASE_IDS)  # scope_name=inventory, collection_name=airline
+
+    script.bootstrap_child_objects("tok", "/base", ids, {})
+
+    endpoint = next(b for p, b in rec.creates if p.endswith("/appEndpoints"))
+    scopes = endpoint["scopes"]
+    assert "inventory" not in scopes, (
+        "the endpoint bound the discovered scope, which syncs real data"
     )
+    assert len(scopes) == 1, "Capella permits only one scope per App Endpoint"
+    (bound_scope,) = scopes
+    assert "airline" not in scopes[bound_scope]["collections"], (
+        "the endpoint bound the discovered collection"
+    )
+    assert [p for p, _b in rec.creates if p.endswith("/scopes")], (
+        "no throwaway scope was created"
+    )
+
+
+def test_the_throwaway_scope_and_collection_are_torn_down(script, monkeypatch):
+    """They are created in the target bucket, so they must not be left behind. Order matters:
+    the endpoint has to go before the collection it syncs."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    created = script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    labels = [label for label, _p in created]
+    for expected in ("verify scope", "verify collection", "app endpoint"):
+        assert expected in labels, f"{expected} has no teardown record"
+    # Teardown is reversed, so creating the endpoint LAST means removing it FIRST, then the
+    # collection, then the scope.
+    assert labels.index("verify scope") < labels.index("verify collection")
+    assert labels.index("verify collection") < labels.index("app endpoint")
+
+
+def test_the_endpoint_is_skipped_rather_than_binding_real_data(
+    script, monkeypatch, capsys
+):
+    """If the throwaway scope cannot be created, falling back to the discovered collection
+    would reintroduce exactly the behaviour being fixed. Nine unverified paths is the better
+    outcome."""
+    rec = _ChildRecorder(fail=("/scopes",))
+    monkeypatch.setattr(script, "_request", rec)
+    ids = dict(BASE_IDS)
+
+    script.bootstrap_child_objects("tok", "/base", ids, {})
+
+    assert "app_endpoint_name" not in ids
+    assert not [p for p, _b in rec.creates if p.endswith("/appEndpoints")], (
+        "an App Endpoint was created without a throwaway scope to bind"
+    )
+    assert "skipped" in capsys.readouterr().out
 
 
 def test_the_app_endpoint_is_bound_by_bucket_name_not_id(script, monkeypatch):

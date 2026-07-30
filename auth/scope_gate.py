@@ -31,7 +31,8 @@ Environment
   CB_ADMIN_SCOPE_READ    scope required for read tools   (default: couchbase-admin-mcp:read)
   CB_ADMIN_SCOPE_WRITE   scope required for write tools  (default: couchbase-admin-mcp:write)
 
-License: MIT — Copyright (c) 2026 Chris Ahrendt
+Licensed under the Apache License, Version 2.0. Copyright 2026 Couchbase, Inc.
+See the LICENSE and NOTICE files at the repository root.
 """
 
 from __future__ import annotations

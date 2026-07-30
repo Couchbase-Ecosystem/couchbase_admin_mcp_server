@@ -60,12 +60,16 @@ security audit at the end of this document.
     permit the removal. The package directory shadows the module so tests pass
     either way, but shipping both is confusing and the old file contains the two
     bugs above.
-2. **Replace `LICENSE`.** It is currently MIT, `Copyright (c) 2026 Chris
-    Ahrendt`. Couchbase-Ecosystem's first-party Python repos are Apache-2.0.
-    Drop in the stock text from `https://www.apache.org/licenses/LICENSE-2.0.txt`
-    and use `Copyright 2026 Couchbase, Inc.` in the appendix. `pyproject.toml`
-    has already been changed to `license = "Apache-2.0"` and
-    `authors = [{ name = "Couchbase, Inc." }]`, so the two currently disagree.
+2. ~~**Replace `LICENSE`.**~~ **DONE.** `LICENSE` is now the stock, unmodified
+    Apache-2.0 text, matching how `Couchbase-Ecosystem/mcp-server-couchbase` ships
+    it (verified against that repo). Attribution lives in a new `NOTICE` file
+    (`Copyright 2026 Couchbase, Inc.`) rather than being edited into the license
+    body, which is the Apache convention and what section 4(d) requires
+    redistributors to carry. Both files are now shipped in the wheel
+    (`license-files`) and copied into the container image. A per-file
+    `License: MIT — Copyright (c) 2026 Chris Ahrendt` header in
+    `auth/scope_gate.py` was also corrected — it was the last stale attribution
+    in the tree.
 3. **Decide the target org.** The official `mcp-server-couchbase` was graduated
     out of `Couchbase-Ecosystem` into `couchbase/`, and all its internal links
     now point there. An admin server may belong in `couchbase/` too. Worth

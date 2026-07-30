@@ -1,0 +1,16 @@
+Couchbase Admin MCP Server
+Copyright 2026 Couchbase, Inc.
+
+This product is licensed under the Apache License, Version 2.0. A copy of that
+license is included in the LICENSE file in this repository, and is also available
+at http://www.apache.org/licenses/LICENSE-2.0.
+
+Attribution is carried here rather than inside LICENSE so that the license text
+itself remains the unmodified Apache 2.0 document, which is how Couchbase's other
+published repositories (including Couchbase-Ecosystem/mcp-server-couchbase) ship it.
+Apache 2.0 section 4(d) requires that this NOTICE file be reproduced in
+redistributions and derivative works.
+
+This project builds on the Model Context Protocol Python SDK and the Couchbase
+Python SDK; see pyproject.toml for the full dependency set and their respective
+licenses.

@@ -934,7 +934,16 @@ def test_the_csrf_guard_covers_every_state_changing_api_path(monkeypatch):
     pytest.importorskip("flask")
     import inspect
 
-    import gui.gui_server as module
+    # The profile must be pinned: an earlier test may have evicted gui.gui_server from
+    # sys.modules, and re-importing it runs _enforce_gui_posture(), which correctly
+    # refuses to start with no CB_ADMIN_PROFILE set.
+    monkeypatch.setenv("CB_ADMIN_PROFILE", "workstation")
+    monkeypatch.setenv("CB_GUI_INSECURE_NO_AUTH", "1")
+    monkeypatch.setenv("OAUTH_ENABLED", "false")
+    import profile_config
+
+    importlib.reload(profile_config)
+    module = importlib.import_module("gui.gui_server")
 
     source = inspect.getsource(module._reject_cross_site_request)
     assert '"/api/"' in source, "the CSRF guard is no longer path-general"

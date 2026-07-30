@@ -198,3 +198,43 @@ packages = ["handlers", "auth", "gui"]
 
 [tool.uv]
 package = true
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+#
+# HERE rather than in .coveragerc, deliberately. A dotfile named `.coveragerc` is deleted by
+# the `rm -f .coverage*` that everyone types to clear stale data files — I did it myself, in
+# every measurement command, and spent a while wondering why the config had no effect.
+# pyproject.toml cannot be removed by that glob.
+#
+# tests/test_coverage_config.py asserts these settings, because widening an exclusion raises
+# the reported number without testing anything and looks like configuration housekeeping in a
+# diff.
+
+[tool.coverage.run]
+source = ["."]
+branch = false
+omit = [
+    "tests/*",
+    # Test infrastructure: the mutation harnesses COPY the tree and run pytest in a
+    # subprocess, so their own lines never execute in the process being measured.
+    "scripts/mutation_*",
+    # Vendored third-party JavaScript.
+    "gui/static/*",
+    ".venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    # The conventional opt-out, used sparingly and always with a stated reason at the site.
+    "pragma: no cover",
+    # Script entry points. Reaching these means running the module as a program, which the
+    # packaging tests do in a SUBPROCESS — the lines execute, just not in the measured
+    # process. Counting them as uncovered would misreport them as untested.
+    "if __name__ == .__main__.:",
+    # Type-checking-only imports never execute at runtime, by design.
+    "if TYPE_CHECKING:",
+    # `raise NotImplementedError` in an abstract position is a declaration, not a branch.
+    "raise NotImplementedError",
+]
+precision = 0
+show_missing = true

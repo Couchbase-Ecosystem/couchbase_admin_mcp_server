@@ -30,3 +30,12 @@ cb_admin_mcp.*.log
 .vscode/
 .idea/
 .DS_Store
+
+# Distribution archives.
+#
+# couchbase-admin-mcp-server.zip is the ORIGINAL upstream snapshot this work started
+# from, kept in this folder for reference. It contains its own .git directory, so
+# tracking it inside this repository would nest a repo inside a repo and confuse both
+# tooling and anyone reading the tree. The history it holds is already here: this
+# repository descends from those commits.
+*.zip

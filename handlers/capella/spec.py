@@ -26,17 +26,23 @@ fails as an opaque 404 that looks like a missing resource. Sources:
   [PAT]  Not individually verified; follows the confirmed sibling pattern
          exactly (e.g. collections under a confirmed scopes path). Marked
          inline. These are the ones to re-check first if a call 404s.
-  [LIVE] Confirmed against a real Capella organization with
+  [LIVE] Path confirmed against a real Capella organization with
          scripts/verify_capella_paths.py — the control plane matched the route
          and answered 405 to an OPTIONS probe, which it can only do after
          routing. Verified 2026-07-30 against a test
          organization (v4, cloudapi.cloud.couchbase.com).
 
-         What [LIVE] does and does not assert: the PATH exists. The METHOD is
-         still inferred, because an OPTIONS probe deliberately does not mutate
-         anything — a route that accepted only GET would answer 405 to OPTIONS
-         too. Run the script with --write-probe --only <name> to prove the
-         method, accepting that it then performs the real operation.
+         [LIVE] alone asserts the PATH. It does not assert the METHOD, because
+         an OPTIONS probe deliberately mutates nothing and a route accepting
+         only GET would answer 405 as well.
+
+  [LIVE+METHOD]
+         Path AND method confirmed. Sending the real method with an EMPTY body
+         returned 422: the route matched, the method was accepted, and the
+         request was refused on its contents — so nothing was created. That is
+         a stronger result than an OPTIONS probe and, for any operation with
+         required body fields, it costs nothing. `--method-probe` does this
+         across the surface.
 
 TWO CORRECTIONS TO THE PREVIOUS IMPLEMENTATION
 ==============================================
@@ -608,7 +614,7 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Create a collection. For mobile testing the collection layout must "
             "match what the App Endpoint syncs and what Couchbase Lite expects. "
-            "[LIVE]"
+            "[LIVE+METHOD]"
         ),
         group="buckets",
         body={"name": {"type": "string"}, "maxTTL": {"type": "integer"}},

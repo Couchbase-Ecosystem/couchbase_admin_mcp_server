@@ -694,21 +694,46 @@ GET: `/projects`, `/clusters`, `/buckets`, `/buckets/{id}/scopes`,
 `/scopes/{name}/collections`, and `/appservices` (which returned an empty list — the route
 works, the org simply has no App Service).
 
-## What `[LIVE]` does not claim
+## Then the method got confirmed too, by accident
 
-A 405 to an `OPTIONS` probe proves the **path** exists, because the control plane can only
-reject the method after it has matched the route. It does **not** prove the **method** is
-accepted: a route that took only GET would answer 405 to OPTIONS as well. The methods here
-are still inferred from the sibling pattern and the API reference.
-
-Proving a method means performing the operation:
+I said the command below "creates a real collection". It did not:
 
 ```powershell
 python scripts\verify_capella_paths.py --write-probe --only capella_collection_create
 ```
 
-That creates a real collection. `--write-probe` deliberately requires `--only` so it
-cannot be run across the whole surface by accident.
+```
+  VERIFIED  POST  capella_collection_create  422
+```
+
+**422, not 201.** The probe sends an empty body, and the operation requires `name` — so
+Capella matched the route, accepted the POST, and refused the request on its contents.
+Nothing was created. That is a *stronger* result than the OPTIONS probe: it proves the
+path **and** the method, at no cost.
+
+`capella_collection_create` is therefore tagged `[LIVE+METHOD]`, and this is now a mode
+rather than a lucky accident:
+
+```powershell
+python scripts\verify_capella_paths.py --method-probe
+```
+
+`--method-probe` sends the real method with an empty body for every operation that
+declares required body fields — 12 of the 36 write operations — and skips the rest, since
+without a required field an empty body might actually succeed. If an empty body IS
+accepted, that is reported as an ERROR, not a pass: it means `body_required` in `spec.py`
+understates what the API demands, and something may have just been created.
+
+## A hazard this exposed, now closed
+
+`--write-probe --only capella_collection_create` was safe. The same line with `_delete` on
+the end would have deleted the `_default` collection out of the `the test bucket` bucket — no
+extra confirmation, and nothing in the output distinguishing the two cases. There is no
+probe-shaped DELETE: it either happens or it does not.
+
+A destructive `--write-probe` now requires `--yes-really-mutate` as well, and the refusal
+happens **before** any API call, listing the operations it objected to. 13 of the 61
+operations are destructive.
 
 ## The two still unverified
 

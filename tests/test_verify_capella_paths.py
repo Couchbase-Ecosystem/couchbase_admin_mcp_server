@@ -78,6 +78,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path == "/v4/organizations/ORG/projects/PROJ/clusters/CL/buckets":
             if self.command == "GET":
                 return self._send(200, {"data": [{"id": "BKT", "name": "travel"}]})
+            if self.command == "POST":
+                # What Capella really does with an empty body on a create: the method is
+                # accepted and the PAYLOAD is rejected, so nothing is created.
+                return self._send(422, {"message": "name is required"})
             return self._send(405, {"message": "method not allowed"})
         if path.endswith("/buckets/BKT/scopes"):
             return self._send(200, {"data": [{"name": "inventory"}]})
@@ -533,3 +537,146 @@ def test_a_real_looking_value_is_not_mistaken_for_a_placeholder(script):
 
 def _json_tail(out: str) -> str:
     return out[out.index("{") :]
+
+
+# ── --method-probe: proving the method without changing anything ─────────────
+#
+# Found by accident. A --write-probe of capella_collection_create against live Capella
+# returned 422 rather than creating a collection, because the probe body was empty and the
+# operation requires `name`. That is strictly better than performing the write: it proves
+# the route matched AND the method was accepted AND the request was refused on its
+# contents. So it is now a mode of its own rather than a lucky side effect.
+
+
+def test_a_method_probe_proves_the_method_and_changes_nothing(script):
+    """422/400 means: route matched, method accepted, payload refused."""
+    op = _Op(
+        "cb_bucket_create",
+        "POST",
+        "/v4/organizations/{organization_id}/projects/{project_id}"
+        "/clusters/{cluster_id}/buckets",
+        body={"name": {"type": "string"}},
+    )
+    op.body_required = ("name",)
+    ids = {"organization_id": "ORG", "project_id": "PROJ", "cluster_id": "CL"}
+
+    result = script.probe(op, ids, "k", mode="method")
+    assert result.verdict == "VERIFIED", result.detail
+    assert result.status == 422
+    assert "nothing changed" in result.detail
+
+
+def test_a_method_probe_is_skipped_where_it_could_actually_mutate(script):
+    """Without required body fields an empty-body probe might SUCCEED, which would
+    perform the operation. Skipping is the only safe answer; --write-probe remains the
+    deliberate route."""
+    op = _Op(
+        "cb_bucket_flush",
+        "POST",
+        "/v4/organizations/{organization_id}/projects/{project_id}"
+        "/clusters/{cluster_id}/buckets",
+    )
+    result = script.probe(
+        op,
+        {"organization_id": "ORG", "project_id": "PROJ", "cluster_id": "CL"},
+        "k",
+        mode="method",
+    )
+    assert result.verdict == "SKIPPED"
+    assert "could SUCCEED and mutate" in result.detail
+
+
+def test_an_accepted_empty_body_is_reported_as_an_error(script, monkeypatch):
+    """If a create ACCEPTS an empty body, the probe just performed the operation. That is
+    not a pass — it means body_required in spec.py understates what the API requires, and
+    the operator needs to know something may have been created."""
+    op = _Op("cb_thing_create", "POST", "/v4/organizations/{organization_id}/projects")
+    op.body_required = ("name",)
+    monkeypatch.setattr(script, "_request", lambda *a, **k: (201, '{"id":"new"}'))
+
+    result = script.probe(op, {"organization_id": "ORG"}, "k", mode="method")
+    assert result.verdict == "ERROR"
+    assert "may have just been performed" in result.detail
+
+
+# ── The destructive-write guard ──────────────────────────────────────────────
+
+
+def test_a_destructive_write_probe_is_refused_without_the_extra_flag(
+    script, monkeypatch, capsys
+):
+    """The hazard is one keystroke from a safe command.
+
+    `--write-probe --only capella_collection_create` proved a path and changed nothing.
+    The same line with `_delete` would have deleted the _default collection out of a real
+    bucket, with no extra confirmation and nothing in the output distinguishing the two.
+    """
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "verify",
+            "--org",
+            "ORG",
+            "--write-probe",
+            "--only",
+            "capella_collection_delete",
+        ],
+    )
+    assert script.main() == 2
+    err = capsys.readouterr().err
+    assert "--yes-really-mutate" in err
+    assert "capella_collection_delete" in err
+
+
+def test_the_destructive_guard_refuses_before_making_any_api_call(
+    script, monkeypatch, capsys
+):
+    """A refusal must cost nothing and must not print anything implying work happened."""
+    calls = []
+    monkeypatch.setattr(
+        script, "_request", lambda *a, **k: (calls.append(a) or (200, "{}"))
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["verify", "--org", "ORG", "--write-probe", "--only", "capella_bucket_delete"],
+    )
+    assert script.main() == 2
+    assert not calls, f"the guard fired only after {len(calls)} API call(s)"
+    assert "Discovering identifiers" not in capsys.readouterr().out
+
+
+def test_a_non_destructive_write_probe_still_needs_no_extra_flag(
+    script, monkeypatch, capsys
+):
+    """The guard must not block the invocation that actually worked."""
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "verify",
+            "--org",
+            "ORG",
+            "--write-probe",
+            "--only",
+            "capella_collection_create",
+            "--json",
+        ],
+    )
+    assert script.main() in (0, 1)  # a verdict, not a refusal
+    assert "yes-really-mutate" not in capsys.readouterr().err
+
+
+def test_the_two_probe_modes_are_mutually_exclusive(script, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "verify",
+            "--org",
+            "ORG",
+            "--write-probe",
+            "--method-probe",
+            "--only",
+            "capella_bucket_create",
+        ],
+    )
+    assert script.main() == 2
+    assert "mutually exclusive" in capsys.readouterr().err

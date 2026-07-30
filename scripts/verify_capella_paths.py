@@ -262,15 +262,74 @@ def fill(path: str, ids: dict) -> tuple[str | None, list[str]]:
     return filled, []
 
 
-def probe(op, ids: dict, token: str, allow_writes: bool) -> Result:
+#: A rejected PAYLOAD, which is what an empty-body probe is trying to provoke. Reaching
+#: this means the route matched AND the method was accepted AND the request was then
+#: refused on its contents — so nothing was created or changed.
+_PAYLOAD_REJECTED = {400, 422}
+
+
+def _is_destructive(op) -> bool:
+    return bool(getattr(op, "destructive", False))
+
+
+def _has_required_body(op) -> bool:
+    return bool(getattr(op, "body_required", None))
+
+
+def probe(op, ids: dict, token: str, mode: str = "options") -> Result:
+    """Check one operation.
+
+    ``mode`` is one of:
+
+      options  Send OPTIONS, which the API does not implement. A 404 means the route
+               does not exist; a 405 means it does. Verifies the PATH only, and mutates
+               nothing. The default.
+
+      method   Send the real method with an EMPTY body. Only meaningful where the
+               operation declares required body fields, because then the payload is
+               guaranteed invalid and the control plane answers 400/422 — which proves
+               the METHOD is accepted while changing nothing. This mode was discovered by
+               accident: a --write-probe of capella_collection_create returned 422 rather
+               than creating a collection, because the probe body was empty. That is a
+               strictly better result than performing the write, so it is now a mode of
+               its own rather than a lucky side effect.
+
+      write    Actually perform the operation.
+    """
     path, missing = fill(op.path, ids)
     if path is None:
         return Result(op, "SKIPPED", detail=f"no value for {', '.join(missing)}")
 
     if op.method == "GET":
         status, body = _request("GET", path, token)
-    elif allow_writes:
+    elif mode == "write":
         status, body = _request(op.method, path, token, body={} if op.body else None)
+    elif mode == "method":
+        if not _has_required_body(op):
+            return Result(
+                op,
+                "SKIPPED",
+                detail=(
+                    "no required body fields, so an empty-body probe could SUCCEED and "
+                    "mutate; use --write-probe deliberately instead"
+                ),
+            )
+        status, body = _request(op.method, path, token, body={})
+        if status in _PAYLOAD_REJECTED:
+            return Result(
+                op,
+                "VERIFIED",
+                status,
+                f"{op.method} accepted; payload rejected, nothing changed",
+            )
+        if status in (200, 201, 202, 204):
+            return Result(
+                op,
+                "ERROR",
+                status,
+                "an EMPTY body was ACCEPTED — this operation may have just been "
+                "performed. Check the target and tighten body_required in spec.py.",
+            )
     else:
         status, body = _request("OPTIONS", path, token)
 
@@ -423,9 +482,27 @@ def main() -> int:
         "--only", action="append", default=[], help="verify named operations only"
     )
     parser.add_argument(
+        "--method-probe",
+        action="store_true",
+        help=(
+            "Prove the METHOD is accepted without changing anything, by sending the real "
+            "method with a deliberately empty body. Only valid for operations that "
+            "declare required body fields, so the payload is guaranteed to be rejected. "
+            "Safe to run across the whole surface."
+        ),
+    )
+    parser.add_argument(
         "--write-probe",
         action="store_true",
-        help="ACTUALLY send the write method. Requires --only. Can create or delete.",
+        help=(
+            "ACTUALLY perform the operation. Requires --only. For a destructive "
+            "operation it also requires --yes-really-mutate."
+        ),
+    )
+    parser.add_argument(
+        "--yes-really-mutate",
+        action="store_true",
+        help="Required alongside --write-probe for a destructive operation.",
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
@@ -500,6 +577,14 @@ def main() -> int:
         )
         return 2
 
+    if args.write_probe and args.method_probe:
+        print(
+            "--write-probe and --method-probe are mutually exclusive: the first performs "
+            "the operation, the second deliberately avoids performing it.",
+            file=sys.stderr,
+        )
+        return 2
+
     ops = load_ops()
     if args.only:
         wanted = set(args.only)
@@ -515,6 +600,41 @@ def main() -> int:
         print("no operations selected", file=sys.stderr)
         return 2
 
+    mode = (
+        "write" if args.write_probe else ("method" if args.method_probe else "options")
+    )
+
+    # A --write-probe of a DESTRUCTIVE operation performs the destruction. There is no
+    # probe-shaped version of DELETE: it either happens or it does not.
+    #
+    # This guard exists because the hazard is one keystroke away from a safe command. The
+    # invocation that proved capella_collection_create was
+    #
+    #     --write-probe --only capella_collection_create
+    #
+    # and it changed nothing, because the empty body was rejected. The same command with
+    # `_delete` on the end would have deleted the _default collection out of a real
+    # bucket, with no additional confirmation and nothing in the output to suggest the
+    # two were different in kind.
+    if mode == "write":
+        destructive = [op for op in ops if _is_destructive(op)]
+        if destructive and not args.yes_really_mutate:
+            print(
+                "Refusing to --write-probe a destructive operation without "
+                "--yes-really-mutate:",
+                file=sys.stderr,
+            )
+            for op in destructive:
+                print(f"  {op.method} {op.name}", file=sys.stderr)
+            print(
+                "\nUnlike a create, a DELETE has no harmless probe form — it either "
+                "happens or it does not. If the goal is to confirm the PATH, the default "
+                "OPTIONS probe already does that without mutating anything, and it is "
+                "what verified these paths in the first place.",
+                file=sys.stderr,
+            )
+            return 2
+
     print(f"Capella v4 path verification — {len(ops)} operation(s) against {BASE}")
     if args.write_probe:
         print("  *** --write-probe: real write methods WILL be sent ***")
@@ -524,7 +644,7 @@ def main() -> int:
 
     results = []
     for op in sorted(ops, key=lambda o: (o.group, o.name)):
-        result = probe(op, ids, token, args.write_probe)
+        result = probe(op, ids, token, mode)
         results.append(result)
         if not args.json:
             tag = "[PAT]" if "[PAT]" in (op.summary or "") else "     "

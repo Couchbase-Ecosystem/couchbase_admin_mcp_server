@@ -358,6 +358,35 @@ MUTATIONS = [
         "_MIN_APP_SERVICE_NODES = 1",
         CAPELLA,
     ),
+    # ── The false all-clear from --only-pat ─────────────────────────────────
+    (
+        "capella: the inferred-path selector goes back to the closed literal",
+        "scripts/verify_capella_paths.py",
+        '    return "[PAT" in (getattr(op, "summary", "") or "")',
+        '    return "[PAT]" in (getattr(op, "summary", "") or "")',
+        CAPELLA,
+    ),
+    (
+        "capella: --only-pat re-inlines its own copy of the test",
+        "scripts/verify_capella_paths.py",
+        "        ops = [o for o in ops if _is_inferred(o)]",
+        '        ops = [o for o in ops if "[PAT]" in (o.summary or "")]',
+        CAPELLA,
+    ),
+    (
+        "capella: the selector matches everything, making --only-pat the full sweep",
+        "scripts/verify_capella_paths.py",
+        '    return "[PAT" in (getattr(op, "summary", "") or "")',
+        "    return True",
+        CAPELLA,
+    ),
+    (
+        "capella: an unverified inferred path reappears in the spec",
+        "handlers/capella/spec.py",
+        'summary="List collections in a scope. [LIVE+METHOD 200]",',
+        'summary="List collections in a scope. [PAT — sibling of the scopes path]",',
+        CAPELLA,
+    ),
 ]
 
 

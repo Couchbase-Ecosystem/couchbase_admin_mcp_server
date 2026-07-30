@@ -811,6 +811,53 @@ organization, then parked, resumed or torn down that one. It now filters on `clu
 | `accessControlFunction` keyed on `{app_endpoint_name}` | v4 keys it on a **keyspace** — `endpoint.scope.collection`. A bare name is accepted and silently read as `<name>._default._default`, so on a cluster with named scopes it targets the wrong collection. Now `{app_endpoint_keyspace}`, with the dotted form documented. |
 | `MISSING` for `capella_cluster_onoff_schedule_get` | **False positive in my script.** The 404 body said the route was reached and the schedule was absent; my detector matched on prose ("does not exist") and object nouns, and the real message said "does not have an existing On/Off schedule". Now keyed on the presence of a Capella **domain error code** (`{"code":11040,...}`), which only the API's own handlers emit and only after routing. |
 
+## The `[PAT]` all-clear was false
+
+Corrected after the App Services bootstrap run, which is when the tags got read closely.
+
+`--only-pat` printed:
+
+> No `[PAT]` paths remain: every operation in spec.py now cites a primary source.
+
+Ten of the sixty-one did not. They were tagged with a trailing note —
+
+```
+[PAT — verify if 404]
+[PAT — sibling of the confirmed scopes path]
+[PAT — mirrors the confirmed cluster activationState]
+```
+
+— and the selector tested `"[PAT]" in summary`, the **closed** literal, which none of those
+contain. So `--only-pat` selected nothing, and the script reported that as success.
+
+**A check that issues an all-clear it has not earned is worse than no check**, because it
+closes the question. The section below was written on the strength of that output.
+
+The literal was duplicated at three call sites (`--only-pat` selection, the output tag column,
+and the `--json` `inferred` field), which is how all three stayed wrong together. There is now
+one `_is_inferred()` matching the `[PAT` prefix, and a test that walks the AST for a
+re-inlined closed-literal comparison — parsed rather than grepped, because the docstring
+explaining the bug quotes the bad expression verbatim and a text scan flags the explanation.
+
+The ten affected operations were all exercised by the full live sweep, and their tags now
+carry the observed status rather than a bare assertion:
+
+| operation | was | now |
+|---|---|---|
+| `capella_cluster_onoff_schedule_get` | `[PAT — pattern-derived]` | `[LIVE+METHOD 404/11040]` |
+| `capella_cluster_onoff_schedule_set` | `[PAT — verify if 404]` | `[LIVE 405]` |
+| `capella_cluster_onoff_schedule_delete` | `[PAT — verify if 404]` | `[LIVE 405]` |
+| `capella_bucket_flush` | `[PAT — some revisions use PUT]` | `[LIVE 405]` |
+| `capella_collections_list` | `[PAT — sibling]` | `[LIVE+METHOD 200]` |
+| `capella_sample_bucket_load` | `[PAT — verify if 404]` | `[LIVE 405]` |
+| `capella_app_service_turn_on` | `[PAT — mirrors activationState]` | `[LIVE 405]` |
+| `capella_app_service_certificate_get` | `[PAT — verify if 404]` | `[LIVE+METHOD 200]` |
+| `capella_app_service_admin_users_list` | `[PAT — verify if 404]` | `[LIVE+METHOD 200]` |
+| `capella_app_service_admin_user_create` | `[PAT — verify if 404]` | `[LIVE 405]` |
+
+A test now asserts no `[PAT` tag survives in the spec body, using the fixed selector — so the
+claim in the next section is checked rather than stated.
+
 ## No `[PAT]` paths remain
 
 The two App Services paths still tagged `[PAT]` are confirmed by the OpenAPI document and

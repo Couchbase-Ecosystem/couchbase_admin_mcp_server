@@ -27,6 +27,16 @@ fails as an opaque 404 that looks like a missing resource. Sources:
          exactly. NONE REMAIN — every path now cites a primary source. The tag is
          kept because it is how a newly-added path should be marked until it has
          one, and scripts/verify_capella_paths.py --only-pat selects on it.
+
+         WRITE IT EXACTLY AS `[PAT` PLUS ANY TRAILING NOTE. The selector matches
+         the prefix, not the closed literal `[PAT]`, and that is a correction:
+         it used to test `"[PAT]" in summary`, which missed all ten paths that
+         were tagged `[PAT — verify if 404]`. --only-pat therefore selected
+         nothing and printed "No [PAT] paths remain: every operation now cites a
+         primary source" while ten still did not. A check that reports an
+         all-clear it has not earned is worse than no check, because it closes
+         the question. Those ten have since been verified live and promoted.
+
   [LIVE] Path confirmed against a real Capella organization with
          scripts/verify_capella_paths.py — the control plane matched the route
          and answered 405 to an OPTIONS probe, which it can only do after
@@ -38,12 +48,18 @@ fails as an opaque 404 that looks like a missing resource. Sources:
          only GET would answer 405 as well.
 
   [LIVE+METHOD]
-         Path AND method confirmed. Sending the real method with an EMPTY body
-         returned 422: the route matched, the method was accepted, and the
-         request was refused on its contents — so nothing was created. That is
-         a stronger result than an OPTIONS probe and, for any operation with
-         required body fields, it costs nothing. `--method-probe` does this
-         across the surface.
+         Path AND method confirmed, by one of three observations, each of which
+         requires the route to have matched AND the method to have been accepted:
+
+           200  the real GET was performed and answered
+           404 + a Capella domain code (e.g. 11040) — the handler ran and
+                reported the OBJECT absent, which it cannot do before routing
+           422  the real method was sent with a deliberately EMPTY body, so the
+                request was refused on its contents and nothing was created
+                (`--method-probe` does this across the surface)
+
+         The tag carries the observed status so the evidence is legible rather
+         than asserted.
 
 TWO CORRECTIONS TO THE PREVIOUS IMPLEMENTATION
 ==============================================
@@ -512,7 +528,7 @@ OPS: tuple[Op, ...] = (
         name="capella_cluster_onoff_schedule_get",
         method="GET",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/onOffSchedule",
-        summary="Get the cluster's recurring on/off schedule. [PAT — pattern-derived, verify if 404]",
+        summary="Get the cluster's recurring on/off schedule. [LIVE+METHOD 404/11040]",
         group="clusters",
         read_only=True,
         idempotent=True,
@@ -525,7 +541,7 @@ OPS: tuple[Op, ...] = (
             "Create a recurring on/off schedule — the set-and-forget way to stop "
             "paying for test clusters overnight and at weekends. Body: "
             "{'timezone': 'ET', 'days': [{'day': 'monday', 'state': 'on', "
-            "'from': {...}, 'to': {...}}]}. [PAT — verify if 404]"
+            "'from': {...}, 'to': {...}}]}. [LIVE 405]"
         ),
         group="clusters",
         body={
@@ -538,7 +554,7 @@ OPS: tuple[Op, ...] = (
         name="capella_cluster_onoff_schedule_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/onOffSchedule",
-        summary="Remove the on/off schedule. [PAT — verify if 404]",
+        summary="Remove the on/off schedule. [LIVE 405]",
         group="clusters",
         destructive=True,
         guarded=True,
@@ -590,7 +606,7 @@ OPS: tuple[Op, ...] = (
             "Delete all documents in a bucket, keeping the bucket and its "
             "indexes. The right reset between test runs — seconds instead of the "
             "minutes a reprovision costs. Requires flush enabled on the bucket. "
-            "[PAT — verify if 404; some revisions use PUT]"
+            "[LIVE 405]"
         ),
         group="buckets",
         destructive=True,
@@ -628,7 +644,7 @@ OPS: tuple[Op, ...] = (
         name="capella_collections_list",
         method="GET",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/scopes/{scope_name}/collections",
-        summary="List collections in a scope. [PAT — sibling of the confirmed scopes path]",
+        summary="List collections in a scope. [LIVE+METHOD 200]",
         group="buckets",
         read_only=True,
         idempotent=True,
@@ -663,7 +679,7 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Load a Couchbase sample dataset (e.g. travel-sample). Useful as "
             "deterministic seed data for app tests without shipping a fixture "
-            "loader. Body: {'name': 'travel-sample'}. [PAT — verify if 404]"
+            "loader. Body: {'name': 'travel-sample'}. [LIVE 405]"
         ),
         group="buckets",
         body={
@@ -837,7 +853,7 @@ OPS: tuple[Op, ...] = (
         name="capella_app_service_turn_on",
         method="POST",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/activationState",
-        summary="Turn on a parked App Service. [PAT — mirrors the confirmed cluster activationState]",
+        summary="Turn on a parked App Service. [LIVE 405]",
         group="app_services",
         idempotent=True,
         guarded=True,
@@ -861,7 +877,7 @@ OPS: tuple[Op, ...] = (
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/certificates",
         summary=(
             "Get the App Service public certificate — what a mobile client pins "
-            "or trusts when replicating. [PAT — verify if 404]"
+            "or trusts when replicating. [LIVE+METHOD 200]"
         ),
         group="app_services",
         read_only=True,
@@ -914,7 +930,7 @@ OPS: tuple[Op, ...] = (
         name="capella_app_service_admin_users_list",
         method="GET",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/adminUsers",
-        summary="List App Service admin users. [PAT — verify if 404]",
+        summary="List App Service admin users. [LIVE+METHOD 200]",
         group="app_services",
         read_only=True,
         idempotent=True,
@@ -927,7 +943,7 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Create an App Service admin user — the credential a test harness "
             "uses against the Sync Gateway admin surface to seed users, channels "
-            "or documents. [PAT — verify if 404]"
+            "or documents. [LIVE 405]"
         ),
         group="app_services",
         body={"name": {"type": "string"}, "password": {"type": "string"}},

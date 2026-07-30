@@ -136,6 +136,25 @@ _OBJECT_ABSENT_HINTS = (
 _DOMAIN_CODE_FLOOR = 1000
 
 
+def _is_inferred(op) -> bool:
+    """Whether an operation's path is still INFERRED rather than sourced.
+
+    Matches `[PAT` and not `[PAT]`, which is the whole point.
+
+    The three call sites that needed this each carried their own `"[PAT]" in summary`, and
+    that misses the form actually used in spec.py:
+
+        [PAT — verify if 404]
+        [PAT — sibling of the confirmed scopes path]
+
+    Ten of the sixty-one operations were tagged that way. None of them matched, so
+    --only-pat selected nothing and printed "No [PAT] paths remain: every operation now
+    cites a primary source" — a confident all-clear covering ten unverified paths. Worse
+    than no check, because it closed the question.
+    """
+    return "[PAT" in (getattr(op, "summary", "") or "")
+
+
 def _capella_domain_error(body: str) -> int | None:
     """The Capella error code in a response body, if it carries one.
 
@@ -985,7 +1004,7 @@ def main() -> int:
             print(f"unknown operation(s): {sorted(unknown)}", file=sys.stderr)
             return 2
     elif args.only_pat:
-        ops = [o for o in ops if "[PAT]" in (o.summary or "")]
+        ops = [o for o in ops if _is_inferred(o)]
 
     if not ops:
         if args.only_pat:
@@ -1128,7 +1147,7 @@ def _run_probes(ops, ids, token, mode, args) -> int:
         result = probe(op, ids, token, mode)
         results.append(result)
         if not args.json:
-            tag = "[PAT]" if "[PAT]" in (op.summary or "") else "     "
+            tag = "[PAT]" if _is_inferred(op) else "     "
             status = result.status if result.status is not None else "---"
             print(
                 f"  {result.verdict:9} {tag} {op.method:7} {op.name:44} "
@@ -1151,7 +1170,7 @@ def _run_probes(ops, ids, token, mode, args) -> int:
                             "name": r.op.name,
                             "method": r.op.method,
                             "path": r.op.path,
-                            "inferred": "[PAT]" in (r.op.summary or ""),
+                            "inferred": _is_inferred(r.op),
                             "verdict": r.verdict,
                             "status": r.status,
                             "detail": r.detail,

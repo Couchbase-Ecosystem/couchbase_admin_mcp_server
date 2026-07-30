@@ -1188,3 +1188,120 @@ def test_an_existing_app_service_is_reused_rather_than_paid_for_twice(
     assert script.main() == 0
     assert created == [], "created a second App Service when one already existed"
     assert "reusing the existing PRE_EXISTING" in capsys.readouterr().out
+
+
+# ── The inferred-path selector ───────────────────────────────────────────────
+#
+# `--only-pat` reported "No [PAT] paths remain: every operation now cites a primary source"
+# while TEN of the sixty-one were tagged
+#
+#     [PAT — verify if 404]
+#     [PAT — sibling of the confirmed scopes path]
+#
+# because the selector tested `"[PAT]" in summary` — the CLOSED literal, which none of them
+# contain. A check that issues an all-clear it has not earned is worse than no check: it
+# closes the question. The literal was duplicated at three call sites, which is how the three
+# stayed wrong together.
+
+
+def test_the_selector_matches_a_tag_with_a_trailing_note(script):
+    """THE bug. This is the form spec.py actually uses."""
+    assert script._is_inferred(
+        _Op("x", "GET", "/v4/x", "summary [PAT — verify if 404]")
+    )
+    assert script._is_inferred(
+        _Op("x", "GET", "/v4/x", "[PAT — sibling of the confirmed scopes path]")
+    )
+
+
+def test_the_selector_still_matches_the_bare_tag(script):
+    assert script._is_inferred(_Op("x", "GET", "/v4/x", "summary [PAT]"))
+
+
+def test_the_selector_does_not_match_a_sourced_path(script):
+    """Guards against over-correcting into a selector that matches everything, which would
+    make --only-pat a synonym for the full sweep."""
+    for summary in (
+        "[TF appservice.go]",
+        "[DOC]",
+        "[LIVE 405]",
+        "[LIVE+METHOD 200]",
+        "",
+    ):
+        assert not script._is_inferred(_Op("x", "GET", "/v4/x", summary)), summary
+    assert not script._is_inferred(_Op("x", "GET", "/v4/x", None))
+
+
+def test_the_selector_is_used_at_every_site_rather_than_reinlined():
+    """Three independent copies of the literal is why all three were wrong. A fourth copy
+    would be a fourth chance to be wrong."""
+    import ast
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "verify_capella_paths.py"
+    ).read_text(encoding="utf-8")
+
+    # PARSED, not grepped. This is the third time in this project a source scan has flagged
+    # the COMMENT that explains a bug — here, the docstring of `_is_inferred` quotes the bad
+    # expression verbatim in order to say why it is wrong. An `ast.Compare` node cannot
+    # appear inside a docstring, so the ambiguity disappears entirely.
+    offenders = [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Compare)
+        and any(isinstance(op, ast.In) for op in node.ops)
+        and isinstance(node.left, ast.Constant)
+        and node.left.value == "[PAT]"
+    ]
+    assert not offenders, (
+        "the closed-literal membership test is back at line(s) "
+        f"{offenders}, and it misses every '[PAT — ...]' tag"
+    )
+
+
+def test_no_operation_in_the_spec_is_still_inferred():
+    """The claim `--only-pat` makes, checked with the FIXED selector. It was false before:
+    ten paths were inferred and the tool said none were."""
+    import pathlib
+    import re
+
+    spec_source = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "handlers"
+        / "capella"
+        / "spec.py"
+    ).read_text(encoding="utf-8")
+
+    # The module docstring documents the tag, so only look after it.
+    body = spec_source.split('"""', 2)[2]
+    remaining = re.findall(r"\[PAT[^\]]*\]", body)
+    assert not remaining, (
+        f"{len(remaining)} operation(s) still carry an inferred path tag: {remaining}. "
+        "Verify them with scripts/verify_capella_paths.py --only-pat and promote the tag."
+    )
+
+
+def test_the_promoted_tags_record_the_status_that_was_observed():
+    """A bare [LIVE] asserts; [LIVE 405] shows its evidence. The ten promoted tags carry the
+    status so a later reader can tell a real GET from an OPTIONS probe without rerunning."""
+    import pathlib
+    import re
+
+    spec_source = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "handlers"
+        / "capella"
+        / "spec.py"
+    ).read_text(encoding="utf-8")
+    body = spec_source.split('"""', 2)[2]
+
+    tags = re.findall(r"\[LIVE(?:\+METHOD)?[^\]]*\]", body)
+    assert len(tags) >= 10, f"expected the promoted tags to be present, found {tags}"
+    with_status = [t for t in tags if re.search(r"\d{3}", t)]
+    assert len(with_status) >= 10, (
+        f"promoted tags should carry the observed status; these do not: "
+        f"{sorted(set(tags) - set(with_status))}"
+    )

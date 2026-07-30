@@ -428,17 +428,15 @@ MUTATIONS = [
     (
         "capella: the throwaway password is omitted, so Capella returns a generated one",
         "scripts/verify_capella_paths.py",
-        '        {"name": f"verify-{stamp}", "password": _throwaway_password()},',
-        '        {"name": f"verify-{stamp}"},',
+        '            "password": _throwaway_password(),',
+        '            "password": "",',
         CAPELLA,
     ),
     (
         "capella: a created child object gets no teardown record",
         "scripts/verify_capella_paths.py",
-        "        if delete_suffix:\n"
-        "            created.append((label, f\"{path}/{urllib.parse.quote(new_id, safe='')}\"))",
-        "        if False:\n"
-        "            created.append((label, f\"{path}/{urllib.parse.quote(new_id, safe='')}\"))",
+        "        created.append((label, f\"{path}/{urllib.parse.quote(new_id, safe='')}\"))",
+        "        pass",
         CAPELLA,
     ),
     (
@@ -465,9 +463,9 @@ MUTATIONS = [
     (
         "capella: one failed create aborts the rest of the bootstrap",
         "scripts/verify_capella_paths.py",
-        '            print(f"  {label:14s}: create failed HTTP {status} — {body[:220]}")\n'
+        '            print(f"  {label:14s}: create failed HTTP {status} — {body[:500]}")\n'
         "            return None",
-        '            print(f"  {label:14s}: create failed HTTP {status} — {body[:220]}")\n'
+        '            print(f"  {label:14s}: create failed HTTP {status} — {body[:500]}")\n'
         "            raise SystemExit(3)",
         CAPELLA,
     ),
@@ -482,6 +480,92 @@ MUTATIONS = [
         "            print()\n"
         '            print("Tearing down child objects:")\n'
         "            teardown_child_objects(token, created_children)",
+        CAPELLA,
+    ),
+    # ── Request bodies corrected by live 422s + the OpenAPI document ────────
+    (
+        "capella: a database credential no longer requires a permission grant",
+        "handlers/capella/spec.py",
+        'body_required=("name", "access"),',
+        'body_required=("name",),',
+        CAPELLA,
+    ),
+    (
+        "capella: an admin user no longer requires its access oneOf",
+        "handlers/capella/spec.py",
+        'body_required=("name", "password", "access"),',
+        'body_required=("name",),',
+        CAPELLA,
+    ),
+    (
+        # The description is replaced WHOLESALE, not edited.
+        #
+        # Two narrower versions of this mutation survived, both correctly: the description
+        # states the oneOf twice ("never both and never neither", then "Supplying both or
+        # neither is a 422"), so deleting either mention leaves it still true. A mutation that
+        # leaves the code correct tests nothing, and padding the harness with one would be
+        # exactly the decoration this file exists to find.
+        #
+        # Removing the whole description is unambiguous: the model is then told a required
+        # field exists and nothing about the only two shapes it accepts.
+        "capella: the admin user access field loses its shape guidance entirely",
+        "handlers/capella/spec.py",
+        '            "access": {\n                "type": "object",\n                "description": (',
+        # `"" and (...)` short-circuits to "". `"" or (...)` would have yielded the original
+        # string — a mutation that changes nothing, which is how the first attempt at this
+        # "survived".
+        '            "access": {\n                "type": "object",\n                "description": "" and (',
+        CAPELLA,
+    ),
+    (
+        "capella: deltaSyncEnabled reverts to the silently-ignored deltaSync",
+        "handlers/capella/spec.py",
+        '            "deltaSyncEnabled": {',
+        '            "deltaSync": {',
+        CAPELLA,
+    ),
+    (
+        # Targets the phrase that CARRIES the limit. An earlier version edited a neighbouring
+        # sentence and survived, correctly — "ONLY ONE scope is allowed" was still there.
+        "capella: the one-scope-per-endpoint limit is dropped from the description",
+        "handlers/capella/spec.py",
+        '                    "Optional. Keys are SCOPE names, and ONLY ONE scope is allowed per App "',
+        '                    "Optional. Keys are SCOPE names, per App "',
+        CAPELLA,
+    ),
+    (
+        "capella: the bootstrap stops sending the credential grant",
+        "scripts/verify_capella_paths.py",
+        '            "access": [{"privileges": ["data_reader"]}],',
+        "",
+        CAPELLA,
+    ),
+    (
+        "capella: the bootstrap stops sending the admin user access oneOf",
+        "scripts/verify_capella_paths.py",
+        '            "access": {"accessAllEndpoints": False},',
+        "",
+        CAPELLA,
+    ),
+    (
+        "capella: a create with no readable id gets no teardown record again",
+        "scripts/verify_capella_paths.py",
+        '        new_id = str(data.get("id") or data.get("name") or "") or (fallback_id or "")',
+        '        new_id = str(data.get("id") or data.get("name") or "")',
+        CAPELLA,
+    ),
+    (
+        "capella: the App Endpoint loses its name fallback, so it leaks",
+        "scripts/verify_capella_paths.py",
+        "        fallback_id=endpoint_name,",
+        "        fallback_id=None,",
+        CAPELLA,
+    ),
+    (
+        "capella: a rejection body is truncated below the useful part again",
+        "scripts/verify_capella_paths.py",
+        'print(f"  {label:14s}: create failed HTTP {status} — {body[:500]}")',
+        'print(f"  {label:14s}: create failed HTTP {status} — {body[:60]}")',
         CAPELLA,
     ),
 ]

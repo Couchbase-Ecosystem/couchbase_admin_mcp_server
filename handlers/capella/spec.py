@@ -728,7 +728,16 @@ OPS: tuple[Op, ...] = (
         ),
         group="credentials",
         body=_DB_CREDENTIAL_BODY,
-        body_required=("name",),
+        # `access` too, not just `name`. LIVE-CORRECTED — Capella refuses a credential with
+        # no grant:
+        #
+        #   422 "Can not create new dataplane user without at least (1) valid permission
+        #        being specified"
+        #
+        # Declaring it optional told the model it could omit the field, so the natural
+        # minimal call was the one that always fails. `password` stays optional: omitting it
+        # genuinely works and is preferred, since Capella then returns a generated one.
+        body_required=("name", "access"),
         sensitive_response=True,
         guarded=True,
     ),
@@ -946,8 +955,35 @@ OPS: tuple[Op, ...] = (
             "or documents. [LIVE 405]"
         ),
         group="app_services",
-        body={"name": {"type": "string"}, "password": {"type": "string"}},
-        body_required=("name",),
+        # LIVE-CORRECTED against Capella's OpenAPI document
+        # (CreateAppServiceAdminUserRequest). `access` was missing entirely and is REQUIRED:
+        #
+        #   422 "Payload for creating or modifying app service admin user contains or lacks
+        #        both ..."
+        #
+        # That message is about the `oneOf`: `access` must carry EXACTLY ONE of
+        # `accessAllEndpoints` or `endpoints`. Supplying neither, or both, is the error.
+        body={
+            "name": {"type": "string"},
+            "password": {"type": "string"},
+            "access": {
+                "type": "object",
+                "description": (
+                    "REQUIRED. Exactly one of two shapes, never both and never neither: "
+                    "{'accessAllEndpoints': true} for every App Endpoint, or "
+                    "{'endpoints': ['endpoint1', 'endpoint2']} to name them. Supplying "
+                    "both or neither is a 422."
+                ),
+            },
+            "enableBucketLevelAccess": {
+                "type": "boolean",
+                "description": (
+                    "Optional, defaults true. Couchbase's document notes that true is "
+                    "currently the only supported value."
+                ),
+            },
+        },
+        body_required=("name", "password", "access"),
         sensitive_response=True,
         guarded=True,
     ),
@@ -1002,11 +1038,38 @@ OPS: tuple[Op, ...] = (
             },
             "scopes": {
                 "type": "object",
-                "description": "Scope/collection mapping to sync.",
+                "description": (
+                    "Optional. Keys are SCOPE names, and ONLY ONE scope is allowed per App "
+                    "Endpoint. Each scope requires a 'collections' object keyed by "
+                    "collection name; a collection's value may be empty, or carry "
+                    "'accessControlFunction' and 'importFilter' as JavaScript strings. "
+                    "Shape: {'scope1': {'collections': {'coll1': {}}}}. Omit the whole "
+                    "field to sync the default scope and collection."
+                ),
             },
-            "deltaSync": {"type": "boolean"},
+            # `deltaSyncEnabled`, NOT `deltaSync`. Corrected against Capella's OpenAPI
+            # document (CreateAppEndpointRequest); the short name is silently ignored,
+            # which is worse than a rejection — delta sync would simply never be on.
+            "deltaSyncEnabled": {
+                "type": "boolean",
+                "description": "Optional, defaults false.",
+            },
             "userXattrKey": {"type": "string"},
+            "disablePublicAllDocs": {
+                "type": "boolean",
+                "description": "Optional, defaults false.",
+            },
+            "oidc": {
+                "type": "array",
+                "description": "OIDC providers for this endpoint.",
+                "items": {"type": "object"},
+            },
+            "cors": {"type": "object", "description": "CORS configuration."},
         },
+        # Only these two. `scopes` is optional — omitting it uses the default scope and
+        # collection. Creation answers 201 with an EMPTY body: the endpoint is addressed by
+        # the `name` supplied here, which is why every path in this subtree takes
+        # {app_endpoint_name} rather than an id.
         body_required=("name", "bucket"),
         guarded=True,
     ),

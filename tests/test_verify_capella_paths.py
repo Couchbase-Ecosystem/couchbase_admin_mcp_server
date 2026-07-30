@@ -1540,6 +1540,138 @@ def test_passwords_are_supplied_rather_than_left_to_capella(script, monkeypatch)
         assert len(body["password"]) >= 16
 
 
+def test_a_rejection_body_is_printed_far_enough_to_be_useful(
+    script, monkeypatch, capsys
+):
+    """The whole value of a failed create is the reason.
+
+    Capella's 422 bodies open with ~150 characters of boilerplate — a `code`, an
+    `httpStatusCode`, and a generic `hint` reading "Please review your request and ensure
+    that all required parameters are correctly provided" — before the `message` that actually
+    names the problem. Truncating at 220 characters cut the App Services admin user
+    rejection off mid-word at "contains or lacks b", which was the part that would have said
+    what to fix, and cost a full App Service provisioning cycle to recover.
+    """
+    boilerplate = json.dumps(
+        {
+            "code": 422,
+            "hint": (
+                "Please review your request and ensure that all required parameters "
+                "are correctly provided. Consult the Capella Management API reference "
+                "for the schema of this request body."
+            ),
+            "httpStatusCode": 422,
+            "message": (
+                "Payload for creating or modifying app service admin user "
+                "THE ACTUAL REASON APPEARS HERE"
+            ),
+        }
+    )
+    # The marker has to sit BEYOND the old 220-character cut, or the fixture would pass
+    # against the very truncation this test exists to prevent.
+    assert boilerplate.index("THE ACTUAL REASON") > 220, (
+        "fixture too short to exercise truncation"
+    )
+
+    def _long_rejection(method, path, token, body=None):
+        if method == "POST":
+            return 422, boilerplate
+        if method == "GET" and "/buckets/" in path:
+            return 200, json.dumps({"data": {"id": "BKT", "name": "travel"}})
+        return 200, json.dumps({"data": []})
+
+    monkeypatch.setattr(script, "_request", _long_rejection)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    assert "THE ACTUAL REASON APPEARS HERE" in capsys.readouterr().out, (
+        "the rejection body was truncated before the message that names the problem"
+    )
+
+
+def test_the_credential_is_created_with_a_permission_grant(script, monkeypatch):
+    """Capella refuses a credential that grants nothing:
+
+        422 "Can not create new dataplane user without at least (1) valid permission
+             being specified"
+
+    A real gap: nothing asserted this, and the mutation that removed the `access` field
+    SURVIVED the whole suite. Found by the harness, not by review.
+    """
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    body = next(b for p, b in rec.creates if p.endswith("/users"))
+    assert body.get("access"), (
+        "the database credential was created with no permission grant"
+    )
+    # Read-only, because the credential exists for minutes and never needs to write.
+    privileges = body["access"][0]["privileges"]
+    assert privileges == ["data_reader"], privileges
+
+
+def test_the_admin_user_is_created_with_exactly_one_access_shape(script, monkeypatch):
+    """`access` is a oneOf: exactly one of `accessAllEndpoints` or `endpoints`. Supplying
+    both, or neither, is the 422 that read "contains or lacks both ...".
+    """
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    body = next(b for p, b in rec.creates if p.endswith("/adminUsers"))
+    access = body.get("access")
+    assert access, "the admin user was created with no access field"
+    keys = set(access)
+    assert len(keys & {"accessAllEndpoints", "endpoints"}) == 1, (
+        f"access must carry exactly one of the two shapes, got {sorted(keys)}"
+    )
+    # The narrower of the two for a throwaway user: satisfies the schema, grants nothing.
+    assert access.get("accessAllEndpoints") is False
+
+
+def test_the_app_endpoint_uses_the_field_name_capella_reads(script, monkeypatch):
+    """`deltaSyncEnabled`, not `deltaSync`. v4 ignores an unrecognised field rather than
+    rejecting it, so the wrong name returns 201 and the setting is simply never applied —
+    there is no error to notice."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    body = next(b for p, b in rec.creates if p.endswith("/appEndpoints"))
+    assert "deltaSyncEnabled" in body
+    assert "deltaSync" not in body
+
+
+def test_a_create_that_returns_no_body_still_gets_a_teardown_record(
+    script, monkeypatch
+):
+    """App Endpoint creation answers 201 with an EMPTY body.
+
+    Before the name fallback, that produced "created but no id in the response" — the
+    endpoint existed, was reported as a failure, and got NO teardown record. It was only
+    cleaned up because deleting the App Service takes its endpoints with it, which is luck
+    rather than design.
+    """
+
+    def _empty_body_create(method, path, token, body=None):
+        if method == "POST":
+            return 201, ""  # exactly what Capella does here
+        if method == "DELETE":
+            return 204, ""
+        if method == "GET" and "/buckets/" in path:
+            return 200, json.dumps({"data": {"id": "BKT", "name": "travel"}})
+        return 200, json.dumps({"data": []})
+
+    monkeypatch.setattr(script, "_request", _empty_body_create)
+    ids = dict(BASE_IDS)
+
+    created = script.bootstrap_child_objects("tok", "/base", ids, {})
+
+    assert ids.get("app_endpoint_name"), "the endpoint name fallback did not apply"
+    endpoint_teardowns = [p for _label, p in created if "/appEndpoints/" in p]
+    assert endpoint_teardowns, "the App Endpoint was created with no teardown record"
+
+
 def test_the_app_endpoint_keyspace_is_spelled_out(script, monkeypatch):
     """A bare endpoint name is ACCEPTED by v4 and read as `<name>._default._default`, so on a
     cluster with named scopes it silently targets the wrong collection. The two

@@ -459,32 +459,64 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
         datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def _create(label: str, path: str, payload: dict, *, delete_suffix=True):
+    def _create(
+        label: str, path: str, payload: dict, *, fallback_id: str | None = None
+    ):
+        """POST, extract the new object's id, and record how to delete it.
+
+        `fallback_id` is the identifier to assume when the create SUCCEEDS but returns no
+        usable body. App Endpoint creation does exactly that — 2xx with an empty body — and
+        its identifier is the `name` the caller chose, so it is knowable without being
+        returned. Without the fallback, the endpoint was created, reported as a failure, and
+        given NO TEARDOWN RECORD. It only got cleaned up because deleting the App Service
+        takes its endpoints with it, which is luck rather than design.
+        """
         status, body = _request("POST", path, token, body=payload)
         if status is None or status >= 400:
             # Not fatal. The point of the run is to learn, and the rejection body names the
             # field that is wrong — which is how the App Service node floor was found.
-            print(f"  {label:14s}: create failed HTTP {status} — {body[:220]}")
+            #
+            # 500 characters, not 220. The App Services admin user rejection was cut off
+            # mid-word at "contains or lacks b", which is the part that would have said what
+            # to fix. A truncated diagnostic is barely a diagnostic.
+            print(f"  {label:14s}: create failed HTTP {status} — {body[:500]}")
             return None
         try:
             parsed = json.loads(body)
             data = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
         except Exception:
             data = {}
-        new_id = str(data.get("id") or data.get("name") or "")
+        new_id = str(data.get("id") or data.get("name") or "") or (fallback_id or "")
         if not new_id:
-            print(f"  {label:14s}: created but no id in the response — {body[:160]}")
+            # The create WORKED and something now exists that this run cannot name, so it
+            # cannot be deleted either. Say so with the status and body.
+            print(
+                f"  {label:14s}: created (HTTP {status}) but no id could be read and no "
+                f"fallback is known — it will NOT be torn down. body={body[:200]!r}"
+            )
             return None
-        print(f"  {label:14s}: {new_id}")
-        if delete_suffix:
-            created.append((label, f"{path}/{urllib.parse.quote(new_id, safe='')}"))
+        note = "" if data else "  (id assumed from the requested name)"
+        print(f"  {label:14s}: {new_id}{note}")
+        created.append((label, f"{path}/{urllib.parse.quote(new_id, safe='')}"))
         return new_id
 
     # ── Database credential ─────────────────────────────────────────────────
+    # `access` is NOT optional, whatever spec.py's body_required said:
+    #
+    #   422 "Can not create new dataplane user without at least (1) valid permission being
+    #        specified"
+    #
+    # Narrowest useful grant: read-only, and `resources` omitted rather than naming a bucket,
+    # because a bucket-scoped grant is one more thing that can 422 on a cluster whose buckets
+    # this script did not choose. It is data_reader on a credential that lives for minutes.
     user_id = _create(
         "db credential",
         f"{base}/users",
-        {"name": f"verify-{stamp}", "password": _throwaway_password()},
+        {
+            "name": f"verify-{stamp}",
+            "password": _throwaway_password(),
+            "access": [{"privileges": ["data_reader"]}],
+        },
     )
     if user_id:
         ids["user_id"] = user_id
@@ -527,10 +559,19 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
         }
 
     # ── App Services admin user ─────────────────────────────────────────────
+    # `access` is REQUIRED and is a oneOf — exactly one of `accessAllEndpoints` or
+    # `endpoints`, never both and never neither. Omitting it produced
+    #   422 "... contains or lacks both ..."
+    # `accessAllEndpoints: false` is the narrower of the two: it satisfies the schema while
+    # granting the throwaway user nothing.
     admin_id = _create(
         "as admin user",
         f"{as_base}/adminUsers",
-        {"name": f"verify{stamp}", "password": _throwaway_password()},
+        {
+            "name": f"verify{stamp}",
+            "password": _throwaway_password(),
+            "access": {"accessAllEndpoints": False},
+        },
     )
     if admin_id:
         ids["admin_user_id"] = admin_id
@@ -553,9 +594,16 @@ def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -
         {
             "name": endpoint_name,
             "bucket": bucket,
+            # Only ONE scope is permitted per App Endpoint, so this names exactly the one
+            # discovery found rather than mapping several.
             "scopes": {scope: {"collections": {collection: {}}}},
-            "deltaSync": False,
+            # `deltaSyncEnabled`, not `deltaSync` — the short name is silently ignored.
+            "deltaSyncEnabled": False,
         },
+        # Creation answers 2xx with an EMPTY body, so there is no id to read — and there does
+        # not need to be: an App Endpoint is addressed by the name supplied here, which is
+        # why every path in this subtree uses {app_endpoint_name} rather than an id.
+        fallback_id=endpoint_name,
     )
     if endpoint_id:
         ids["app_endpoint_name"] = endpoint_id

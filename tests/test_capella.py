@@ -698,3 +698,109 @@ def test_the_verifier_and_the_spec_agree_on_the_node_floor():
 
     # And it must actually be used in the request body, not merely declared.
     assert '"nodes": _MIN_APP_SERVICE_NODES' in script
+
+
+# ── Request bodies corrected against live 422s and the OpenAPI document ──────
+#
+# Three bodies in this registry were wrong, and all three were wrong in the same direction:
+# a REQUIRED field declared optional, or a field misnamed. None could be caught by a path
+# probe, because an OPTIONS probe sends no body at all — so `[LIVE 405]` on these operations
+# proved the route and said nothing about the payload.
+#
+# The corrections come from live rejections plus Capella's published OpenAPI document
+# (CreateAppServiceAdminUserRequest, CreateAppEndpointRequest).
+
+
+def test_a_database_credential_requires_a_permission_grant():
+    """Capella refuses a credential with no grant:
+
+        422 "Can not create new dataplane user without at least (1) valid permission
+             being specified"
+
+    Declaring `access` optional told the model the minimal call was name-only, which is
+    exactly the call that always fails.
+    """
+    from handlers.capella import spec
+
+    op = spec.OPS_BY_NAME["capella_database_credential_create"]
+    assert "access" in op.body_required
+    assert "name" in op.body_required
+    # `password` stays OPTIONAL on purpose: omitting it works, and Capella then generates one
+    # and returns it once, which keeps a secret out of the caller's prompt.
+    assert "password" not in op.body_required
+
+
+def test_an_app_service_admin_user_requires_name_password_and_access():
+    """The live 422 said "contains or lacks both ..." — `access` was missing entirely."""
+    from handlers.capella import spec
+
+    op = spec.OPS_BY_NAME["capella_app_service_admin_user_create"]
+    assert set(op.body_required) == {"name", "password", "access"}
+    assert "access" in op.body
+
+
+def test_the_admin_user_access_field_documents_its_one_of():
+    """`access` is a oneOf: EXACTLY one of `accessAllEndpoints` or `endpoints`. Both or
+    neither is the 422. The description is what the model reads before constructing the body,
+    so the constraint has to live there and not only in a comment."""
+    from handlers.capella import spec
+
+    description = spec.OPS_BY_NAME["capella_app_service_admin_user_create"].body[
+        "access"
+    ]["description"]
+    assert "accessAllEndpoints" in description
+    assert "endpoints" in description
+    assert "both" in description.lower()
+
+
+def test_the_app_endpoint_delta_sync_field_is_named_correctly():
+    """`deltaSyncEnabled`, not `deltaSync`.
+
+    The worst kind of wrong name: v4 ignores an unrecognised field rather than rejecting it,
+    so `deltaSync: true` returns 201 and delta sync is simply never enabled. There is no
+    error to notice.
+    """
+    from handlers.capella import spec
+
+    body = spec.OPS_BY_NAME["capella_app_endpoint_create"].body
+    assert "deltaSyncEnabled" in body
+    assert "deltaSync" not in body
+
+
+def test_the_app_endpoint_requires_only_a_name_and_bucket():
+    """`scopes` is optional — omitting it uses the default scope and collection. Marking it
+    required would make the simplest valid call impossible to express."""
+    from handlers.capella import spec
+
+    op = spec.OPS_BY_NAME["capella_app_endpoint_create"]
+    assert set(op.body_required) == {"name", "bucket"}
+
+
+def test_the_app_endpoint_scopes_description_states_the_one_scope_limit():
+    """Capella permits ONLY ONE scope per App Endpoint. A model handed a multi-scope mapping
+    shape would produce a body that is rejected, or worse, partially honoured."""
+    from handlers.capella import spec
+
+    description = spec.OPS_BY_NAME["capella_app_endpoint_create"].body["scopes"][
+        "description"
+    ]
+    assert "one scope" in description.lower()
+    assert "collections" in description
+
+
+def test_the_app_endpoint_is_addressed_by_name_not_by_id():
+    """Creation answers 201 with an EMPTY body, so there is no id to return — and none is
+    needed. Every path in the subtree takes {app_endpoint_name}. A path here that expected an
+    id would be unusable."""
+    from handlers.capella import spec
+
+    subtree = [
+        op
+        for op in spec.OPS
+        if "/appEndpoints/" in op.path and "app_endpoint" in op.path
+    ]
+    assert subtree, "expected App Endpoint sub-paths to exist"
+    for op in subtree:
+        assert (
+            "{app_endpoint_name}" in op.path or "{app_endpoint_keyspace}" in op.path
+        ), f"{op.name} addresses an App Endpoint by something other than its name"

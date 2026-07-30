@@ -1,0 +1,34 @@
+# Pre-commit hooks.
+#
+# `pre-commit` was already a declared dev dependency with no configuration file, so
+# `pre-commit install` failed for anyone who followed the setup instructions.
+#
+# Deliberately fast. Hooks that take longer than a couple of seconds get bypassed with
+# `--no-verify`, and a hook people routinely skip is worse than none: it creates the
+# impression the check ran. The test suite is NOT here for that reason — it belongs in CI,
+# where it can take its 25 seconds honestly.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Pinned to the same version as the `dev` extra in pyproject.toml. A different ruff
+    # here would reformat on commit and then disagree with CI, which is how a repo ends up
+    # with a permanent diff nobody can land.
+    rev: v0.12.5
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      # An administration server is exactly the sort of repository a private key gets
+      # committed to by accident, and .env.example invites copying it to .env.
+      - id: detect-private-key
+      - id: check-added-large-files
+        # The vendored console runtime (babel.min.js) is 2.9 MB and intentional.
+        args: [--maxkb=4096]

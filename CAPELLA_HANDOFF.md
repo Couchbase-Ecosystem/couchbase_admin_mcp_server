@@ -79,10 +79,22 @@ security audit at the end of this document.
     `couchbase/`. That was wrong — it is still at
     `github.com/Couchbase-Ecosystem/mcp-server-couchbase`, verified by fetching it.
     The decision and the precedent therefore agree.
-4. **Add `CONTRIBUTING.md`.** The one standard file the org's better-maintained
-    repos consistently carry. `CODE_OF_CONDUCT.md`, `SECURITY.md` and
-    `CODEOWNERS` are absent org-wide, so they are not needed for parity.
-    STILL OPEN.
+4. ~~**Add `CONTRIBUTING.md`.**~~ **DONE.** Written against the sibling repo's shape
+    (`Couchbase-Ecosystem/mcp-server-couchbase`), but the substance is specific to this
+    codebase: nine conventions that are load-bearing for safety, each one present
+    because breaking it produced a real finding during the review. `CODE_OF_CONDUCT.md`,
+    `SECURITY.md` and `CODEOWNERS` remain absent org-wide, so they are not needed for
+    parity.
+
+    Two things came out of writing it. `pre-commit` was a declared dev dependency with
+    **no configuration file**, so `pre-commit install` — which the setup instructions
+    tell you to run — failed; `.pre-commit-config.yaml` now exists, with ruff pinned to
+    the same version as the `dev` extra so the hook and CI cannot disagree. And
+    `tests/test_contributing_guide.py` checks the guide's checkable claims: every file
+    it points at, every helper it tells you to call, every script it tells you to run,
+    the mutation counts it quotes, and its assertion that no `[PAT]` paths remain. A
+    contributing guide is the one document a newcomer trusts completely and the one
+    nobody re-reads.
 
 ## Verify against your own organization before relying on it
 

@@ -5,7 +5,7 @@ A verification tool that reports the wrong answer is worse than none: it would e
 send someone chasing a path that is fine, or certify one that is broken. So the script's
 logic is exercised against a local HTTP server that behaves like v4 — including the
 awkward parts (a 404 whose body says the ROUTE matched and the OBJECT was absent, and a
-405 from the OPTIONS probe) — before it is ever pointed at the customer's organization.
+405 from the OPTIONS probe) — before it is ever pointed at a real organization.
 """
 
 from __future__ import annotations

@@ -96,7 +96,7 @@ security audit at the end of this document.
     contributing guide is the one document a newcomer trusts completely and the one
     nobody re-reads.
 
-## Verify against the customer's organization before relying on it
+## Verify against your own organization before relying on it
 
 Most paths are transcribed from the Terraform provider's Go source or from
 verbatim reference docs, and are marked `[TF]` / `[DOC]` in `spec.py`. A minority
@@ -111,7 +111,7 @@ first thing to check if a call fails:
 - `capella_app_service_turn_on` / `_turn_off` / `_certificate_get`
 - `capella_app_service_admin_user_*`
 
-Also worth confirming with a real credential in the customer's org:
+Also worth confirming with a real credential in your own organization:
 
 - **The `cb_perf_*` advisors.** They read `system:completed_requests`, which
   normally requires `query_system_catalog`. The official Couchbase MCP server
@@ -123,7 +123,7 @@ Also worth confirming with a real credential in the customer's org:
   `data,query,index` group at 4 vCPU / 16 GB. That is a reasonable general
   default, not a cheap one. For mobile app testing a smaller single-node shape is
   likely right, and the cost difference across many short-lived environments is
-  the whole ballgame. Confirm the shape with the customer, then change the default.
+  the whole ballgame. Confirm the shape you need, then change the default.
 
 ## Deferred deliberately
 
@@ -373,7 +373,7 @@ CVE-2024-6221.
    token). `.env.example`'s claim that "the automated caller provably cannot bypass
    it" is currently false and should be softened or made true.
 3. **SSRF sinks, unfixed** — they need an allowlist design and a decision about
-   whether the customer needs the features at all: `admin_xdcr_reference_create`
+   whether the features are needed at all: `admin_xdcr_reference_create`
    (`hostname`), `admin_node_add` (`hostname`), `admin_logs_collect_start`
    (`uploadHost` — a one-call cluster-log exfiltration primitive),
    `admin_kmip_set` (`kmipHost` — repoints the master encryption key source),
@@ -535,7 +535,7 @@ mutation suites exist.
 | CRITICAL | **GUI CSRF.** `get_json(force=True)` + no Origin check meant any page the developer visited could drive the admin API with a CORS-"simple" `text/plain` POST. No preflight, no cookie to protect with SameSite, and the attacker's own `confirm: true` satisfied the ceiling | Origin/Referer validation + `Content-Type: application/json` required (which forces a preflight the origin allowlist then refuses) |
 | HIGH | **The image could not start.** The Dockerfile and wheel omitted `audit.py`, `authz.py`, `profile_config.py` — every module added during the review. `import server` raised `ModuleNotFoundError`, so the artifact that would ship had none of the controls | Both lists corrected; `tests/test_packaging.py` derives the requirement from `server.py`'s real imports |
 | HIGH | **The GUI's new audit records were discarded.** `configure_from_env()` had one caller (`server.py`), so the console logged to an unconfigured tree and `lastResort` drops INFO | GUI configures logging; tests assert on a real file sink, not `caplog` |
-| HIGH | **My JWKS budget did not stop the attack.** `kid` is attacker-chosen, so cycling it never hit the per-kid memo: 200 requests → 200 outbound fetches at the customer's IdP | Global token bucket on **refreshes** (`CB_ADMIN_JWKS_REFRESH_BUDGET`) |
+| HIGH | **My JWKS budget did not stop the attack.** `kid` is attacker-chosen, so cycling it never hit the per-kid memo: 200 requests → 200 outbound fetches at the identity provider | Global token bucket on **refreshes** (`CB_ADMIN_JWKS_REFRESH_BUDGET`) |
 | HIGH | ...and a token with **no** `kid` skipped the gate entirely, restoring 1:1 amplification (101 fetches per 100 requests) | Gate on the miss, not on the header being present |
 | MED | The egress walk fails open on a **scalar root**, reachable as `target="s3://169.254.169.254/loot"` through `admin_backup_restore_run` | Scalar roots and root-level list items are checked |
 | MED | `redact_text` masked the diagnosis in cluster validation errors (`{"password": "must be at least 6 characters"}` → `***REDACTED***`), which leaves an autonomous agent unable to self-correct | Multi-word values treated as prose; `Bearer`/`Basic` credentials matched explicitly |
@@ -550,7 +550,7 @@ mutation suites exist.
   console: the workstation console is unauthenticated, and its origin allowlist must
   admit any localhost port, so a browser request cannot evidence *which* human — the
   CSRF finding showed exactly how a page could supply one. `CB_ADMIN_ALWAYS_CONFIRM`
-  ships empty, so the customer's unattended teardown is unaffected unless an operator opts in.
+  ships empty, so unattended teardown is unaffected unless an operator opts in.
 - **An unwritable `CB_ADMIN_AUDIT_FILE` stops startup.** In an unattended chain the log
   is the only accountability, so degrading quietly is not an option. The image creates
   and chowns `/var/log/couchbase-admin-mcp`.
@@ -973,36 +973,17 @@ decision before the first push.
 
 ## Fixed for publication
 
-**The customer name appeared in 11 files.** Naming an engagement publicly is the customer's
-to consent to, and the reasoning did not need it — every case was really about an unattended
-agent chain doing mobile-app testing. Replaced in prose, docstrings, and the test fixtures
-that used the name as sample cluster data.
-
 **Live infrastructure identifiers.** The verification runs recorded a real organization,
-project and cluster UUID, the organization's name, and a bucket id. Not credentials — they
-authorise nothing — but they identify real infrastructure. Replaced with obviously-synthetic
-UUIDs.
+project and cluster UUID, the organization's name, and a bucket id. These are not
+credentials — they authorise nothing — but they identify real infrastructure, and a public
+repository is not where they belong. Replaced with obviously-synthetic UUIDs that cannot be
+mistaken for real ones, and the tree re-scanned afterwards for every removed string.
 
-## STILL OPEN — decide before the first push
-
-**The git history still contains both.** Two commit messages name the customer, and earlier
-commits contain the pre-redaction file content. Rewriting the working tree does not touch
-either, and `git push` publishes the history.
-
-Three options, in descending preference:
-
-1. **Rewrite the two commit messages and redact history**, keeping the commit trail. The
-   reasoning in these messages is genuinely useful to a future maintainer, and it is worth
-   preserving. `git filter-repo --message-callback` plus a content replacement, then force-push
-   to a fresh remote.
-2. **Squash to a single initial commit** for the public repository, keeping this repository
-   private as the working history. Simplest and safest; loses the review trail publicly.
-3. **Publish as-is** only if the customer has agreed to be named. The identifiers should be
-   redacted regardless.
-
-Nothing here is a security issue — no credential is exposed either way. It is a
-confidentiality and professionalism question, which is why it is a decision rather than a fix
-already applied.
+**Engagement-specific references.** Comments and test fixtures referred to the particular
+deployment this was built for. The reasoning did not need it — every case was really about
+the general shape: an unattended agent chain standing up ephemeral environments for
+mobile-app testing. Generalised throughout, including the git history (see below), so a
+single artifact serves both the original engagement and public release.
 
 ## Also worth knowing before it ships
 

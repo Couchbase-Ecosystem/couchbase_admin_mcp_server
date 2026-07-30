@@ -1,0 +1,27 @@
+# Keep secrets and history out of the build context entirely.
+#
+# The Dockerfile copies named paths rather than `COPY . .`, so nothing sensitive
+# is baked into a layer today — but the whole context is still shipped to the
+# daemon and the build cache, and one future `COPY . .` would turn that into a
+# published secret. Excluding it here makes that mistake harmless.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.log
+cb_admin_mcp.*.log
+tests/
+.github/

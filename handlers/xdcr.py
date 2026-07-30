@@ -10,7 +10,15 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from .shared import admin_request, err, ok, quote_path
+from .egress import assert_egress_allowed
+from .shared import (
+    admin_request,
+    err,
+    form_data_declared,
+    ok,
+    quote_path,
+    refuse_undeclared,
+)
 
 TOOLS: list[Tool] = [
     Tool(
@@ -141,7 +149,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=False,
         ),
     ),
@@ -246,6 +254,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/pools/default/remoteClusters"))
 
         if name == "admin_xdcr_reference_create":
+            # The cluster will connect to this host and, once a replication is
+            # created against the reference, stream an entire bucket to it.
+            assert_egress_allowed(args["hostname"], field="hostname", tool=name)
             data = {
                 "name": args["name"],
                 "hostname": args["hostname"],
@@ -317,11 +328,20 @@ def handle(name: str, args: dict) -> list[TextContent]:
 
         if name == "admin_xdcr_settings_set":
             rid = args.get("replication_id")
-            data = {
-                k: str(v)
-                for k, v in args.items()
-                if v is not None and k != "replication_id"
-            }
+            # /settings/replications accepts the full XDCR tuning surface, so an
+            # undeclared key was applied to a live replication verbatim.
+            refusal = refuse_undeclared(
+                args,
+                name,
+                TOOLS,
+                exclude=("confirm", "replication_id"),
+                endpoint="/settings/replications",
+            )
+            if refusal is not None:
+                return refusal
+            data = form_data_declared(
+                args, name, TOOLS, exclude=("confirm", "replication_id")
+            )
             path = (
                 f"/settings/replications/{_enc_rep_id(rid)}"
                 if rid

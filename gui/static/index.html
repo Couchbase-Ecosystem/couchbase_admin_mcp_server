@@ -454,8 +454,22 @@ function categorize(toolName) {
 }
 
 // ── Syntax highlight JSON ─────────────────────────────────────────────────────
+function escapeHtml(s) {
+  // MUST run before the highlight regexes below. The result of this function is
+  // injected with dangerouslySetInnerHTML, so any unescaped value reaching it is
+  // stored XSS in a cluster-admin console: a bucket name, user name, index name,
+  // eventing function name or document field returned by a tool becomes script in
+  // the admin's browser, executing same-origin with their authenticated session.
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function highlightJSON(obj) {
-  const str = JSON.stringify(obj, null, 2);
+  const str = escapeHtml(JSON.stringify(obj, null, 2));
   return str
     .replace(/("(?:[^"\\]|\\.)*")(\s*:)/g, '<span class="json-key">$1</span>$2')
     .replace(/: "([^"]*)"/g, ': <span class="json-str">"$1"</span>')

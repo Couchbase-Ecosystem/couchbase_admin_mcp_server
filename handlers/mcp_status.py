@@ -110,7 +110,11 @@ def _tls_state() -> dict:
     """Report TLS configuration without exposing credential paths."""
     conn = os.environ.get("CB_CONNECTION_STRING", "couchbase://localhost")
     is_tls = "couchbases://" in conn
-    insecure = os.environ.get("CB_ADMIN_TLS_INSECURE", "").lower() in ("1", "true", "yes")
+    insecure = os.environ.get("CB_ADMIN_TLS_INSECURE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     return {
         "tls_enabled": is_tls,
         "tls_verify_disabled": insecure,

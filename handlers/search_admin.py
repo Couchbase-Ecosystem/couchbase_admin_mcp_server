@@ -57,7 +57,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),

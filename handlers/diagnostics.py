@@ -30,7 +30,12 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 
 from logging_config import get_logger
 
-from .shared import err, get_sdk_connection, ok
+from .shared import (
+    assert_read_only_statement,
+    err,
+    get_sdk_connection,
+    ok,
+)
 
 _log = get_logger("handlers.diagnostics")
 
@@ -362,7 +367,61 @@ TOOLS: list[Tool] = [
 # ── Handler dispatch ─────────────────────────────────────────────────────────
 
 
+def _validate_statement_args(name: str, args: dict) -> list[TextContent] | None:
+    """Validate caller-supplied SQL++ BEFORE any connection is made.
+
+    Ordering matters. These checks previously ran after ``get_sdk_connection()``,
+    so a mutating or chained statement got as far as the cluster's doorstep before
+    being refused, and a refusal required a working cluster to produce. Validation
+    that costs nothing belongs before the step that costs a connection.
+
+    The diagnostic tools are read-only PERIOD — they do not consult
+    CB_ADMIN_READ_ONLY_MODE, because there is no configuration under which a debug
+    tool should modify data. Writes go through the purpose-built admin_* tools,
+    which are annotated, gated and audited as writes.
+    """
+    if name == "cb_explain_query":
+        statement = args.get("statement")
+        if not isinstance(statement, str) or not statement.strip():
+            return err("statement must be a non-empty SQL++ string", tool=name)
+        inner = re.sub(r"(?i)^\s*EXPLAIN\s+", "", statement.lstrip())
+        blocked = assert_read_only_statement(inner, tool=name)
+        if blocked:
+            return err(blocked, tool=name)
+
+    if name == "cb_index_advisor":
+        statements = args.get("statements")
+        if not isinstance(statements, list) or not statements:
+            return err(
+                "statements must be a non-empty array of SQL++ strings", tool=name
+            )
+        # Element TYPES were never checked, only that the container was a list.
+        # ADVISOR() also accepts a session-control object ({"action": "purge"}), so
+        # a dict element reached the function as a control command from a tool
+        # annotated read-only.
+        non_strings = [type(x).__name__ for x in statements if not isinstance(x, str)]
+        if non_strings:
+            return err(
+                f"statements must contain only SQL++ strings; got {non_strings}.",
+                tool=name,
+                hint=(
+                    "ADVISOR() also accepts a session-control object, so non-string "
+                    "elements are refused rather than forwarded."
+                ),
+            )
+        for candidate in statements:
+            blocked = assert_read_only_statement(candidate, tool=name)
+            if blocked:
+                return err(blocked, tool=name)
+
+    return None
+
+
 def handle(name: str, args: dict) -> list[TextContent]:
+    refusal = _validate_statement_args(name, args)
+    if refusal is not None:
+        return refusal
+
     try:
         cluster, _, _ = get_sdk_connection()
     except Exception as exc:
@@ -461,6 +520,24 @@ def _advisor(cluster, QueryOptions, args: dict) -> list[TextContent]:
             "statements must be a non-empty array of SQL++ strings",
             tool="cb_index_advisor",
         )
+    # Item TYPES were never validated — only that the container was a list. ADVISOR
+    # also accepts a session-control object ({"action": "purge"|"stop"}), so a
+    # non-string element reached the function as a control command from a tool
+    # annotated read-only.
+    non_strings = [type(x).__name__ for x in statements if not isinstance(x, str)]
+    if non_strings:
+        return err(
+            f"statements must contain only SQL++ strings; got {non_strings}.",
+            tool="cb_index_advisor",
+            hint=(
+                "ADVISOR() also accepts a session-control object, so non-string "
+                "elements are refused rather than forwarded."
+            ),
+        )
+    for candidate in statements:
+        blocked = assert_read_only_statement(candidate, tool="cb_index_advisor")
+        if blocked:
+            return err(blocked, tool="cb_index_advisor")
     # ADVISOR accepts a single string or an array. Pass the array directly.
     stmt = "SELECT ADVISOR($stmts) AS recommendations"
     result = cluster.query(stmt, QueryOptions(named_parameters={"stmts": statements}))
@@ -472,10 +549,19 @@ def _explain(cluster, QueryOptions, args: dict) -> list[TextContent]:
     statement = args["statement"]
     params = args.get("params") or {}
     stripped = statement.lstrip()
-    if not re.match(r"(?i)EXPLAIN\b", stripped):
-        explain_stmt = "EXPLAIN " + statement
-    else:
-        explain_stmt = statement
+    # ALWAYS prepend EXPLAIN. The previous branch forwarded the caller's string
+    # verbatim whenever it already began with EXPLAIN, so
+    # "EXPLAIN SELECT 1; UPDATE `b` SET x=1" reached the query service unchecked,
+    # with only its single-statement rule standing in the way.
+    inner = re.sub(r"(?i)^\s*EXPLAIN\s+", "", stripped)
+
+    # Unconditional, not read-only-mode dependent: a debug tool has no business
+    # executing a mutation under any configuration.
+    blocked = assert_read_only_statement(inner, tool="cb_explain_query")
+    if blocked:
+        return err(blocked, tool="cb_explain_query")
+
+    explain_stmt = "EXPLAIN " + inner
     result = cluster.query(explain_stmt, QueryOptions(named_parameters=params))
     rows = list(result)
     plan_root = rows[0] if rows else {}

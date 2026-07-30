@@ -10,7 +10,34 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from .shared import admin_request, err, form_data, ok, quote_path
+from .egress import assert_egress_allowed
+from .shared import (
+    admin_request,
+    err,
+    form_data,
+    form_data_declared,
+    ok,
+    quote_path,
+    refuse_undeclared,
+)
+
+#: Keys /settings/alerts accepts. Mass assignment on a settings endpoint lets a
+#: confused or injected agent set fields nobody reviewed, so the payload is built
+#: from this list rather than from whatever the caller sent.
+_ALERTS_KEYS: frozenset[str] = frozenset(
+    {
+        "enabled",
+        "recipients",
+        "sender",
+        "emailUser",
+        "emailPass",
+        "emailHost",
+        "emailPort",
+        "emailEncrypt",
+        "alerts",
+    }
+)
+
 
 TOOLS: list[Tool] = [
     # ── Cluster info ────────────────────────────────────────────────────
@@ -112,7 +139,7 @@ TOOLS: list[Tool] = [
             "required": ["hostname", "user", "password"],
         },
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=False
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False
         ),
     ),
     Tool(
@@ -253,7 +280,7 @@ TOOLS: list[Tool] = [
             "required": ["enabled"],
         },
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=True
+            readOnlyHint=False, destructiveHint=True, idempotentHint=True
         ),
     ),
     Tool(
@@ -335,7 +362,7 @@ TOOLS: list[Tool] = [
             },
         },
         annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=False, idempotentHint=False
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False
         ),
     ),
     Tool(
@@ -438,7 +465,13 @@ def handle(name: str, args: dict) -> list[TextContent]:
             )
 
         if name == "admin_cluster_memory_set":
-            data = form_data(args)
+            # /pools/default accepts far more than this tool declares (including
+            # clusterName and node-provisioning fields), so an undeclared key here was
+            # a real cluster-wide configuration change.
+            refusal = refuse_undeclared(args, name, TOOLS, endpoint="/pools/default")
+            if refusal is not None:
+                return refusal
+            data = form_data_declared(args, name, TOOLS)
             return ok(admin_request("POST", "/pools/default", data=data))
 
         if name == "admin_node_list":
@@ -448,6 +481,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/pools/default/nodeServices"))
 
         if name == "admin_node_add":
+            # The cluster dials out to this host, and a node that joins receives
+            # replica data.
+            assert_egress_allowed(args["hostname"], field="hostname", tool=name)
             data = {
                 "hostname": args["hostname"],
                 "user": args["user"],
@@ -547,6 +583,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
 
         if name == "admin_logs_collect_start":
             data = {}
+            # uploadHost receives a full diagnostic bundle from every node —
+            # query text, document keys, configuration, sometimes credentials.
+            if args.get("uploadHost"):
+                assert_egress_allowed(args["uploadHost"], field="uploadHost", tool=name)
             for k in ("nodes", "uploadHost", "customer", "ticket"):
                 if args.get(k):
                     data[k] = args[k]
@@ -561,17 +601,27 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/autoCompaction"))
 
         if name == "admin_autocompaction_set":
-            data = form_data(args)
+            refusal = refuse_undeclared(
+                args, name, TOOLS, endpoint="/controller/setAutoCompaction"
+            )
+            if refusal is not None:
+                return refusal
+            data = form_data_declared(args, name, TOOLS)
             return ok(admin_request("POST", "/controller/setAutoCompaction", data=data))
 
         if name == "admin_alerts_get":
             return ok(admin_request("GET", "/settings/alerts"))
 
         if name == "admin_alerts_set":
-            data = {}
-            for k, v in args.items():
-                if v is not None:
-                    data[k] = "true" if v is True else "false" if v is False else str(v)
+            if args.get("emailHost"):
+                assert_egress_allowed(args["emailHost"], field="emailHost", tool=name)
+            # Per-tool key allow-list. This used to forward EVERY caller-supplied
+            # key to /settings/alerts, so a model could invent fields and have
+            # them applied to a settings endpoint verbatim.
+            data = form_data(
+                {k: v for k, v in args.items() if k in _ALERTS_KEYS},
+                exclude=("confirm",),
+            )
             return ok(admin_request("POST", "/settings/alerts", data=data))
 
         if name == "admin_alerts_test_email":

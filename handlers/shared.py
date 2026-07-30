@@ -61,11 +61,28 @@ def get_env(key: str, default: Any = _REQUIRED) -> str | None:
     return val
 
 
+#: The single accepted spelling set for boolean environment variables.
+#:
+#: Five call sites accepted "on" and one did not, so CB_ADMIN_HTTP_REQUIRE_AUTH=on
+#: made the edge middleware stop rejecting a missing token while check_scope still
+#: denied. Tool calls failed closed, but the MCP handshake and list_tools succeeded
+#: unauthenticated — disclosing the whole admin surface and the deployment mode.
+TRUTHY_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on", "y", "t"})
+
+
+def env_truthy(key: str, default: bool = False) -> bool:
+    """Read a boolean env var with ONE consistent notion of truth."""
+    raw = (os.environ.get(key) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in TRUTHY_VALUES
+
+
 def get_env_bool(key: str, default: bool) -> bool:
     raw = os.environ.get(key)
     if raw is None or raw == "":
         return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    return raw.strip().lower() in TRUTHY_VALUES
 
 
 def get_env_int(key: str, default: int) -> int:
@@ -235,14 +252,34 @@ def _auth_header() -> dict[str, str]:
 
 
 # Retry config
-_MAX_ATTEMPTS = get_env_int("CB_ADMIN_HTTP_RETRIES", 3)
+_MAX_ATTEMPTS = max(1, get_env_int("CB_ADMIN_HTTP_RETRIES", 3))
 _BASE_BACKOFF = 0.5  # seconds; doubles each attempt
-_HTTP_TIMEOUT = get_env_int("CB_ADMIN_HTTP_TIMEOUT", 30)
+# A timeout of 0 reaches urlopen as a non-blocking socket and fails
+# instantly; clamp rather than let a stray 0 look like "no timeout".
+_HTTP_TIMEOUT = max(1, get_env_int("CB_ADMIN_HTTP_TIMEOUT", 30))
 
 
-def _retryable(status: int) -> bool:
-    """Whether a given HTTP status code should be retried."""
-    return status in (408, 425, 429, 500, 502, 503, 504)
+#: Safe to repeat: repeating cannot create a second resource or re-run an action.
+_IDEMPOTENT_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "PUT", "DELETE"})
+
+#: The server rejected or never began the request, so nothing was applied.
+_UNPROCESSED_STATUSES: frozenset[int] = frozenset({408, 425, 429})
+
+
+def _retryable(status: int, method: str = "GET") -> bool:
+    """Whether to retry, accounting for whether the method is safe to repeat.
+
+    A POST whose response is lost to a timeout or a 502 may already have been
+    applied. Retrying it re-runs the action — and on this API the actions include
+    ``/controller/failOver``, ``/controller/doFlush`` and rebalance. Re-issuing a
+    failover because a read timed out is worse than reporting the failure, so
+    non-idempotent methods retry only on statuses that prove nothing happened.
+    """
+    if status in _UNPROCESSED_STATUSES:
+        return True
+    if status in (500, 502, 503, 504):
+        return method.upper() in _IDEMPOTENT_METHODS
+    return False
 
 
 def admin_request(
@@ -309,13 +346,15 @@ def admin_request(
             except Exception:
                 detail = body_bytes.decode(errors="replace")
             last_error = f"HTTP {exc.code} on {method} {path}: {detail}"
-            if _retryable(exc.code) and attempt < _MAX_ATTEMPTS:
+            if _retryable(exc.code, method) and attempt < _MAX_ATTEMPTS:
                 time.sleep(_BASE_BACKOFF * (2 ** (attempt - 1)))
                 continue
             raise RuntimeError(last_error) from exc
         except urllib.error.URLError as exc:
             last_error = f"Network error on {method} {path}: {exc.reason}"
-            if attempt < _MAX_ATTEMPTS:
+            # A dropped connection on a mutating call cannot be distinguished
+            # from "applied, reply lost", so it is not retried.
+            if method.upper() in _IDEMPOTENT_METHODS and attempt < _MAX_ATTEMPTS:
                 time.sleep(_BASE_BACKOFF * (2 ** (attempt - 1)))
                 continue
             raise RuntimeError(last_error) from exc
@@ -386,16 +425,128 @@ _DML_RE = re.compile(
     r"""
     ^\s*                           # leading whitespace
     (?:--[^\n]*\n\s*|/\*.*?\*/\s*)*  # optional line / block comments
-    (?P<kw>INSERT|UPSERT|UPDATE|DELETE|MERGE|CREATE|DROP|BUILD|ALTER|GRANT|REVOKE|EXECUTE)
+    (?P<kw>INSERT|UPSERT|UPDATE|DELETE|MERGE|CREATE|DROP|BUILD|ALTER|GRANT|REVOKE|EXECUTE|INFER)
     \b
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
 
 
+def _lex_sql_literals(text: str) -> tuple[str, bool]:
+    """Blank out quoted spans, and report whether the text ended inside a literal.
+
+    Without this, `;`, `--` and `/*` matched anywhere in the string, so ordinary
+    statements were refused with a misleading message:
+
+        SELECT * FROM `b` WHERE code = 'A;B'    -> "statement chaining"
+        SELECT * FROM `b` WHERE note = 'x--y'   -> "comments not permitted"
+        SELECT * FROM `orders;archive`          -> "statement chaining"
+
+    A statement pulled from system:completed_requests and handed to the index
+    advisor plausibly contains all three.
+
+    The second return value matters. An UNTERMINATED quote blanks everything from the
+    quote to the end of the string, so the chaining and comment scans saw an empty
+    tail and PASSED a statement this function could not actually lex — a trailing
+    unclosed quote followed by a second statement sailed through the chaining check.
+    Refusing is the only honest answer there: the guard cannot say what the query
+    service will make of it, and "I could not parse this, so I allowed it" is the
+    wrong direction for a control.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote in ("'", '"'):
+                out.append(" ")
+                i += 2
+                continue
+            if ch == quote:
+                # A doubled quote is an escaped quote: still inside the literal.
+                if i + 1 < len(text) and text[i + 1] == quote:
+                    out.append(" ")
+                    i += 2
+                    continue
+                quote = None
+            out.append(" ")
+        elif ch in ("'", '"', "`"):
+            quote = ch
+            out.append(" ")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out), quote is not None
+
+
+def _strip_sql_literals(text: str) -> str:
+    """The blanked text only, for callers that do not care about termination."""
+    stripped, _unterminated = _lex_sql_literals(text)
+    return stripped
+
+
 def is_dml_statement(stmt: str) -> bool:
-    """Return True if the SQL++ statement is a write/DDL/DCL operation."""
-    return bool(_DML_RE.match(stmt or ""))
+    """Return True if the SQL++ statement writes.
+
+    Conservative on genuine ambiguity — an unterminated block comment or a BOM
+    counts as DML, because guessing "read-only" on an unparseable statement is the
+    expensive direction to be wrong in.
+
+    NOT conservative about ``WITH``, though. Treating every WITH-prefixed statement
+    as a write refused legitimate read-only CTEs
+    (``WITH t AS (SELECT 1) SELECT * FROM t``), which disabled the diagnostic tools
+    for exactly the queries an operator brings to an index advisor. A CTE writes only
+    if it contains a write keyword, so that is what is tested.
+    """
+    text = stmt or ""
+    if not text.strip():
+        return False
+    if "\ufeff" in text[:4]:  # a BOM defeats \s in the pattern
+        return True
+    # Opened-but-unclosed block comment: the comment-skipping group matches zero
+    # times, the keyword match then fails, and a mutation reads as read-only.
+    if text.count("/*") != text.count("*/"):
+        return True
+
+    stripped = _strip_sql_literals(text)
+    if re.match(r"^\s*WITH\b", stripped, re.IGNORECASE):
+        return bool(
+            re.search(
+                r"\b(INSERT|UPSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|GRANT"
+                r"|REVOKE|EXECUTE)\b",
+                stripped,
+                re.IGNORECASE,
+            )
+        )
+    return bool(_DML_RE.match(text))
+
+
+def assert_read_only_statement(stmt: str, *, tool: str) -> str | None:
+    """Refuse a data-modifying SQL++ statement UNCONDITIONALLY.
+
+    Distinct from block_dml_if_readonly, which only refuses while
+    CB_ADMIN_READ_ONLY_MODE is on. The diagnostic tools — EXPLAIN, the index
+    advisor, schema inference, the completed-requests advisors — exist to inspect a
+    workload. There is no configuration under which they should modify data, so they
+    do not consult read-only mode at all: a mutation handed to a debug tool is
+    refused whether or not writes are enabled elsewhere.
+
+    Writes still happen, of course — through the purpose-built admin_* tools, which
+    are annotated, gated and audited as writes. A statement parameter on a read tool
+    is simply not one of those routes.
+    """
+    chained = assert_single_statement(stmt)
+    if chained:
+        return chained
+    if is_dml_statement(stmt):
+        return (
+            f"`{tool}` is a read-only diagnostic tool and will not execute a "
+            "statement that modifies data or schema. Use the purpose-built "
+            "admin_* tool for the change you intend — those are annotated, gated "
+            "and audited as writes."
+        )
+    return None
 
 
 def block_dml_if_readonly(stmt: str) -> str | None:
@@ -426,10 +577,51 @@ _INDEX_DROP_RE = re.compile(
 )
 
 
+def assert_single_statement(stmt: str) -> str | None:
+    """Reject statement chaining and comment tricks in a caller-supplied SQL++.
+
+    The DDL validators below anchor at the START of the string only, so
+    ``CREATE INDEX i ON `b`(x); DROP SCOPE `b`.`prod``` satisfied them and was
+    forwarded verbatim. The only thing that stopped the second statement running
+    was the query service's own single-statement rule — an undocumented server
+    behaviour this server does not own and must not depend on.
+
+    Comments are refused for the same reason: a trailing ``--`` silently discards
+    the rest of a generated statement (for example the WITH clause carrying an
+    index's dimension and similarity), so what executes differs from what the
+    operator confirmed.
+    """
+    text, unterminated = _lex_sql_literals(stmt or "")
+    if unterminated:
+        return (
+            "Unterminated quote in the statement, so it could not be parsed and the "
+            "chaining and comment checks cannot be applied to it. Refusing rather "
+            "than forwarding a statement this server was unable to read. Close the "
+            "quote, or double it if a literal quote was intended."
+        )
+    if re.search(r";\s*\S", text):
+        return (
+            "Statement chaining is not permitted: this parameter accepts exactly "
+            "one statement. Remove everything after the first ';' (semicolons "
+            "inside string literals and quoted identifiers are fine)."
+        )
+    if "--" in text or "/*" in text:
+        return (
+            "SQL++ comments are not permitted in this parameter, because a "
+            "trailing comment can silently discard part of the statement that "
+            "was reviewed. Remove '--' and '/*' (occurrences inside string "
+            "literals and quoted identifiers are fine)."
+        )
+    return None
+
+
 def assert_index_create_ddl(stmt: str) -> str | None:
     """Validate that a raw statement is index-creation DDL.
     Returns error message if not, else None.
     Prevents `admin_index_create` from being used to execute arbitrary SQL++."""
+    chained = assert_single_statement(stmt)
+    if chained:
+        return chained
     if not _INDEX_DDL_RE.match(stmt or ""):
         return (
             "admin_index_create's `statement` parameter only accepts index DDL "
@@ -442,6 +634,9 @@ def assert_index_create_ddl(stmt: str) -> str | None:
 
 
 def assert_index_drop_ddl(stmt: str) -> str | None:
+    chained = assert_single_statement(stmt)
+    if chained:
+        return chained
     if not _INDEX_DROP_RE.match(stmt or ""):
         return (
             "admin_index_drop's `statement` parameter only accepts DROP INDEX / "
@@ -491,6 +686,12 @@ def form_value(v: Any) -> str:
     """
     if isinstance(v, bool):
         return "true" if v else "false"
+    if isinstance(v, (list, tuple, dict)):
+        # str() on a list yields a Python repr with single quotes, which the
+        # cluster cannot parse. On /settings/security's cipherSuites an
+        # unparseable value means "use defaults" — a silent TLS downgrade — and
+        # on audit disabledUsers it means the exemption never applies.
+        return json.dumps(v)
     return str(v)
 
 
@@ -519,6 +720,100 @@ def form_data(args: dict, exclude: Iterable[str] = ("confirm",)) -> dict:
     }
 
 
+def schema_keys(tool_name: str, tools: Iterable[Any]) -> frozenset[str]:
+    """The argument names a tool's own inputSchema declares.
+
+    Memo-free and cheap; the tool lists are small and built once at import.
+    """
+    for tool in tools:
+        if getattr(tool, "name", None) == tool_name:
+            schema = getattr(tool, "inputSchema", None) or {}
+            props = schema.get("properties") or {}
+            return frozenset(props)
+    return frozenset()
+
+
+def form_data_declared(
+    args: dict,
+    tool_name: str,
+    tools: Iterable[Any],
+    *,
+    exclude: Iterable[str] = ("confirm",),
+    extra_allowed: Iterable[str] = (),
+) -> dict:
+    """form_data(), restricted to keys the tool actually declares.
+
+    MASS ASSIGNMENT. Several settings tools did ``form_data(args)`` and POSTed the
+    result to a Couchbase settings endpoint, which meant every key the caller
+    supplied was forwarded verbatim — including ones the tool never advertised and
+    the model simply invented. ``/settings/security``, ``/settings/indexes`` and
+    ``/pools/default`` all accept fields well beyond what these tools expose, so a
+    hallucinated or hostile key became a real configuration change to a security
+    endpoint.
+
+    Deriving the allow-list from the tool's OWN schema rather than a hand-written set
+    is deliberate: seven separate literal sets would be seven things to forget when a
+    parameter is added, and the previous per-tool sets had already drifted. If it is
+    not in the schema the model was shown, it does not go on the wire.
+
+    Unknown keys are DROPPED here, but every caller pairs this with
+    ``refuse_undeclared()`` so the caller is told. Silently dropping is the worse
+    failure for an agent: it reports success while the setting it asked for was never
+    applied, and the model has no way to learn that the parameter does not exist.
+    """
+    allowed = schema_keys(tool_name, tools) | frozenset(extra_allowed)
+    filtered = {k: v for k, v in args.items() if k in allowed}
+    return form_data(filtered, exclude=exclude)
+
+
+def refuse_undeclared(
+    args: dict,
+    tool_name: str,
+    tools: Iterable[Any],
+    *,
+    exclude: Iterable[str] = ("confirm",),
+    extra_allowed: Iterable[str] = (),
+    endpoint: str = "",
+) -> list[TextContent] | None:
+    """err() naming any argument the tool does not declare, or None if all are known.
+
+    Refusing beats dropping: the caller finds out that `checkpointInterval` is not a
+    parameter of this tool instead of believing a no-op succeeded.
+    """
+    unknown = rejected_keys(
+        args, tool_name, tools, exclude=exclude, extra_allowed=extra_allowed
+    )
+    if not unknown:
+        return None
+    declared = sorted(schema_keys(tool_name, tools))
+    target = endpoint or "a Couchbase settings endpoint"
+    return err(
+        f"Unrecognised argument(s) for {tool_name}: {unknown}.",
+        tool=tool_name,
+        hint=(
+            f"This tool forwards its arguments to {target}, which accepts more fields "
+            "than the tool exposes — so an undeclared key would become a real "
+            "configuration change that was never reviewed. Refusing rather than "
+            "silently dropping it, because a dropped key looks like success. "
+            f"Declared parameters: {declared}."
+        ),
+        declared_parameters=declared,
+    )
+
+
+def rejected_keys(
+    args: dict,
+    tool_name: str,
+    tools: Iterable[Any],
+    *,
+    exclude: Iterable[str] = ("confirm",),
+    extra_allowed: Iterable[str] = (),
+) -> list[str]:
+    """Keys that form_data_declared() would silently drop. For a clear refusal."""
+    allowed = schema_keys(tool_name, tools) | frozenset(extra_allowed) | set(exclude)
+    return sorted(k for k in args if k not in allowed)
+
+
 # ── Redaction ────────────────────────────────────────────────────────────────
 
 # Substrings (case-insensitive) that mark a field as sensitive. A key is
@@ -527,6 +822,12 @@ def form_data(args: dict, exclude: Iterable[str] = ("confirm",)) -> dict:
 # the admin surface spans many services with inconsistent field naming.
 _SENSITIVE_KEY_PARTS: tuple[str, ...] = (
     "password",
+    # "pass"/"pwd"/"passwd" matter on their own: Couchbase's alerts endpoint
+    # names its SMTP password field `emailPass`, which does NOT contain
+    # "password", so it was logged and echoed in plaintext.
+    "pass",
+    "pwd",
+    "passwd",
     "passphrase",
     "secret",
     "token",
@@ -535,6 +836,7 @@ _SENSITIVE_KEY_PARTS: tuple[str, ...] = (
     "privatekey",
     "apikey",
     "api_key",
+    "bearer",
     "access_key",
     "accesskey",
     "auth",
@@ -546,6 +848,25 @@ _SENSITIVE_KEY_ALLOW: frozenset[str] = frozenset(
     {
         "auth_method",  # names the mechanism, not a credential
         "authentication_type",
+        # ok() now redacts EVERY response, so a bare-substring rule on
+        # "pass"/"auth"/"token" actively corrupts data an agent reads and writes
+        # back. The concrete case: an FTS index definition's analysis section, where
+        # masking `tokenizer` and `token_filters` makes an
+        # admin_fts_index_get -> admin_fts_index_create round-trip write
+        # "***REDACTED***" into the cluster.
+        "tokenizer",
+        "tokenizers",
+        "token_filters",
+        "token_maps",
+        "author",
+        "authtype",
+        "auth_type",
+        "authentication",
+        "oauth_enabled",
+        "bypass",
+        "compass",
+        "passive",
+        "passthrough",
     }
 )
 
@@ -559,7 +880,13 @@ def _is_sensitive_key(key: str) -> bool:
     return any(part in k for part in _SENSITIVE_KEY_PARTS)
 
 
-def redact(value: Any) -> Any:
+#: Depth beyond which redact() stops recursing. A caller-supplied argument nested
+#: ~500 deep raised RecursionError inside the audit path — after the handler had
+#: already executed — so the bucket was gone and the record was never written.
+_REDACT_MAX_DEPTH = 24
+
+
+def redact(value: Any, _depth: int = 0) -> Any:
     """Return a deep copy of ``value`` with sensitive fields masked.
 
     Recurses through dicts and lists. Any dict key whose name indicates a
@@ -569,18 +896,176 @@ def redact(value: Any) -> Any:
     echoed back in error context, so a failed ``admin_user_create`` never
     surfaces the plaintext password to the agent or the logs.
     """
+    if _depth > _REDACT_MAX_DEPTH:
+        return "...(nesting depth capped)"
     if isinstance(value, dict):
         return {
-            k: (REDACTED if _is_sensitive_key(k) else redact(v))
+            k: (REDACTED if _is_sensitive_key(k) else redact(v, _depth + 1))
             for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
-        return [redact(v) for v in value]
+        return [redact(v, _depth + 1) for v in value]
     return value
 
 
 def ok(data: Any) -> list[TextContent]:
+    """Successful tool response, with credential material masked.
+
+    Redaction used to apply only to logs and to err() context, so every
+    SUCCESSFUL response was dumped verbatim into the model's context. That leaked
+    real secrets from tools that are annotated read-only and therefore load in
+    the "safe" default deployment: admin_alerts_get returns the SMTP password,
+    admin_kmip_get the KMIP key configuration, admin_eventing_get the function
+    source (which routinely embeds API keys), admin_xdcr_references_list the
+    remote-cluster credentials.
+
+    A read tool returning a secret is still a credential disclosure. Responses
+    are now masked on the same rules as logs.
+    """
+    return [
+        TextContent(type="text", text=json.dumps(redact(data), indent=2, default=str))
+    ]
+
+
+def ok_allow_secrets(data: Any) -> list[TextContent]:
+    """Successful response that is permitted to carry credential material.
+
+    THE ONLY SANCTIONED EXCEPTION to ok()'s redaction, and deliberately named so
+    that every use is greppable and has to be justified in review.
+
+    It exists for exactly one case: Capella returns a generated database-credential
+    password once, at creation, and never again. A test client cannot connect
+    without it, and masking it would leave the caller holding an unusable
+    environment with no way to recover the password except deleting and recreating
+    the credential. So capella_env_ensure surfaces it a single time, at the moment
+    of creation, and says so in the payload.
+
+    Anything else returning a secret is a bug — use ok().
+    """
     return [TextContent(type="text", text=json.dumps(data, indent=2, default=str))]
+
+
+#: Key stamped into every err() payload so the audit classifier can distinguish a
+#: refusal from a success that happens to mention an error. Underscore-prefixed to
+#: make collision with a Couchbase REST field impossible.
+ERROR_MARKER = "_is_error"
+
+
+#: Identifier endings that mark a name as STRUCTURAL rather than a secret, even though
+#: it contains a sensitive fragment. `admin_password_policy_set` is a tool name;
+#: `passwordMinLength` is a policy field. Without this the masking swallowed the useful
+#: half of ordinary diagnostics.
+_NON_SECRET_ENDINGS: tuple[str, ...] = (
+    "set",
+    "get",
+    "list",
+    "policy",
+    "date",
+    "hash",
+    "length",
+    "expiry",
+    "expiration",
+    "enabled",
+    "disabled",
+    "required",
+    "type",
+    "format",
+    "count",
+    "age",
+    "min",
+    "max",
+    "name",
+    "id",
+)
+# NOTE: "field" is deliberately NOT here. `password_field=s3cret` names a credential
+# despite sounding structural, and treating it as structural left the secret in the
+# clear.
+
+
+def _is_secret_identifier(name: str) -> bool:
+    """Whether a key name in free text denotes a credential VALUE.
+
+    Two rules, because one alone was wrong in each direction:
+
+      * ends with a sensitive fragment -> yes (``password``, ``adminPassword``,
+        ``emailPass``, ``token``, ``clientSecret``).
+      * merely CONTAINS one -> yes only if it does not end in a structural word.
+        Pure substring matching masked ``admin_password_policy_set: [...]``; pure
+        suffix matching missed ``passwordValue=`` and ``user_password_new=``.
+    """
+    bare = name.strip("\"'").lower()
+    if not bare or bare in _SENSITIVE_KEY_ALLOW:
+        return False
+    if bare.endswith(tuple(_SENSITIVE_KEY_PARTS)):
+        return True
+    if any(fragment in bare for fragment in _SENSITIVE_KEY_PARTS):
+        return not bare.endswith(_NON_SECRET_ENDINGS)
+    return False
+
+
+def _value_is_prose(value: str) -> bool:
+    """Whether a value reads as an explanation rather than a credential.
+
+    A cluster that REJECTS a password echoes the reason back in the same field:
+
+        {"errors":{"password":"The password must be at least 6 characters long"}}
+
+    Masking that leaves an autonomous agent with ``***REDACTED***`` and no way to
+    self-correct — it retries the same invalid password forever. Credentials are single
+    tokens; validation messages are sentences. So a multi-word value is treated as
+    prose and preserved.
+
+    The residual risk is a genuine passphrase containing spaces being echoed back by an
+    endpoint. That is narrow, and blinding the automation is the larger harm here.
+    """
+    inner = value.strip().strip("\"'")
+    # An auth scheme plus its credential is two "words" and is never prose.
+    if re.match(r"^(?:Bearer|Basic|Digest)\s", inner, re.IGNORECASE):
+        return False
+    return len(inner.split()) >= 3
+
+
+def redact_text(text: str) -> str:
+    """Mask credential-looking assignments inside a free-form string.
+
+    redact() walks dicts and lists; a bare string was returned unchanged. Exception
+    messages are the one place attacker- and cluster-influenced text enters a response
+    and a log line without passing through a dict, so they need their own pass.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+
+    fragments = "|".join(re.escape(part) for part in _SENSITIVE_KEY_PARTS)
+    pattern = re.compile(
+        r"(?P<key>[\"\']?[\w.-]*?(?:" + fragments + r")[\w.-]*[\"\']?)"
+        r"(?P<sep>\s*[:=]+\s*)"
+        # A scheme-prefixed value is ONE value. Without this alternative the value
+        # matched only the word "Bearer", so `Authorization: Bearer <jwt>` became
+        # `Authorization: ***REDACTED*** <jwt>` — the label masked and the credential
+        # left in place, which is worse than not matching at all.
+        r"(?P<val>(?:Bearer|Basic|Digest)\s+[A-Za-z0-9._~+/=-]+"
+        r"|\"[^\"]*\"|\'[^\']*\'|[^\s,;&}\)\]]+)",
+        re.IGNORECASE,
+    )
+
+    def _mask(match: re.Match) -> str:
+        if not _is_secret_identifier(match.group("key")):
+            return match.group(0)
+        if _value_is_prose(match.group("val")):
+            return match.group(0)
+        return f"{match.group('key')}{match.group('sep')}{REDACTED}"
+
+    text = pattern.sub(_mask, text)
+
+    # `Authorization: Bearer <jwt>` carries the credential in the VALUE with no
+    # sensitive key name at all, and a space between scheme and token — so neither rule
+    # above sees it. It is the single most common way a token reaches a log.
+    return re.sub(
+        r"\b(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/=-]{8,})",
+        lambda m: f"{m.group(1)} {REDACTED}",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def err(msg: str, **context) -> list[TextContent]:
@@ -590,7 +1075,21 @@ def err(msg: str, **context) -> list[TextContent]:
     Any ``args`` (or other dict/list) passed in ``context`` is redacted before
     serialization so credentials in the failing call are never echoed back.
     """
-    payload = {"error": msg}
+    # The MESSAGE is redacted too, not just the context.
+    #
+    # Only `context` values went through redact(), and redact() is a no-op on a bare
+    # string — so `err(f"{type(exc).__name__}: {exc}")` in every handler's except
+    # block passed the exception text through untouched, and admin_request folds the
+    # cluster's raw response body into that text. Any endpoint that echoes a submitted
+    # field back on error would put it in the response and the log.
+    payload = {"error": redact_text(msg)}
     if context:
         payload.update({k: redact(v) for k, v in context.items()})
+    # Machine-readable discriminator for the audit classifier. Reading back the
+    # presence of an "error" KEY was wrong: several handlers return a SUCCESS payload
+    # that carries a top-level "error" describing a sub-resource problem (a phase
+    # result, a per-item failure in a batch), and those were being recorded as
+    # denials — which corrupts exactly the record an auditor relies on. Only err()
+    # sets this, so only err() can be classified as a refusal.
+    payload[ERROR_MARKER] = True
     return [TextContent(type="text", text=json.dumps(payload, indent=2, default=str))]

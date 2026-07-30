@@ -64,8 +64,13 @@ RUN pip install --prefix=/install \
     "uvicorn>=0.27" \
     "starlette>=0.35" \
     "PyJWT[crypto]>=2.8.0" \
-    "cryptography>=42.0" \
-    "requests>=2.31"
+    "cryptography>=44.0.1" \
+    "requests>=2.32.4" \
+    # The image COPIES gui/ but did not install its dependencies, so the admin
+    # console could not start there — the packaging test passed on the COPY line
+    # alone. Shipping the code without the runtime is worse than shipping neither.
+    "flask>=3.0" \
+    "flask-cors>=6.0.0"
 
 # ── Stage 2: runtime image ────────────────────────────────────────────────────
 FROM python:3.12-slim
@@ -90,11 +95,33 @@ WORKDIR /app
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application code
+# Copy application code.
+#
+# EVERY top-level module server.py imports must be here. This list omitted
+# audit.py, authz.py and profile_config.py, so the built image could not start at
+# all — `import server` raised ModuleNotFoundError on the first one. Which means
+# every control added in the security review was absent from the artifact that would
+# actually be deployed, and the natural fix under time pressure (`COPY . .`) would
+# pull .env and credentials into the image, defeating .dockerignore.
+#
+# Kept as an explicit list rather than `COPY . .` so what ships is a decision. The
+# test at tests/test_packaging.py fails if a module server.py imports is missing here.
 COPY --chown=mcp:mcp server.py /app/server.py
+COPY --chown=mcp:mcp audit.py /app/audit.py
+COPY --chown=mcp:mcp authz.py /app/authz.py
+COPY --chown=mcp:mcp deployment.py /app/deployment.py
 COPY --chown=mcp:mcp logging_config.py /app/logging_config.py
+COPY --chown=mcp:mcp profile_config.py /app/profile_config.py
 COPY --chown=mcp:mcp handlers /app/handlers
 COPY --chown=mcp:mcp auth /app/auth
+COPY --chown=mcp:mcp gui /app/gui
+
+# The enterprise profile's default audit sink lives here, and an unwritable audit
+# path is now fatal at startup (audit.py) — so the directory has to exist and belong
+# to the runtime user, or every enterprise container would refuse to boot.
+RUN mkdir -p /var/log/couchbase-admin-mcp \
+    && chown mcp:mcp /var/log/couchbase-admin-mcp \
+    && chmod 0700 /var/log/couchbase-admin-mcp
 
 USER mcp
 

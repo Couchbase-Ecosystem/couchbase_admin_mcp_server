@@ -282,7 +282,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -393,7 +393,13 @@ def _vec_hyperscale(args: dict) -> list[TextContent]:
 # A conservative regex for the optional WHERE predicate — disallows statement
 # terminators that could be used to chain DDL. The cluster's SQL++ parser is
 # the real defense; this is just an early sanity check.
-_WHERE_FORBID = re.compile(r"[;]")
+# A semicolon check alone was the entire guard on this free-text SQL++ fragment.
+# It stopped chaining and nothing else: "1=1 --" comments out the trailing WITH
+# clause carrying the index's dimension and similarity, so the index built is not
+# the one that was reviewed; "META().id IN (SELECT RAW k FROM `other` k)" reads
+# across a keyspace boundary the tool never named; "myudf(x)=1" invokes a
+# JavaScript UDF during the index build.
+_WHERE_FORBID = re.compile(r"[;]|--|/\*|\(\s*SELECT\b", re.IGNORECASE)
 
 
 def _vec_composite(args: dict) -> list[TextContent]:
@@ -493,4 +499,3 @@ def _conflict_query(args: dict) -> list[TextContent]:
             ),
         }
     )
-

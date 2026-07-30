@@ -1,0 +1,269 @@
+"""
+The GUI's POST /api/call is a SECOND dispatch path into the same handlers, and every
+control the MCP transport enforces has to hold here too.
+
+It did not. Round-2 review found the console:
+
+  * never called check_scope, so any authenticated user in the tenant had the full
+    destructive tool surface regardless of the scopes in their token;
+  * tested the hard ceiling only INSIDE ``if in_confirm_set and automation_mode``, so
+    with automation off a ceiling tool fell through to the ordinary gate and the
+    caller's own ``confirm: true`` satisfied it;
+  * emitted no audit record for any operation, making the console the one way to act
+    without leaving a trace;
+  * enforced its loopback posture from GUI_HOST, which the gunicorn entrypoint never
+    sets — so the guard read the 127.0.0.1 default while the process served every
+    interface.
+
+These tests drive the real Flask app with the real decision code.
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import sys
+
+import pytest
+
+flask = pytest.importorskip("flask")
+
+
+def _load_gui(monkeypatch, **env):
+    """Import gui.gui_server under a given environment, fresh each time."""
+    monkeypatch.setenv("CB_ADMIN_PROFILE", env.pop("CB_ADMIN_PROFILE", "workstation"))
+    for key, value in env.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+
+    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
+        sys.modules.pop(name, None)
+    import profile_config
+
+    importlib.reload(profile_config)
+    module = importlib.import_module("gui.gui_server")
+    return importlib.reload(module)
+
+
+@pytest.fixture
+def audit_file(tmp_path, monkeypatch):
+    """Point the dedicated audit sink at a real file and reset its memo."""
+    path = tmp_path / "audit.log"
+    monkeypatch.setenv("CB_ADMIN_AUDIT_FILE", str(path))
+    import audit
+
+    audit.reset_audit_sink()
+    yield path
+    audit.reset_audit_sink()
+
+
+@pytest.fixture
+def gui(monkeypatch, audit_file):
+    module = _load_gui(
+        monkeypatch,
+        CB_GUI_INSECURE_NO_AUTH="1",
+        OAUTH_ENABLED="false",
+        CB_ADMIN_ALWAYS_CONFIRM="admin_bucket_delete",
+        CB_ADMIN_READ_ONLY_MODE="false",
+    )
+    module.app.config.update(TESTING=True)
+    return module
+
+
+def _call(client, tool, **arguments):
+    return client.post("/api/call", json={"tool": tool, "arguments": arguments})
+
+
+def _audit_records(path):
+    """Audit records actually written to the dedicated sink FILE.
+
+    Deliberately not caplog. caplog attaches to the ROOT logger, so it observes the
+    logger CALL rather than a configured sink — and `couchbase-admin` sets
+    propagate=False once configure_from_env() has run. That is exactly why the earlier
+    version of these tests passed while the GUI process configured no logging at all
+    and dropped every audit record on the floor. Reading the file is the only
+    assertion that can tell "emitted" from "discarded".
+    """
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "AUDIT " in line:
+            out.append(json.loads(line.split("AUDIT ", 1)[1]))
+    return out
+
+
+# ── The hard ceiling must not be satisfiable by the caller's own confirm ──────
+
+
+def test_ceiling_tool_is_refused_when_automation_is_off(gui, monkeypatch):
+    """The exact drift: the ceiling check was nested under automation_mode, so with
+    automation OFF — the default — a ceiling tool reached the ordinary confirmation
+    gate, where ``confirm: true`` from the request body satisfied it.
+
+    Forced into the enterprise posture so no human is present; the tool must be
+    refused outright rather than gated.
+    """
+    monkeypatch.setattr(
+        gui.profile_config, "PROFILE_NAME", gui.profile_config.ENTERPRISE
+    )
+    with gui.app.test_client() as client:
+        resp = _call(client, "admin_bucket_delete", name="prod", confirm=True)
+    assert resp.status_code == 403, resp.get_json()
+    body = resp.get_json()
+    assert body["hard_ceiling"] is True
+    assert "confirm" in body["error"]
+
+
+def test_a_ceiling_tool_is_refused_through_the_console_even_on_a_workstation(gui):
+    """The console is not the interactive channel the ceiling means.
+
+    It is unauthenticated in the workstation profile, and its origin allowlist has to
+    permit any localhost port — so any locally-served page is an allowed origin. Both
+    facts mean a browser request cannot evidence WHICH human, or any human. Ceiling
+    tools go through an interactive MCP session, where the client surfaces the specific
+    call and a person answers it.
+    """
+    with gui.app.test_client() as client:
+        resp = _call(client, "admin_bucket_delete", name="prod", confirm=True)
+    assert resp.status_code == 403
+    body = resp.get_json()
+    assert body["hard_ceiling"] is True
+    assert "confirm" in body["error"]
+
+
+def test_automation_cannot_be_claimed_in_the_request_body(gui):
+    """`{"automation": true}` in the body must be inert — authorization comes from
+    the token's scopes, never from something the caller types."""
+    with gui.app.test_client() as client:
+        resp = client.post(
+            "/api/call",
+            json={
+                "tool": "admin_bucket_delete",
+                "arguments": {"name": "prod"},
+                "automation": True,
+            },
+        )
+    assert resp.status_code == 403
+    assert resp.get_json()["requires_confirmation"] is True
+
+
+# ── Every decision leaves an audit record ────────────────────────────────────
+
+
+def test_a_refusal_is_audited(gui, audit_file):
+    """The console emitted nothing at all. An unlogged privileged path defeats the
+    entire point of the audit trail.
+
+    Asserted against the FILE, because the GUI process also never configured logging
+    — so the records it did emit went to a tree with no handlers and were discarded at
+    INFO level. A caplog-based assertion could not see that.
+    """
+    with gui.app.test_client() as client:
+        _call(client, "admin_bucket_delete", name="prod")
+
+    records = _audit_records(audit_file)
+    assert records, "no audit record reached the sink for a GUI refusal"
+    payload = records[-1]
+    assert payload["tool"] == "admin_bucket_delete"
+    # denied_hard_ceiling, not denied_confirmation: the console never counts as the
+    # human a ceiling tool requires, because in the workstation profile it is
+    # unauthenticated and its origin allowlist necessarily admits any localhost port.
+    assert payload["decision"] == "denied_hard_ceiling"
+    # The record must say the console was the route, so an investigator can tell a
+    # console action from an agent one.
+    assert payload["via"] == "gui"
+    # ...and WHO must be populated even with no token, or the record answers nothing.
+    assert payload["principal"], payload
+
+
+def test_a_disabled_tool_refusal_is_audited(monkeypatch, audit_file):
+    module = _load_gui(
+        monkeypatch,
+        CB_GUI_INSECURE_NO_AUTH="1",
+        OAUTH_ENABLED="false",
+        CB_ADMIN_DISABLED_TOOLS="admin_bucket_create",
+    )
+    with module.app.test_client() as client:
+        resp = _call(client, "admin_bucket_create", name="x")
+    assert resp.status_code == 403
+    assert any(r["decision"] == "denied_disabled" for r in _audit_records(audit_file))
+
+
+# ── The unauthenticated console must refuse non-local callers ────────────────
+
+
+def test_unauthenticated_console_refuses_a_remote_client(gui):
+    """GUI_HOST is unset under `gunicorn -b 0.0.0.0:5173`, so the startup check read
+    the loopback default while the socket served every interface. The peer address is
+    checked instead, which no launcher can misreport."""
+    with gui.app.test_client() as client:
+        resp = client.post(
+            "/api/call",
+            json={"tool": "admin_bucket_list", "arguments": {}},
+            environ_overrides={"REMOTE_ADDR": "10.1.2.3"},
+        )
+    assert resp.status_code == 403
+    assert "non-loopback" in resp.get_json()["error"]
+
+
+def test_a_forwarded_for_header_cannot_claim_to_be_local(gui):
+    """Trusting X-Forwarded-For would let any remote client assert it is local."""
+    with gui.app.test_client() as client:
+        resp = client.post(
+            "/api/call",
+            json={"tool": "admin_bucket_list", "arguments": {}},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+            environ_overrides={"REMOTE_ADDR": "10.1.2.3"},
+        )
+    assert resp.status_code == 403
+
+
+def test_a_local_client_is_served(gui):
+    """The supported case must keep working: the check is on the peer, and the test
+    client's default peer is loopback."""
+    with gui.app.test_client() as client:
+        resp = client.get("/api/tools")
+    assert resp.status_code == 200
+
+
+# ── Scope enforcement ────────────────────────────────────────────────────────
+
+
+def test_a_read_only_token_cannot_invoke_a_write_tool(monkeypatch, audit_file):
+    """check_scope was never called here, so scopes were decorative: any
+    authenticated user held the entire tool surface."""
+    module = _load_gui(
+        monkeypatch,
+        OAUTH_ENABLED="false",
+        CB_GUI_INSECURE_NO_AUTH="1",
+    )
+    from auth import scope_gate
+
+    # A principal holding only the read scope.
+    monkeypatch.setattr(
+        scope_gate,
+        "current_claims",
+        lambda: {"sub": "svc-reader", "scope": "couchbase-admin-mcp:read"},
+    )
+    with module.app.test_client() as client:
+        resp = _call(client, "admin_bucket_create", name="x", ramQuotaMB=100)
+
+    assert resp.status_code == 403, resp.get_json()
+    assert "requires scope" in resp.get_json()["error"]
+    assert any(r["decision"] == "denied_scope" for r in _audit_records(audit_file))
+
+
+def test_claims_do_not_leak_between_requests(gui):
+    """Flask serves requests on pooled threads and a contextvar set in a thread
+    outlives the request, so without an explicit clear, request N+1 could inherit
+    request N's identity and scopes."""
+    from auth import scope_gate
+
+    scope_gate.set_token_claims({"sub": "leaked-principal"})
+    with gui.app.test_client() as client:
+        client.get("/api/tools")
+    # before_request clears it; the stale identity must not survive into the next call.
+    assert scope_gate.current_claims() is None

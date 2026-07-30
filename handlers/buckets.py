@@ -10,7 +10,53 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from .shared import admin_request, admin_request_json, err, ok, quote_path
+from .shared import admin_request, admin_request_json, err, form_data, ok, quote_path
+
+#: Keys /pools/default/buckets/<b> accepts on update. Built from a list rather
+#: than from args so an invented key cannot reach the endpoint.
+#: Keys accepted when CREATING a bucket (a superset of the update keys: name,
+#: bucketType and conflict resolution are create-only).
+_BUCKET_CREATE_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "bucketType",
+        "ramQuotaMB",
+        "replicaNumber",
+        "replicaIndex",
+        "flushEnabled",
+        "maxTTL",
+        "compressionMode",
+        "evictionPolicy",
+        "durabilityMinLevel",
+        "threadsNumber",
+        "storageBackend",
+        "conflictResolutionType",
+        "rank",
+        "historyRetentionBytes",
+        "historyRetentionSeconds",
+        "historyRetentionCollectionDefault",
+    }
+)
+
+_BUCKET_UPDATE_KEYS: frozenset[str] = frozenset(
+    {
+        "ramQuotaMB",
+        "replicaNumber",
+        "replicaIndex",
+        "flushEnabled",
+        "maxTTL",
+        "compressionMode",
+        "evictionPolicy",
+        "durabilityMinLevel",
+        "threadsNumber",
+        "storageBackend",
+        "conflictResolutionType",
+        "rank",
+        "historyRetentionBytes",
+        "historyRetentionSeconds",
+        "historyRetentionCollectionDefault",
+    }
+)
 
 TOOLS: list[Tool] = [
     Tool(
@@ -90,7 +136,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -205,20 +251,30 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", f"/pools/default/buckets/{b}"))
 
         if name == "admin_bucket_create":
-            data = {k: v for k, v in args.items() if v is not None and k != "confirm"}
+            # form_data + allow-list, matching admin_bucket_update. The raw
+            # comprehension bypassed form_value, so a JSON `false` became the string
+            # "False" — non-empty, and read as ENABLED by a truthy-string parser.
+            # flushEnabled=false arming flush instead of disarming it is the failure
+            # that matters, and create had it while update was fixed.
+            data = form_data(
+                {k: v for k, v in args.items() if k in _BUCKET_CREATE_KEYS}
+            )
             if "ramQuota" in data:
                 data["ramQuotaMB"] = data.pop("ramQuota")
             return ok(admin_request("POST", "/pools/default/buckets", data=data))
 
         if name == "admin_bucket_update":
             b = quote_path(args["bucket_name"])
-            data = {
-                k: v
-                for k, v in args.items()
-                if v is not None and k not in ("bucket_name", "confirm")
-            }
-            if "ramQuota" in data:
-                data["ramQuotaMB"] = data.pop("ramQuota")
+            renamed = dict(args)
+            if "ramQuota" in renamed:
+                renamed["ramQuotaMB"] = renamed.pop("ramQuota")
+            # form_data(), not a raw comprehension: the comprehension bypassed
+            # form_value, so a JSON boolean became "False" — a non-empty string
+            # that a truthy-string parser reads as ENABLED. flushEnabled=false
+            # arming flush instead of disarming it is the failure that matters.
+            data = form_data(
+                {k: v for k, v in renamed.items() if k in _BUCKET_UPDATE_KEYS}
+            )
             return ok(admin_request("POST", f"/pools/default/buckets/{b}", data=data))
 
         if name == "admin_bucket_delete":

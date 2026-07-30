@@ -13,6 +13,32 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .shared import admin_request, admin_request_json, err, form_data, ok, quote_path
 
+#: queryTmpSpaceDir is a filesystem path the query service writes to, so this
+#: endpoint is not a safe mass-assignment target either.
+_QUERY_SETTINGS_KEYS: frozenset[str] = frozenset(
+    {
+        "queryTmpSpaceDir",
+        "queryTmpSpaceSize",
+        "queryPipelineBatch",
+        "queryPipelineCap",
+        "queryScanCap",
+        "queryTimeout",
+        "queryPreparedLimit",
+        "queryCompletedLimit",
+        "queryCompletedThreshold",
+        "queryLogLevel",
+        "queryMaxParallelism",
+        "queryN1qlFeatCtrl",
+        "queryTxTimeout",
+        "queryMemoryQuota",
+        "queryUseCBO",
+        "queryCleanupClientAttempts",
+        "queryCleanupLostAttempts",
+        "queryCleanupWindow",
+        "queryNumAtrs",
+    }
+)
+
 TOOLS: list[Tool] = [
     Tool(
         name="admin_stats_bucket",
@@ -247,14 +273,42 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/internalSettings"))
 
         if name == "admin_internal_settings_set":
-            data = form_data(args)
+            # /internalSettings is an unbounded tunable surface that Couchbase does
+            # not document as customer-facing, so the caller must name each key
+            # deliberately via `settings` rather than having the whole argument
+            # dict forwarded.
+            explicit = args.get("settings")
+            if not isinstance(explicit, dict) or not explicit:
+                return err(
+                    "admin_internal_settings_set requires an explicit `settings` "
+                    "object naming each tunable to change.",
+                    tool=name,
+                    hint=(
+                        "Every argument used to be forwarded wholesale to "
+                        "/internalSettings. Pass e.g. "
+                        '{"settings": {"maxParallelIndexers": 4}} so the change is '
+                        "reviewable."
+                    ),
+                )
+            data = form_data(explicit)
             return ok(admin_request("POST", "/internalSettings", data=data))
 
         if name == "admin_query_settings_get":
             return ok(admin_request("GET", "/settings/querySettings"))
 
         if name == "admin_query_settings_set":
-            data = form_data(args)
+            unknown = sorted(
+                k for k in args if k not in _QUERY_SETTINGS_KEYS and k != "confirm"
+            )
+            if unknown:
+                return err(
+                    f"Unrecognised query setting(s): {unknown}.",
+                    tool=name,
+                    hint=f"Permitted: {sorted(_QUERY_SETTINGS_KEYS)}.",
+                )
+            data = form_data(
+                {k: v for k, v in args.items() if k in _QUERY_SETTINGS_KEYS}
+            )
             return ok(admin_request("POST", "/settings/querySettings", data=data))
 
         if name == "admin_prometheus_targets":

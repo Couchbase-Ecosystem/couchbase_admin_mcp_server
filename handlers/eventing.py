@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from .egress import guard_nested_host_fields
 from .shared import admin_request, admin_request_json, err, ok, quote_path
 
 # Cluster-manager proxy prefix for the Eventing REST API. See module
@@ -116,7 +117,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -154,7 +155,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -243,6 +244,36 @@ TOOLS: list[Tool] = [
 ]
 
 
+def _guard_eventing_definition(definition: object, tool: str) -> object:
+    """Authorize the outbound destinations inside an Eventing function definition.
+
+    This is the most powerful egress sink in the surface and it had no guard at all.
+    A definition carries:
+
+      depcfg.curl[]  cluster-originated outbound HTTP with a caller-chosen hostname,
+                     plus its own credentials — i.e. exactly the shape the egress
+                     allowlist exists for, hidden one level down in a nested object.
+      appcode        arbitrary JavaScript executed on cluster nodes on every mutation,
+                     which can itself issue curl() calls to those bindings.
+
+    The curl bindings are checked here. The appcode is NOT statically analysable, so
+    the honest control for it is the confirmation/automation gate plus the audit
+    record — which is why admin_eventing_create_or_update and _deploy are now both
+    annotated destructive.
+    """
+    # A structural walk over the WHOLE definition, at any depth and any shape.
+    #
+    # The previous version indexed the one path it expected —
+    # definition["depcfg"]["curl"][i]["hostname"] — and returned the definition
+    # unchecked whenever anything differed: a list of definitions (which this endpoint
+    # accepts), a non-dict depcfg, a single curl object instead of a list, or a
+    # differently-spelled host key. Each of those was a complete bypass of the guard
+    # on the most powerful egress sink in the tool surface.
+    guard_nested_host_fields(definition, tool=tool, path="definition")
+
+    return definition
+
+
 def handle(name: str, args: dict) -> list[TextContent]:
     try:
         if name == "admin_eventing_list":
@@ -258,7 +289,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
                 admin_request_json(
                     "POST",
                     _evt_path(f"/functions/{fn}"),
-                    payload=args["definition"],
+                    payload=_guard_eventing_definition(args["definition"], name),
                 )
             )
 

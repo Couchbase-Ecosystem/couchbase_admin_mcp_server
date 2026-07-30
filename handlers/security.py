@@ -10,7 +10,52 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from .shared import admin_request, err, form_data, ok, quote_path
+from .shared import (
+    admin_request,
+    err,
+    form_data,
+    form_data_declared,
+    ok,
+    quote_path,
+    refuse_undeclared,
+)
+
+#: Keys /settings/audit accepts. `auditdEnabled=false` disables cluster auditing
+#: outright, so this list is the difference between a reviewable change and silent
+#: anti-forensics.
+_AUDIT_SETTINGS_KEYS: frozenset[str] = frozenset(
+    {
+        "auditdEnabled",
+        "logPath",
+        "rotateInterval",
+        "rotateSize",
+        "disabledUsers",
+        "disabled",
+        "enabledEvents",
+        "uid",
+    }
+)
+
+#: Keys /settings/security accepts. This endpoint governs TLS posture and UI
+#: exposure, so it is the last place mass assignment is acceptable: forwarding
+#: every caller-supplied key let a model set fields nobody reviewed — an
+#: unparseable cipherSuites value, for instance, means "use the defaults", which
+#: is a silent TLS downgrade.
+_SECURITY_SETTINGS_KEYS: frozenset[str] = frozenset(
+    {
+        "clusterEncryptionLevel",
+        "disableUIOverHttp",
+        "disableUIOverHttps",
+        "tlsMinVersion",
+        "cipherSuites",
+        "honorCipherOrder",
+        "hstsMaxAge",
+        "hstsIncludeSubDomains",
+        "hstsPreload",
+        "responseHeaders",
+        "allowNonLocalCACertUpload",
+    }
+)
 
 TOOLS: list[Tool] = [
     # ── Users ────────────────────────────────────────────────────────────
@@ -75,7 +120,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -230,7 +275,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -263,7 +308,7 @@ TOOLS: list[Tool] = [
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
         ),
     ),
@@ -382,23 +427,60 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/audit"))
 
         if name == "admin_audit_set":
-            # form_data converts booleans to lowercase 'true'/'false' as Couchbase
-            # REST expects, and strips 'confirm' from the payload.
-            data = form_data(args)
+            # Key allow-list, fail closed. This was the ONE settings endpoint left
+            # with full mass assignment — and it configures the cluster's own audit
+            # log, which is the first thing someone disables after doing something
+            # destructive. Every neighbouring endpoint got an allow-list; this one
+            # needed it most.
+            unknown = sorted(
+                k for k in args if k not in _AUDIT_SETTINGS_KEYS and k != "confirm"
+            )
+            if unknown:
+                return err(
+                    f"Unrecognised audit setting(s): {unknown}.",
+                    tool=name,
+                    hint=(
+                        "This endpoint controls the cluster's audit log. Only known "
+                        f"keys are forwarded. Permitted: {sorted(_AUDIT_SETTINGS_KEYS)}."
+                    ),
+                )
+            data = form_data(
+                {k: v for k, v in args.items() if k in _AUDIT_SETTINGS_KEYS}
+            )
             return ok(admin_request("POST", "/settings/audit", data=data))
 
         if name == "admin_password_policy_get":
             return ok(admin_request("GET", "/settings/passwordPolicy"))
 
         if name == "admin_password_policy_set":
-            data = form_data(args)
+            refusal = refuse_undeclared(
+                args, name, TOOLS, endpoint="/settings/passwordPolicy"
+            )
+            if refusal is not None:
+                return refusal
+            data = form_data_declared(args, name, TOOLS)
             return ok(admin_request("POST", "/settings/passwordPolicy", data=data))
 
         if name == "admin_security_settings_get":
             return ok(admin_request("GET", "/settings/security"))
 
         if name == "admin_security_settings_set":
-            data = form_data(args)
+            unknown = sorted(
+                k for k in args if k not in _SECURITY_SETTINGS_KEYS and k != "confirm"
+            )
+            if unknown:
+                return err(
+                    f"Unrecognised setting(s) for /settings/security: {unknown}.",
+                    tool=name,
+                    hint=(
+                        "This endpoint controls TLS posture and UI exposure, so "
+                        "only known keys are forwarded. Permitted: "
+                        f"{sorted(_SECURITY_SETTINGS_KEYS)}."
+                    ),
+                )
+            data = form_data(
+                {k: v for k, v in args.items() if k in _SECURITY_SETTINGS_KEYS}
+            )
             return ok(admin_request("POST", "/settings/security", data=data))
 
         return err(f"Unknown security tool: {name}", tool=name)

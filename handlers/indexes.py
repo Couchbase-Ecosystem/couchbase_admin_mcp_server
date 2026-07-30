@@ -18,10 +18,12 @@ from .shared import (
     admin_request,
     assert_index_create_ddl,
     assert_index_drop_ddl,
+    block_dml_if_readonly,
     err,
-    form_data,
+    form_data_declared,
     get_sdk_connection,
     ok,
+    refuse_undeclared,
 )
 
 TOOLS: list[Tool] = [
@@ -232,6 +234,13 @@ def handle(name: str, args: dict) -> list[TextContent]:
                 invalid = assert_index_create_ddl(args["statement"])
                 if invalid:
                     return err(invalid, tool=name)
+                # Read-only mode must also mean something for the tools that accept
+                # a raw statement. block_dml_if_readonly previously had zero callers
+                # anywhere in this server — it read as a control while enforcing
+                # nothing, which is worse than its absence.
+                blocked = block_dml_if_readonly(args["statement"])
+                if blocked:
+                    return err(blocked, tool=name)
                 return _run_n1ql(args["statement"])
 
             if not args.get("bucket_name"):
@@ -273,6 +282,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
                 invalid = assert_index_drop_ddl(args["statement"])
                 if invalid:
                     return err(invalid, tool=name)
+                blocked = block_dml_if_readonly(args["statement"])
+                if blocked:
+                    return err(blocked, tool=name)
                 return _run_n1ql(args["statement"])
 
             if not args.get("bucket_name"):
@@ -309,7 +321,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/indexes"))
 
         if name == "admin_index_settings_set":
-            data = form_data(args)
+            refusal = refuse_undeclared(args, name, TOOLS, endpoint="/settings/indexes")
+            if refusal is not None:
+                return refusal
+            data = form_data_declared(args, name, TOOLS)
             return ok(admin_request("POST", "/settings/indexes", data=data))
 
         return err(f"Unknown index tool: {name}", tool=name)

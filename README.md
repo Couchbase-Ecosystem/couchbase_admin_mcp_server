@@ -320,3 +320,115 @@ pytest
 ## License
 
 MIT © 2026 Chris Ahrendt
+
+---
+
+## Couchbase Capella
+
+Capella does **not** expose the ns_server Management REST API on 8091/18091 to
+tenants. A Capella *database credential* carries bucket-scoped data roles and
+never Full Admin, so the `admin_*` tools in this server cannot work against a
+Capella cluster — they are an authorization boundary away, not a network hop.
+
+Point this server at a Capella connection string and it detects that, then
+**unloads the tools that cannot work** rather than offering ~130 tools that each
+fail with an opaque 401 on first use. An agent cannot misroute to a tool it never
+sees.
+
+### What is reachable on Capella
+
+| Surface | Auth | Covered by |
+|---|---|---|
+| Management API v4 (`cloudapi.cloud.couchbase.com`) | Organization API key secret, Bearer | `capella_*` tools |
+| Prometheus scrape on `:18091` | Database credential with read on all buckets | `admin_prometheus_targets` |
+| SQL++ / query service | Database credential | `cb_*` diagnostics, index advisor, EXPLAIN |
+| Data API (once enabled via v4) | Database credential | out of scope here |
+
+What is genuinely unavailable — rebalance, failover, node add/remove, server
+groups, `/internalSettings`, log collection, DARE/KMIP, LDAP/SAML — is mostly not
+withheld but *reassigned*: those are operations Couchbase performs as the
+operator. DARE/KMIP becomes CMEK; LDAP/SAML becomes organization SSO. The one
+real gap is FTS index administration, which has no v4 equivalent.
+
+### Ephemeral test environments
+
+The headline use case: stand up a throwaway Capella cluster, point a mobile app
+at it, tear it down. That is not one API call — it is create cluster, wait 5-15
+minutes, allowlist the client, create a bucket and credential, create an App
+Service, wait another 5-10 minutes, create an App Endpoint, bring it online. And
+teardown is the same list backwards, with ordering constraints.
+
+`capella_env_ensure` does all of it as a **reconciler**. Nothing can block for
+fifteen minutes, so each call does whatever can be done now and returns a phase
+plus a retry interval:
+
+```
+capella_env_ensure(env_name="ios-pr-4821", app_services=true,
+                   allowed_cidrs=["203.0.113.4/32"], ttl_hours=4)
+  -> {"phase": "creating_cluster", "done": false, "retry_after_s": 30}
+  -> {"phase": "waiting_for_cluster", ...}          # call again
+  -> {"phase": "creating_app_service", ...}
+  -> {"phase": "ready", "connection_string": "couchbases://...",
+      "couchbase_lite_url": "wss://.../ios-pr-4821-endpoint", ...}
+```
+
+Repeat calls are safe — existing resources are reused, never duplicated. There is
+**no local state file**: everything is derived from Capella itself via a naming
+convention plus an `mcp-env:{...}` marker written into the cluster description.
+A CI job that dies mid-provision leaves no orphaned bookkeeping, and the next
+`capella_env_ensure` picks up exactly where it left off.
+
+| Tool | Purpose |
+|---|---|
+| `capella_env_ensure` | Converge an environment; call until `phase == "ready"` |
+| `capella_env_status` | Read-only poll: cluster and App Service state, TTL remaining |
+| `capella_env_connection_info` | Connection string, sync URL, allowlist, warnings |
+| `capella_env_list` | Every managed environment, with age and expiry; unmanaged clusters flagged separately |
+| `capella_env_park` / `_resume` | Turn off / on without destroying — stops spend, keeps the environment |
+| `capella_env_teardown` | Destroy: App Service first, then cluster |
+| `capella_env_reap` | Tear down expired environments. **Dry run by default** |
+| `capella_guardrails_status` | What this server's blast radius actually is |
+
+Alongside these sit ~60 thin `capella_*` primitives, one per v4 operation, for
+when you know exactly which call you want.
+
+### Guardrails
+
+Unattended teardown needs `capella_cluster_delete` callable without
+confirmation — which is exactly the operation you least want pointed at
+production. Read-only mode is off by definition here, the `confirm:true` gate is
+bypassed for automation principals by design, and `CB_ADMIN_ALWAYS_CONFIRM` would
+stop teardown dead. None of them can express *"delete freely, but only inside the
+sandbox."*
+
+Four independent server-side limits do:
+
+- **`CAPELLA_ORG_ID`** — pins the organization; a conflicting caller override is refused.
+- **`CAPELLA_ALLOWED_PROJECTS`** — destructive operations are confined to these projects. Production is unreachable because it is not on the list. **Unset means fail closed**: the server will create but refuse to delete.
+- **`CAPELLA_ENV_NAME_PREFIX`** — destructive operations refuse any resource whose name lacks the prefix, covering the hand-made production cluster that happens to sit in an allowlisted project.
+- **`CAPELLA_MAX_ENVIRONMENTS`** — a spend ceiling, so a retry loop cannot provision without bound.
+
+Plus `CAPELLA_PROTECTED_CLUSTERS` for named exceptions, and Capella's own
+deletion-protection flag, which this server honors and cannot override.
+
+None of these can be relaxed by a tool argument, a token scope, or a model
+asserting that it is fine. Ask the running server what its posture is with
+`capella_guardrails_status`.
+
+### Risks Associated with LLMs
+
+- The use of large language models and similar technology involves risks, including the potential for inaccurate or harmful outputs.
+- Couchbase does not review or evaluate the quality or accuracy of such outputs, and such outputs may not reflect Couchbase's views.
+- You are solely responsible for determining whether to use large language models and related technology, and for complying with any license terms, terms of use, and your organization's policies governing your use of the same.
+
+---
+
+## 📢 Support Policy
+
+We truly appreciate your interest in this project!  
+This project is **community-maintained**, which means it's **not officially supported** by our support team.
+
+If you need help, have found a bug, or want to contribute improvements, the best place to do that is right here — by [opening a GitHub issue](https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server/issues).  
+Our support portal is unable to assist with requests related to this project, so we kindly ask that all inquiries stay within GitHub.
+
+Your collaboration helps us all move forward together — thank you!

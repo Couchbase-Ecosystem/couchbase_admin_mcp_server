@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from .egress import guard_host_like_fields
 from .shared import admin_request, err, ok
 
 TOOLS: list[Tool] = [
@@ -176,6 +177,13 @@ def handle(name: str, args: dict) -> list[TextContent]:
 
         if name == "admin_encryption_set":
             data = _build_form_data(args, exclude={"confirm", "additional_fields"})
+            # This tool had NO egress guard, while admin_kmip_set — the same class of
+            # operation — had one. /settings/security/encryptionAtRest also accepts
+            # key-source configuration, and additional_fields is free-form, so the
+            # master-encryption-key source could be redirected through this tool
+            # while the guard on the neighbouring one looked like the control was
+            # covered.
+            guard_host_like_fields(data, tool=name)
             return ok(
                 admin_request("POST", "/settings/security/encryptionAtRest", data=data)
             )
@@ -184,7 +192,23 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/security/kmip"))
 
         if name == "admin_kmip_set":
+            # Build the payload FIRST, then guard what is actually being sent.
+            #
+            # Checking args["kmipHost"] let `additional_fields={"kmipHost": ...}`
+            # walk straight past the guard: the key was absent from args, so no check
+            # ran, and _build_form_data then merged it into the request verbatim.
+            # additional_fields is an allow-list escape hatch by construction, so any
+            # guard has to run on the merged result, not the declared arguments.
             data = _build_form_data(args, exclude={"confirm", "additional_fields"})
+            # kmipHost decides where the cluster fetches its MASTER ENCRYPTION KEY.
+            # Pointed elsewhere, the cluster cannot decrypt its own data after a
+            # restart.
+            #
+            # This was a two-spelling denylist (`kmipHost`, `kmiphost`), so
+            # `KmipHost` in additional_fields walked past it. Guarding by key shape
+            # covers every casing and every other host-bearing field the endpoint
+            # accepts.
+            guard_host_like_fields(data, tool=name)
             return ok(admin_request("POST", "/settings/security/kmip", data=data))
 
         return err(f"Unknown encryption tool: {name}", tool=name)

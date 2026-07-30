@@ -74,6 +74,7 @@ destructive tools but do not change existing tool semantics.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -82,11 +83,20 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+# NOTE: profile_config applies the deployment profile's env defaults AT IMPORT
+# TIME, and handlers.shared snapshots CB_ADMIN_READ_ONLY_MODE at its own import
+# time — so profile_config must be imported before the handlers. isort places
+# plain `import x` ahead of `from x import y`, which preserves that ordering.
+import audit
+import authz
+import deployment
+import profile_config
+from auth import request_auth
 from auth.scope_gate import (
     check_scope,
-    clear_token_claims,
+    current_claims,
+    principal_of,
     session_has_automation_scope,
-    set_token_claims,
 )
 from auth.scope_gate import (
     configure as configure_scope_gate,
@@ -105,15 +115,16 @@ from handlers import (
     mcp_status,
     search_admin,
     security,
+    shared,
     stats,
     xdcr,
 )
 from handlers.shared import (
     DISABLED_TOOLS,
     READ_ONLY_MODE,
+    env_truthy,
     err,
     get_confirmation_required,
-    redact,
     require_confirmation,
 )
 from logging_config import configure_from_env, get_logger
@@ -171,22 +182,71 @@ _ALWAYS_LOADED_IN_READ_ONLY: set[str] = set()
 configure_scope_gate(_ALWAYS_LOADED_IN_READ_ONLY)
 
 
+# ── Deployment mode ──────────────────────────────────────────────────────────
+#
+# Resolved once at import. Determines which tools can physically work: the
+# self-managed ns_server admin surface, the Capella v4 control plane, or (in
+# 'both' mode) everything. See deployment.py for the detection rules.
+_DEPLOYMENT_MODE: str = deployment.detect_mode()
+_GATING: bool = deployment.gating_enabled()
+
+
 def _is_read_only(t: Tool) -> bool:
     """A tool is read-only if its annotation says so."""
     return bool(t.annotations and t.annotations.readOnlyHint)
 
 
 def _filter_tools(raw_tools: list[Tool]) -> list[Tool]:
-    """Apply read-only mode and disabled-tools filters."""
+    """Apply deployment-capability, read-only mode, and disabled-tools filters.
+
+    The deployment filter comes first and is the coarsest: against Capella, the
+    ns_server admin tools cannot work at all, because a Capella database
+    credential carries bucket-scoped data roles and never cluster-admin. Loading
+    them would hand an agent ~130 tools that each fail with an opaque 401 on
+    first use. Absent is better than present-and-broken — an agent cannot
+    misroute to a tool it never sees.
+    """
     filtered: list[Tool] = []
     for t in raw_tools:
         if t.name in DISABLED_TOOLS:
             continue
+        if _GATING and not deployment.tool_is_available(t.name, _DEPLOYMENT_MODE):
+            continue
         if READ_ONLY_MODE:
             if not _is_read_only(t) and t.name not in _ALWAYS_LOADED_IN_READ_ONLY:
                 continue
-        filtered.append(t)
+        filtered.append(_with_correlation_id(t))
     return filtered
+
+
+def _with_correlation_id(tool: Tool) -> Tool:
+    """Declare `correlation_id` on every tool's schema.
+
+    .env.example tells operators "a caller may pass correlation_id with any tool's
+    arguments", audit.build_record reads it, and server.call_tool strips it — but it
+    appeared in ZERO of the tool schemas. So the field the entire enterprise
+    accountability story hangs on was invisible to the models that are supposed to send
+    it, and a strict MCP client validating against the schema would reject it outright.
+
+    Advertised here rather than in ~204 hand-written schemas so it cannot drift, and so
+    a tool added tomorrow gets it for free.
+    """
+    schema = dict(tool.inputSchema or {})
+    properties = dict(schema.get("properties") or {})
+    if "correlation_id" in properties:
+        return tool
+    properties["correlation_id"] = {
+        "type": "string",
+        "description": (
+            "Optional provenance for the audit record: a git SHA, a workflow run id "
+            "or URL — whatever ties this call back to the human action that started "
+            "it. Recorded in the audit log and NEVER used for authorization. Pass the "
+            "same value on every call in one workflow run so the whole fan-out can be "
+            "correlated afterwards."
+        ),
+    }
+    schema["properties"] = properties
+    return tool.model_copy(update={"inputSchema": schema})
 
 
 _TOOLS: list[Tool] = _filter_tools(_RAW_TOOLS)
@@ -233,6 +293,11 @@ def _parse_tool_set(env_var: str) -> set[str]:
 # free out of the box. See README "Automation and the hard ceiling".
 _AUTOMATION_HARD_CEILING: set[str] = _parse_tool_set("CB_ADMIN_ALWAYS_CONFIRM")
 
+# A ceiling entry that matches no real tool protects nothing while reading in the
+# config as though it does. Names are case-sensitive, so a typo silently produced
+# an empty-effect ceiling with no complaint at startup.
+_CEILING_UNKNOWN: set[str] = _AUTOMATION_HARD_CEILING - {t.name for t in _RAW_TOOLS}
+
 
 # ── MCP server ───────────────────────────────────────────────────────────────
 
@@ -241,22 +306,134 @@ app = Server("couchbase-admin-mcp")
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
+    """Advertise the tool surface — to an AUTHORIZED caller only.
+
+    This had no authorization check at all. On the HTTP transport with
+    CB_ADMIN_HTTP_REQUIRE_AUTH not strictly true (including the `=on` spelling the edge
+    middleware failed to recognise), any client that completed the MCP handshake got a
+    full inventory: every tool name, every argument schema, and by omission the
+    deployment mode and read-only posture. That is a reconnaissance primitive, and it
+    is also the natural place for an attacker to start.
+
+    Resolved off the event loop for the same reason the dispatch is: validation can
+    reach the IdP.
+    """
+    if _auth_required_for_listing():
+        claims = await asyncio.to_thread(current_claims)
+        if claims is None:
+            _log.warning("tool listing refused: no validated token")
+            audit.emit_auth_failure(
+                reason="list_tools with no validated token",
+                source=request_auth.request_source(),
+            )
+            return []
     return _TOOLS
+
+
+def _auth_required_for_listing() -> bool:
+    """Whether tool enumeration requires a token.
+
+    Only on HTTP: stdio has no token by design, and returning an empty list there
+    would make the server useless in the workstation profile.
+    """
+    return env_truthy("CB_ADMIN_HTTP_REQUIRE_AUTH") and request_auth.transport_is_http()
+
+
+def _classify_result(result: object) -> tuple[str, str]:
+    """Decide whether a handler's return value represents success or a refusal.
+
+    Keyed on the marker err() stamps, NOT on the presence of an "error" key. The
+    key-presence version misclassified successes: capella_env_ensure's phase results
+    and capella_env_reap's per-item failures both return a top-level "error" inside
+    an otherwise successful response, so ordinary provisioning progress was being
+    written to the audit log as ``denied_handler``. An audit trail that cries wolf on
+    every poll is one an operator learns to ignore.
+    """
+    try:
+        first = result[0] if isinstance(result, list) and result else None
+        text = getattr(first, "text", None)
+        if not isinstance(text, str):
+            return "allowed", ""
+        payload = json.loads(text)
+        if isinstance(payload, dict) and payload.get(shared.ERROR_MARKER) is True:
+            reason = str(payload.get("error"))[:400]
+            if payload.get("guardrail"):
+                return "denied_guardrail", reason
+            if "EgressDenied" in reason or "EGRESS_ALLOWED_HOSTS" in reason:
+                return "denied_egress", reason
+            return "denied_handler", reason
+    except Exception:
+        # Not JSON, or an unexpected shape. Treat as success rather than inventing a
+        # denial; the handler returned normally.
+        return "allowed", ""
+    return "allowed", ""
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     arguments = dict(arguments or {})
 
+    # Capture the caller-supplied correlation id BEFORE any decision path runs.
+    # This is the thread that ties "a human pushed a commit" to "a child agent
+    # created this bucket forty seconds later": the workflow manager passes its run
+    # id down, and every record from the resulting fan-out carries it. It was
+    # documented, plumbed through audit.build_record, advertised in the tool schemas
+    # — and never actually read here, so every enterprise record was untraceable
+    # back to the originating human action. It is provenance only: sanitised, never
+    # consulted for authorization, and stripped before the handler sees it.
+    _correlation = audit.sanitize_correlation(arguments.get(audit.CORRELATION_ARG))
+
     # Every tool call is logged here — one central point, so "every tool goes
     # through logging" is a property of the dispatch, not something each handler
     # has to remember. Arguments are redacted so credentials in, e.g.,
     # admin_user_create never reach the logs.
-    _log.info("tool call: %s args=%s", name, redact(arguments))
+    # One audit record per decision, structured, carrying WHO / WHY / provenance.
+    #
+    # The previous line recorded the tool and its arguments and nothing else — no
+    # principal, no indication whether the call ran unattended, and no way to reach
+    # the human whose action set the workflow going. In the enterprise flow the
+    # service principal is the only identity that exists, so if it is absent from
+    # the record then "who created this bucket" has no answer at all.
+    # Resolved in a worker thread, not on the event loop.
+    #
+    # current_claims() can reach oidc.validate_token(), which on a cache miss makes an
+    # OUTBOUND HTTPS call to the IdP's JWKS endpoint. Awaiting nothing while that
+    # blocks means one slow or unreachable IdP stalls the entire server for every
+    # connected client, not just the caller whose token needed validating.
+    #
+    # asyncio.to_thread copies the current context into the worker, so request_ctx —
+    # the thing that makes HTTP authorization work at all — is still visible there.
+    # That is load-bearing and is why this is to_thread rather than run_in_executor.
+    _claims = await asyncio.to_thread(current_claims)
+    _principal = principal_of(_claims) if _claims else None
+    if _principal is None and profile_config.PROFILE_NAME == profile_config.WORKSTATION:
+        # No IdP on a laptop, but "who did what" must still resolve. Attribution,
+        # not authentication — spoofable by whoever runs the process, recorded on
+        # that understanding.
+        _principal = {
+            "auth": "local",
+            "automation": False,
+            **profile_config.local_identity(),
+        }
+
+    def _audit(
+        decision: str, reason: str = "", duration_ms: float | None = None
+    ) -> None:
+        audit.emit_tool_call(
+            tool=name,
+            arguments=arguments,
+            decision=decision,
+            principal=_principal,
+            reason=reason,
+            duration_ms=duration_ms,
+            source=request_auth.request_source(),
+            correlation_id=_correlation,
+        )
 
     handler = _HANDLERS.get(name)
     if handler is None:
         _log.warning("unknown tool: %s", name)
+        _audit("denied_unknown_tool", reason="no handler registered")
         return err(
             f"Unknown tool: {name}", tool=name, hint="Tool may be disabled or unloaded."
         )
@@ -264,6 +441,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # Tool must also be in the currently exposed list.
     if name not in {t.name for t in _TOOLS}:
         _log.warning("tool not enabled in current config: %s", name)
+        # Deployment gating is the most likely and least obvious reason, so name
+        # it specifically and point at the working alternative rather than
+        # listing every possible cause.
+        if _GATING and not deployment.tool_is_available(name, _DEPLOYMENT_MODE):
+            _audit(
+                "denied_deployment",
+                reason=f"not available in {_DEPLOYMENT_MODE!r} deployment mode",
+            )
+            return err(
+                f"Tool {name} is not available in {_DEPLOYMENT_MODE!r} deployment mode.",
+                tool=name,
+                hint=deployment.unavailable_reason(name, _DEPLOYMENT_MODE),
+                deployment_mode=_DEPLOYMENT_MODE,
+            )
+        _audit(
+            "denied_read_only",
+            reason="tool not loaded (read-only mode or CB_ADMIN_DISABLED_TOOLS)",
+        )
         return err(
             f"Tool {name} is not enabled in this server configuration.",
             tool=name,
@@ -281,7 +476,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if tool_obj is not None:
         denial = check_scope(tool_obj)
         if denial:
-            _log.warning("scope denied for %s: %s", name, denial)
+            _log.warning("scope denied for %s", name)
+            _audit("denied_scope", reason=denial)
             return err(denial, tool=name, hint="Token is missing the required scope.")
 
     # Confirmation gate.
@@ -293,70 +489,103 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # tools require a human even for automation, and nothing the caller controls
     # can change that.
     in_confirm_set = name in _CONFIRMATION_REQUIRED
-    if in_confirm_set and session_has_automation_scope():
-        if name in _AUTOMATION_HARD_CEILING:
-            # A ceiling tool under an automation principal must NOT be satisfiable
-            # by a self-supplied confirm:true — that "confirmation" is the agent
-            # rubber-stamping itself, exactly what the ceiling exists to prevent.
-            # Refuse outright; the workflow must route to a genuine human approval
-            # (a different, non-automation principal / interactive session).
-            _log.warning(
-                "automation principal blocked at hard ceiling for %s; a self-issued "
-                "confirm is not a human approval — routing to human required",
-                name,
-            )
-            return err(
-                f"`{name}` is in the automation hard ceiling "
-                "(CB_ADMIN_ALWAYS_CONFIRM) and cannot be executed by an "
-                "automation-scoped principal, even with confirm:true. A human "
-                "must approve this operation through a non-automation session.",
-                tool=name,
-                args=arguments,
-                requires_confirmation=True,
-                hard_ceiling=True,
-            )
-        _log.info(
-            "automation principal authorized for %s; per-call confirmation skipped",
-            name,
-        )
-        in_confirm_set = False
+
+    # ── The hard ceiling and the automation path ─────────────────────────────
+    #
+    # Both now live in authz.evaluate(), which the GUI's POST /api/call also calls.
+    # Expressing this policy twice is what let the GUI copy drift: its ceiling check
+    # sat inside `if in_confirm_set and automation_mode`, so with automation off a
+    # ceiling tool fell through to a caller-supplied `confirm: true`.
+    #
+    # The ceiling is unconditional and evaluated before anything else. It used to be
+    # gated on session_has_automation_scope(), which inverted the privilege model: a
+    # principal holding write but NOT automation skipped the ceiling entirely, so
+    # dropping a scope from the token GRANTED capability and the most privileged
+    # principal was the only one refused.
+    ceiling, in_confirm_set = authz.evaluate(
+        name,
+        in_confirm_set=in_confirm_set,
+        has_automation_scope=session_has_automation_scope(),
+    )
+    if not ceiling.allowed:
+        _log.warning("hard ceiling refused %s (no human present)", name)
+        _audit(ceiling.decision, reason="hard ceiling; no human present")
+        return err(ceiling.reason, tool=name, args=arguments, **ceiling.detail)
 
     msg = require_confirmation(name, arguments, in_confirm_set)
     if msg:
         _log.info("confirmation required for %s; call withheld", name)
+        _audit("denied_confirmation", reason=msg)
         return err(msg, tool=name, args=arguments, requires_confirmation=True)
 
-    # Strip the confirm key so it never reaches REST/SDK calls as a stray field.
+    # Strip both caller-supplied control fields so neither reaches a REST/SDK call
+    # as a stray parameter. correlation_id is provenance for the audit record only
+    # — it must never influence a decision, and it has already been captured above.
     arguments.pop("confirm", None)
+    arguments.pop(audit.CORRELATION_ARG, None)
 
     loop = asyncio.get_event_loop()
     start = time.perf_counter()
     try:
         result = await loop.run_in_executor(None, handler.handle, name, arguments)
-        _log.info("tool ok: %s (%.1f ms)", name, (time.perf_counter() - start) * 1000)
+        elapsed = (time.perf_counter() - start) * 1000
+
+        # A handler that refuses (egress allowlist, Capella guardrail, a validation
+        # error) catches its own exception and returns a normal err() payload, so the
+        # dispatch used to record decision="allowed" for an operation that never
+        # happened — making a refused log-bundle exfiltration indistinguishable from a
+        # successful bucket delete, and mislabelling it as the wrong one.
+        decision, reason = _classify_result(result)
+        _audit(decision, reason=reason, duration_ms=elapsed)
+        _log.info("tool %s: %s (%.1f ms)", decision, name, elapsed)
         return result
     except Exception as exc:
         # exc_info=True writes the traceback to the error log — the record
         # Couchbase support asks a customer to send.
-        _log.error(
-            "tool error: %s: %s (%.1f ms)",
-            name,
-            exc,
-            (time.perf_counter() - start) * 1000,
-            exc_info=True,
-        )
+        elapsed = (time.perf_counter() - start) * 1000
+        _audit("error", reason=f"{type(exc).__name__}", duration_ms=elapsed)
+        _log.error("tool error: %s: %s (%.1f ms)", name, exc, elapsed, exc_info=True)
         return err(f"{type(exc).__name__}: {exc}", tool=name, args=arguments)
 
 
 # ── Startup banner ───────────────────────────────────────────────────────────
 
 
+def _enforce_profile() -> None:
+    """Refuse to start on a posture that cannot be secure in the stated profile.
+
+    These are the exact pairings that produced real findings, so they are checked
+    rather than left in documentation. Failing at startup is the cheap place to
+    discover them.
+    """
+    problems = list(profile_config.PROFILE_ERRORS)
+
+    # An audit sink that was ASKED FOR and cannot be opened is fatal. Deferring this
+    # to a log line meant the operator's only signal was a message in the very log
+    # they had been told to replace with the audit file.
+    sink_problem = audit.audit_sink_error()
+    if sink_problem:
+        problems.append(sink_problem)
+
+    if not problems:
+        return
+    print(
+        "[couchbase-admin-mcp] REFUSING TO START — incoherent security posture for "
+        f"CB_ADMIN_PROFILE={profile_config.PROFILE_NAME}:",
+        file=sys.stderr,
+        flush=True,
+    )
+    for problem in problems:
+        print(f"  * {problem}", file=sys.stderr, flush=True)
+    raise SystemExit(2)
+
+
 def _startup_banner() -> None:
     # Footgun guard: OIDC configured but enforcement not required means invalid
     # tokens are silently ignored on HTTP. Warn so it is a conscious choice.
-    if os.environ.get("OAUTH_ISSUER", "").strip() and os.environ.get(
-        "CB_ADMIN_HTTP_REQUIRE_AUTH", "false"
-    ).strip().lower() not in ("1", "true", "yes"):
+    if os.environ.get("OAUTH_ISSUER", "").strip() and not env_truthy(
+        "CB_ADMIN_HTTP_REQUIRE_AUTH"
+    ):
         print(
             "[couchbase-admin-mcp] WARNING: OAUTH_ISSUER is set but "
             "CB_ADMIN_HTTP_REQUIRE_AUTH is not true -- invalid/missing Bearer "
@@ -365,11 +594,60 @@ def _startup_banner() -> None:
             file=sys.stderr,
             flush=True,
         )
+    if env_truthy("OAUTH_SKIP_VERIFY"):
+        print(
+            "[couchbase-admin-mcp] *** OAUTH_SKIP_VERIFY IS ENABLED *** JWT "
+            "signatures, issuer, audience and expiry are NOT verified. Any token is "
+            "accepted. This must never be set outside loopback development.",
+            file=sys.stderr,
+            flush=True,
+        )
+    if _CEILING_UNKNOWN:
+        print(
+            "[couchbase-admin-mcp] WARNING: CB_ADMIN_ALWAYS_CONFIRM names "
+            f"{sorted(_CEILING_UNKNOWN)}, which match no loaded tool — those "
+            "entries protect nothing. Tool names are case-sensitive.",
+            file=sys.stderr,
+            flush=True,
+        )
     msg = (
+        f"[couchbase-admin-mcp] profile: {profile_config.describe(profile_config.PROFILE_NAME)}\n"
+        f"[couchbase-admin-mcp] deployment: {deployment.describe(_DEPLOYMENT_MODE)}\n"
         f"[couchbase-admin-mcp] tools loaded: {len(_TOOLS)} of {len(_RAW_TOOLS)} "
         f"(read_only={READ_ONLY_MODE}, disabled={len(DISABLED_TOOLS)}, "
         f"confirmation_required={len(_CONFIRMATION_REQUIRED)})"
     )
+
+    # In Capella mode, surface the guardrail posture at startup. An operator who
+    # has enabled writes but not set an allowlist should learn that here, not on
+    # the first refused teardown.
+    if _DEPLOYMENT_MODE in (deployment.CAPELLA, deployment.BOTH) and not READ_ONLY_MODE:
+        try:
+            from handlers.capella import guardrails as _guardrails
+
+            posture = _guardrails.describe_policy()
+            msg += (
+                f"\n[couchbase-admin-mcp] capella guardrails: {posture['posture']}; "
+                f"projects={posture['allowed_projects'] or 'NONE'}; "
+                f"prefix={posture['name_prefix'] or 'NONE'}; "
+                f"ceiling={posture['max_environments']}"
+            )
+            if not posture["destructive_operations_enabled"]:
+                msg += (
+                    "\n[couchbase-admin-mcp] NOTE: Capella destructive operations "
+                    "are refused because CAPELLA_ALLOWED_PROJECTS is unset "
+                    "(fail-closed). Teardown and reap will not run until a "
+                    "sandbox project list is configured."
+                )
+            # A guardrail that is configured but inert is the dangerous case: the
+            # config reads as protective while enforcing nothing. Say so at boot.
+            for warning in posture.get("warnings", []):
+                msg += f"\n[couchbase-admin-mcp] WARNING: {warning}"
+        except Exception as exc:  # never let a banner break startup
+            print(
+                f"[couchbase-admin-mcp] could not read Capella guardrail policy: {exc}",
+                file=sys.stderr,
+            )
     # Banner goes to stderr so it does not pollute stdio MCP framing.
     print(msg, file=sys.stderr, flush=True)
 
@@ -383,20 +661,28 @@ async def _main_stdio() -> None:
 
 
 class _ScopeAuthMiddleware:
-    """ASGI middleware: validate Bearer token (if present) and stash claims in
-    the scope-gate contextvar for the duration of the request.
+    """ASGI edge check: reject a bad credential before it reaches the dispatch loop.
 
-    Enforcement is OPTIONAL by default. With OAUTH_ISSUER set and
-    CB_ADMIN_HTTP_REQUIRE_AUTH=true, a missing/invalid token is rejected at the
-    edge. Otherwise an invalid token is ignored (claims stay None) and per-tool
-    scope checks no-op -- preserving today's behavior unless you opt in.
+    NOT the authorization mechanism. It used to be, by validating the token here
+    and stashing the claims in a contextvar — which could never work, because tool
+    dispatch runs in a sibling task that snapshotted the contextvar before any
+    request existed. Authorization now happens inside the dispatch task, resolving
+    the principal from the request itself (auth/request_auth.py).
+
+    What remains here is worth keeping: a malformed or expired token is turned away
+    cheaply with a 401 instead of travelling further, and the auth-failure audit
+    record is emitted with the client address, which the dispatch layer cannot see
+    for a request it never receives.
     """
 
     def __init__(self, app):
         self.app = app
-        self._require = os.environ.get(
-            "CB_ADMIN_HTTP_REQUIRE_AUTH", "false"
-        ).strip().lower() in ("1", "true", "yes")
+        # env_truthy, not a local spelling list: this site accepted "1/true/yes" while
+        # five others also accepted "on", so CB_ADMIN_HTTP_REQUIRE_AUTH=on disabled the
+        # edge 401 while leaving deeper checks on — and list_tools, which has no
+        # authorization check of its own, then served the whole admin surface
+        # unauthenticated.
+        self._require = env_truthy("CB_ADMIN_HTTP_REQUIRE_AUTH")
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -411,30 +697,55 @@ class _ScopeAuthMiddleware:
                     token = val[7:].strip()
                 break
 
-        claims = None
         if token:
             try:
                 from auth import oidc as _oidc
 
-                claims = _oidc.validate_token(token)
+                # Result deliberately discarded: this is a validity check at the
+                # edge, not the authorization decision. The dispatch task
+                # re-resolves the claims from the request (and caches them), which
+                # is the only place they are actually visible.
+                #
+                # OFF THE EVENT LOOP. validate_token performs a blocking JWKS fetch
+                # (urllib) on a cache miss, and PyJWT re-fetches unconditionally for
+                # an unknown `kid` — which is attacker-controlled, read from the
+                # UNVERIFIED header. Calling it inline let one request per second,
+                # each with a random kid, stall the single event loop for up to 30s
+                # and hammer the customer's IdP from a trusted source IP.
+                await asyncio.to_thread(_oidc.validate_token, token)
             except Exception as exc:  # invalid/expired/malformed -- never log token
-                if self._require:
-                    await _send_401(send, f"Invalid token: {type(exc).__name__}")
-                    return
-                claims = None
+                # ALWAYS 401 on a token that was presented and failed validation.
+                # Previously, with CB_ADMIN_HTTP_REQUIRE_AUTH unset (the default),
+                # a forged or expired token was discarded and the request then
+                # proceeded as "anonymous" — which meant enforcement disabled. A
+                # bad credential must be a rejection, never a downgrade.
+                client = scope.get("client")
+                source = f"{client[0]}:{client[1]}" if client else ""
+                _log.warning("rejected bearer token: %s", type(exc).__name__)
+                audit.emit_auth_failure(
+                    reason=f"invalid token: {type(exc).__name__}", source=source
+                )
+                await _send_401(send, f"Invalid token: {type(exc).__name__}")
+                return
         elif self._require:
+            client = scope.get("client")
+            audit.emit_auth_failure(
+                reason="missing bearer token",
+                source=f"{client[0]}:{client[1]}" if client else "",
+            )
             await _send_401(send, "Missing Bearer token")
             return
 
-        set_token_claims(claims)
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            clear_token_claims()
+        # Deliberately NOT set_token_claims(claims): that contextvar is invisible
+        # to the dispatch task, and relying on it is the bug this replaces. The
+        # dispatch layer re-resolves (and caches) the claims from the request.
+        await self.app(scope, receive, send)
 
 
 async def _send_401(send, detail: str) -> None:
-    body = f'{{"error":"unauthorized","detail":"{detail}"}}'.encode()
+    # json.dumps, not interpolation: `detail` is one careless edit away from
+    # carrying exception text that could contain quotes or a token fragment.
+    body = json.dumps({"error": "unauthorized", "detail": detail}).encode()
     await send(
         {
             "type": "http.response.start",
@@ -448,19 +759,99 @@ async def _send_401(send, detail: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
-async def _main_http() -> None:
-    """Streamable HTTP transport.
+def _allowed_origins() -> list[str]:
+    """Origins permitted to drive this server from a browser.
 
-    Request authorization is optional: with OAUTH_ISSUER configured and
-    CB_ADMIN_HTTP_REQUIRE_AUTH=true, _ScopeAuthMiddleware validates the Bearer
-    token and per-tool scope enforcement applies. Otherwise this mode performs
-    no request authentication -- deploy behind a reverse proxy or trusted
-    network."""
+    Without an allowlist a page on the operator's machine can drive a
+    loopback-bound server (DNS-rebinding / CSRF against 127.0.0.1). The MCP
+    Streamable-HTTP spec requires Origin validation for exactly this reason.
+    """
+    raw = (os.environ.get("CB_ADMIN_ALLOWED_ORIGINS") or "").strip()
+    if not raw:
+        return []
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _allowed_hosts(host: str, port: int) -> list[str]:
+    """Host header values this server will answer to.
+
+    DNS-rebinding protection compares the request's Host header against this list, so
+    it has to contain the names clients actually use — not just the bind address.
+
+    The derived list alone broke every non-loopback deployment. Behind a Kubernetes
+    Service or an ingress the bind is 0.0.0.0 while the Host header is
+    `cb-mcp.example.internal`, which matched nothing, so the transport answered 421
+    Misdirected Request to every request and the server was unreachable rather than
+    insecure. Silently widening the list to fix that would have thrown away the
+    protection, so the external names are an explicit operator statement instead.
+    """
+    derived = [
+        f"{host}:{port}",
+        host,
+        f"localhost:{port}",
+        "localhost",
+        f"127.0.0.1:{port}",
+        "127.0.0.1",
+    ]
+    raw = (os.environ.get("CB_ADMIN_ALLOWED_HOSTS") or "").strip()
+    extra: list[str] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        extra.append(entry)
+        # An operator naming a hostname almost never means "only without a port".
+        if ":" not in entry:
+            extra.append(f"{entry}:{port}")
+
+    # A wildcard bind tells us nothing about the name clients will use, so if the
+    # operator has not said, the failure mode is 421 on every request. Say why here
+    # rather than leaving them to find it in a proxy log.
+    if host in ("0.0.0.0", "::", "") and not extra:
+        print(
+            "[couchbase-admin-mcp] WARNING: bound to a wildcard address with no "
+            "CB_ADMIN_ALLOWED_HOSTS set. DNS-rebinding protection will reject any "
+            "request whose Host header is not localhost/127.0.0.1 with HTTP 421. If "
+            "clients reach this server by a hostname or a Service name, list it in "
+            "CB_ADMIN_ALLOWED_HOSTS (comma-separated).",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    seen: dict[str, None] = {}
+    for value in derived + extra:
+        if value:
+            seen.setdefault(value, None)
+    return list(seen)
+
+
+async def _main_http() -> None:
+    """Streamable HTTP transport, with per-client sessions.
+
+    THREE CHANGES FROM THE PREVIOUS IMPLEMENTATION, all load-bearing:
+
+    1. StreamableHTTPSessionManager instead of a single
+       StreamableHTTPServerTransport(mcp_session_id=None). One transport with a
+       null session id meant ONE MCP session shared by every HTTP client, with no
+       session binding at all — any client could POST to /mcp with no
+       Mcp-Session-Id and land in the same session as everyone else. There was no
+       notion of "this tool call belongs to that authenticated request", which is
+       why the authorization bug had no local fix. The manager gives each client
+       its own session and its own generated id.
+
+    2. Authorization is resolved from the request inside the dispatch task (see
+       auth/request_auth.py), not carried across tasks in a contextvar. That is
+       what actually makes the scope model — and therefore the automation trust
+       model — work over HTTP.
+
+    3. Origin validation via the SDK's TransportSecuritySettings, plus a
+       refusal to bind a non-loopback address without authentication.
+    """
     try:
-        from mcp.server.streamable_http import StreamableHTTPServerTransport
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     except ImportError:
         print(
-            "[couchbase-admin-mcp] Streamable HTTP transport requires a newer mcp library. "
+            "[couchbase-admin-mcp] Streamable HTTP transport requires mcp>=1.10. "
             "Falling back to stdio.",
             file=sys.stderr,
         )
@@ -469,54 +860,136 @@ async def _main_http() -> None:
 
     host = os.environ.get("CB_ADMIN_HOST", "127.0.0.1")
     port = int(os.environ.get("CB_ADMIN_PORT", "8000"))
-    print(
-        f"[couchbase-admin-mcp] HTTP transport listening on http://{host}:{port}/mcp",
-        file=sys.stderr,
-        flush=True,
-    )
-    # The exact instantiation API for StreamableHTTPServerTransport varies
-    # across mcp library versions. We delegate to a thin runner so the user
-    # can adapt this in their environment if the API has shifted.
+    require_auth = os.environ.get(
+        "CB_ADMIN_HTTP_REQUIRE_AUTH", "false"
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+    # Refuse to expose an unauthenticated admin surface on a network interface.
+    # The GUI already had this guard; the MCP HTTP server did not, while both the
+    # README and the Dockerfile instruct operators to set CB_ADMIN_HOST=0.0.0.0.
+    if host not in ("127.0.0.1", "localhost", "::1") and not require_auth:
+        print(
+            f"[couchbase-admin-mcp] REFUSING TO START: binding {host}:{port} with "
+            "CB_ADMIN_HTTP_REQUIRE_AUTH disabled would expose the full admin tool "
+            "surface unauthenticated. Set CB_ADMIN_HTTP_REQUIRE_AUTH=true (with "
+            "OAUTH_ISSUER/OAUTH_AUDIENCE), or bind 127.0.0.1.",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(2)
+
     try:
         import uvicorn  # type: ignore
         from starlette.applications import Starlette
-        from starlette.routing import Mount
-
-        transport = StreamableHTTPServerTransport(mcp_session_id=None)
         from starlette.middleware import Middleware
-
-        starlette_app = Starlette(
-            routes=[Mount("/mcp", app=transport.handle_request)],
-            middleware=[Middleware(_ScopeAuthMiddleware)],
-        )
-        config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
-        server = uvicorn.Server(config)
-
-        async def run_server():
-            async with transport.connect() as (rs, ws):
-                # asyncio.TaskGroup is 3.11+. Use gather for 3.10 compatibility.
-                # If one task fails, the other is cancelled (return_exceptions=False)
-                # and the first exception propagates — same effective behavior as
-                # TaskGroup for our two-task case.
-                await asyncio.gather(
-                    server.serve(),
-                    app.run(rs, ws, app.create_initialization_options()),
-                )
-
-        await run_server()
+        from starlette.routing import Mount
     except ImportError as exc:
         print(
-            f"[couchbase-admin-mcp] HTTP transport requires uvicorn and starlette: {exc}. "
-            "Install: pip install uvicorn starlette. Falling back to stdio.",
+            f"[couchbase-admin-mcp] HTTP transport requires uvicorn and starlette: "
+            f"{exc}. Install: pip install uvicorn starlette. Falling back to stdio.",
             file=sys.stderr,
         )
         await _main_stdio()
+        return
+
+    security_settings = None
+    origins = _allowed_origins()
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        # allowed_origins is typed list[str] with default [] — NOT optional. Passing
+        # None raised a pydantic ValidationError which the bare `except Exception`
+        # swallowed, leaving security_settings None and DNS-rebinding protection OFF
+        # on every default deployment, while telling the operator to upgrade mcp.
+        security_settings = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_origins=origins,
+            allowed_hosts=_allowed_hosts(host, port),
+        )
+    except ImportError:
+        # Older SDKs lack the module. Say so rather than silently serving without
+        # Origin validation.
+        print(
+            "[couchbase-admin-mcp] WARNING: this mcp version has no "
+            "TransportSecuritySettings, so Origin/Host validation is unavailable. "
+            "A browser page could drive a loopback-bound server. Upgrade mcp.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    manager = StreamableHTTPSessionManager(
+        app=app,
+        json_response=False,
+        stateless=False,
+        security_settings=security_settings,
+    )
+
+    print(
+        f"[couchbase-admin-mcp] HTTP transport on http://{host}:{port}/mcp "
+        f"(auth_required={require_auth}, per-client sessions, "
+        f"allowed_origins={origins or 'none configured'})",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    # Both "/mcp" and "/mcp/" must work. Starlette's default redirect_slashes
+    # answers a POST to "/mcp" with a 307 to "/mcp/", and MCP clients do not
+    # follow it — so a client configured with the documented URL got a redirect
+    # instead of a session. Verified by driving a real handshake against both.
+    async def _mcp_endpoint(scope, receive, send):
+        """Serve the MCP endpoint at both /mcp and /mcp/.
+
+        Explicit rather than left to router behaviour, because neither default was
+        acceptable and this was verified against a real client handshake:
+
+          * With Starlette's default redirect_slashes, a POST to "/mcp" is answered
+            with a 307 to "/mcp/". MCP clients do not follow it, so a client
+            configured with the documented URL got a redirect instead of a session.
+          * With redirect_slashes disabled, Mount("/mcp") stops matching the bare
+            path at all and "/mcp" becomes a 404.
+
+        Normalising here means the documented URL works, with or without the
+        trailing slash, and the behaviour does not depend on a Starlette internal.
+        """
+        path = scope.get("path", "")
+        if path.rstrip("/") in ("/mcp", ""):
+            await manager.handle_request(scope, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": json.dumps(
+                    {"error": "not_found", "detail": "MCP endpoint is at /mcp"}
+                ).encode(),
+            }
+        )
+
+    starlette_app = Starlette(
+        routes=[Mount("/", app=_mcp_endpoint)],
+        # Edge rejection only. Authorization itself happens in the dispatch task;
+        # this exists to turn away a bad credential cheaply and to record the
+        # auth-failure audit event.
+        middleware=[Middleware(_ScopeAuthMiddleware)],
+    )
+    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+
+    async with manager.run():
+        await server.serve()
 
 
 async def _async_main() -> None:
     # Wire logging from CB_ADMIN_LOG_* before anything else, so the banner and
     # every subsequent record land in the configured sinks.
     configure_from_env()
+    _enforce_profile()
     _startup_banner()
     transport = os.environ.get("CB_ADMIN_TRANSPORT", "stdio").lower()
     if transport in ("http", "streamable_http", "streamablehttp"):

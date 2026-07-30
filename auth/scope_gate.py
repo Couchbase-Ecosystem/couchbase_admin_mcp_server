@@ -68,6 +68,33 @@ def set_token_claims(claims: dict[str, Any] | None) -> None:
     _token_claims.set(claims)
 
 
+def current_claims() -> dict[str, Any] | None:
+    """Validated claims for the call being dispatched, or None.
+
+    Resolution order matters:
+
+      1. An explicitly-set contextvar. Used by tests, and correct for any caller
+         that sets it in the SAME task that will run the tool.
+      2. The Starlette request carried on the SDK's request context.
+
+    (2) is what makes HTTP work at all. The contextvar alone could not: the ASGI
+    middleware runs in the request's task while tool dispatch runs in a sibling
+    task created at session-init time, and contextvars snapshot at task creation —
+    so claims set by the middleware were invisible here, every time, silently. See
+    auth/request_auth.py for the full account.
+    """
+    explicit = _token_claims.get()
+    if explicit is not None:
+        return explicit
+    try:
+        from auth.request_auth import resolve_claims
+
+        return resolve_claims()
+    except Exception:
+        # Authorization must never be granted because a lookup blew up.
+        return None
+
+
 def clear_token_claims() -> None:
     """Reset context after a request (defensive; contextvars are per-task)."""
     _token_claims.set(None)
@@ -96,40 +123,80 @@ def _scope_automation() -> str:
 
 
 def session_has_automation_scope() -> bool:
-    """True when the current request's token carries the automation scope.
+    """True when the calling principal's token carries the automation scope.
 
-    Returns False when there is no token in context (stdio / unauthenticated),
-    so automation mode is only ever reached by an explicitly automation-scoped
-    principal on an authenticated transport — never by default.
+    This is the enterprise authorization path: a workflow-manager agent's child
+    holds a token carrying write + automation, and the per-call confirmation is
+    then skipped entirely. That is the design — the human decision happened once,
+    when the IdP issued the credential, not at each tool call.
+
+    Returns False when there is no token (stdio / workstation), so automation mode
+    is never reached by default.
     """
-    claims = _token_claims.get()
+    claims = current_claims()
     if claims is None:
         return False
     return _scope_automation() in _claims_scopes(claims)
 
 
+#: Claims that can carry granted authority, in the order IdPs actually use them.
+#:
+#: `roles` matters specifically for the unattended workflow. Microsoft Entra issues
+#: CLIENT-CREDENTIALS tokens — which is what a workflow-manager service principal
+#: receives — with app permissions in `roles`, NOT in `scp`. Reading only
+#: scope/scp/scopes meant an Entra service principal's automation grant was
+#: invisible, silently downgrading an authorized autonomous caller to
+#: "needs per-call confirmation". Okta populates `scp` and Auth0 `scope`, so this
+#: gap would pass testing against either and fail against Entra.
+#:
+#: All present claims are UNIONED rather than first-match-wins: a token may carry
+#: delegated scopes in `scp` and application roles in `roles` at the same time, and
+#: taking only the first non-empty claim would discard half the grant.
+_SCOPE_CLAIMS: tuple[str, ...] = ("scope", "scp", "scopes", "roles", "permissions")
+
+
 def _claims_scopes(claims: dict[str, Any]) -> set[str]:
-    """
-    Extract granted scopes from token claims.
+    """Extract every granted scope/role from token claims.
 
-    Handles the common shapes:
-      * RFC 8693 'scope' as a space-delimited string
-      * 'scope'/'scopes' already a list
-      * Entra-style 'scp' (string or list)
+    Handles the shapes real IdPs emit:
+      * RFC 8693 `scope` as a space-delimited string   (Auth0, Keycloak)
+      * `scp` as string or list                        (Entra delegated, Okta)
+      * `roles` as a list                              (Entra app permissions —
+                                                        client credentials)
+      * `permissions` as a list                        (Auth0 RBAC)
     """
-    raw: Any = claims.get("scope")
-    if raw is None:
-        raw = claims.get("scp")
-    if raw is None:
-        raw = claims.get("scopes")
+    granted: set[str] = set()
+    for claim in _SCOPE_CLAIMS:
+        raw: Any = claims.get(claim)
+        if raw is None:
+            continue
+        if isinstance(raw, str):
+            granted.update(s for s in raw.split() if s)
+        elif isinstance(raw, (list, tuple, set)):
+            granted.update(str(s) for s in raw if str(s))
+    return granted
 
-    if raw is None:
-        return set()
-    if isinstance(raw, str):
-        return {s for s in raw.split() if s}
-    if isinstance(raw, (list, tuple, set)):
-        return {str(s) for s in raw}
-    return set()
+
+def principal_of(claims: dict[str, Any] | None) -> dict[str, Any]:
+    """Identify the calling principal, for the audit record.
+
+    "Which service principal did this" is the question an audit trail has to
+    answer, and for an autonomous workflow it is the ONLY identity available —
+    there is no human at the keyboard by design. Pulled from the validated token
+    only; never from anything the caller can set alongside the tool arguments.
+    """
+    if not claims:
+        return {"principal": None, "auth": "none"}
+    return {
+        "principal": claims.get("sub") or claims.get("oid") or claims.get("client_id"),
+        "client_id": claims.get("client_id")
+        or claims.get("azp")
+        or claims.get("appid"),
+        "issuer": claims.get("iss"),
+        "scopes": sorted(_claims_scopes(claims)),
+        "automation": _scope_automation() in _claims_scopes(claims),
+        "auth": "oauth",
+    }
 
 
 def _is_read_side(tool: Any) -> bool:
@@ -150,6 +217,20 @@ def _required_scope_for(tool: Any) -> str:
     return _scope_read() if _is_read_side(tool) else _scope_write()
 
 
+def _auth_required() -> bool:
+    """Whether the operator has demanded authenticated access.
+
+    Read from the environment rather than injected, so the gate cannot be left
+    un-configured by a caller that forgets to wire it.
+    """
+    return (os.environ.get("CB_ADMIN_HTTP_REQUIRE_AUTH", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def check_scope(tool: Any) -> str | None:
     """
     Authorize the current request to invoke `tool`.
@@ -157,9 +238,28 @@ def check_scope(tool: Any) -> str | None:
     Returns None when allowed (including the no-token no-op case), or a
     human-readable denial message when the token lacks the required scope.
     """
-    claims = _token_claims.get()
+    claims = current_claims()
     if claims is None:
-        return None  # no token in context -> enforcement disabled, allowed
+        # FAIL CLOSED when the operator asked for enforcement.
+        #
+        # This branch used to return None unconditionally — "no token in context,
+        # enforcement disabled, allowed". Correct on stdio, where there is no token
+        # by design. On HTTP it was a total authorization bypass, because claims
+        # could never reach this function across the task boundary (see
+        # auth/request_auth.py). That cause is now fixed: claims are resolved from
+        # the request being dispatched.
+        #
+        # Reaching here on HTTP with authentication required therefore means
+        # something real: no bearer token was presented, or it failed validation.
+        # Either way it is a refusal, not a downgrade to anonymous.
+        if _auth_required():
+            return (
+                "Access denied: CB_ADMIN_HTTP_REQUIRE_AUTH is enabled but no "
+                "validated token reached the tool dispatcher, so authorization "
+                "cannot be established: no valid bearer token was presented with "
+                "this request. Refusing rather than proceeding unauthenticated."
+            )
+        return None  # stdio / no OAuth configured -> nothing to enforce
 
     required = _required_scope_for(tool)
     granted = _claims_scopes(claims)

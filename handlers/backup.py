@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from .egress import guard_nested_host_fields
 from .shared import admin_request, err, ok, quote_path
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
@@ -147,6 +148,12 @@ def handle(name: str, args: dict) -> list[TextContent]:
 
         if name == "admin_backup_restore_run":
             rid = quote_path(args["repository_id"])
+            # `target` is a free-form object forwarded verbatim to the Backup Service,
+            # and this module had no egress guard of any kind. A restore target can
+            # name remote locations and credentials, so the same walk the eventing
+            # definitions get applies here: any destination-shaped value at any depth
+            # must be in the allowlist.
+            guard_nested_host_fields(args["target"], tool=name, path="target")
             return ok(
                 admin_request(
                     "POST",

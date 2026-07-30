@@ -27,10 +27,24 @@ def srv(monkeypatch):
     server.py reads env at import time (tool filtering, confirmation set), so we
     set env then (re)import it fresh inside each test's fixture.
     """
+    # The profile is pinned to enterprise, explicitly.
+    #
+    # Whether the hard ceiling REFUSES a tool or merely forces a confirmation depends
+    # entirely on profile_config.PROFILE_NAME, and this fixture never set it — so the
+    # ceiling tests asserted against whatever CB_ADMIN_PROFILE happened to be in the
+    # ambient environment. They would flip meaning between a developer's shell and CI
+    # without a single line of code changing, and the unattended case (the one that
+    # matters for the unattended agent chain) was the one at risk of going unexercised.
+    monkeypatch.setenv("CB_ADMIN_PROFILE", "enterprise")
     monkeypatch.setenv("CB_ADMIN_READ_ONLY_MODE", "false")
     monkeypatch.setenv("CB_ADMIN_ALWAYS_CONFIRM", "admin_bucket_delete")
     monkeypatch.setenv("CB_ADMIN_SCOPE_WRITE", "couchbase-admin-mcp:write")
     monkeypatch.setenv("CB_ADMIN_SCOPE_AUTOMATION", "couchbase-admin-mcp:automation")
+
+    import profile_config
+
+    importlib.reload(profile_config)
+    assert profile_config.PROFILE_NAME == profile_config.ENTERPRISE
 
     # handlers.shared reads CB_ADMIN_READ_ONLY_MODE at import time and caches it;
     # server.py reads the cached value plus its own env at import. Reload shared
@@ -49,7 +63,9 @@ def srv(monkeypatch):
 
 
 def _call(srv, name, args):
-    return asyncio.new_event_loop().run_until_complete(srv.call_tool(name, args))[0].text
+    return (
+        asyncio.new_event_loop().run_until_complete(srv.call_tool(name, args))[0].text
+    )
 
 
 def _set_claims(scopes: str):
@@ -59,12 +75,28 @@ def _set_claims(scopes: str):
 
 
 def test_writes_are_gated_by_default(srv):
-    """With no token (interactive) a write tool is withheld pending confirmation."""
+    """A write-scoped principal WITHOUT the automation scope is still gated.
+
+    This used to clear the claims entirely, which under the pinned enterprise profile
+    is refused at the scope gate before the confirmation gate is ever reached — so the
+    test would have passed for the wrong reason. Supplying the write scope isolates
+    the behaviour actually under test: holding write is not the same as being
+    authorized to act unattended.
+    """
+    _set_claims("couchbase-admin-mcp:write")
+    out = _call(srv, "admin_bucket_create", {"bucket_name": "b", "ram_quota_mb": 256})
+    assert "requires_confirmation" in out
+
+
+def test_a_call_with_no_token_is_refused_when_auth_is_required(srv):
+    """The enterprise posture's floor: no token means no authorization, not anonymous
+    access. Recorded as a scope denial rather than a confirmation demand."""
     from auth import scope_gate
 
     scope_gate.clear_token_claims()
     out = _call(srv, "admin_bucket_create", {"bucket_name": "b", "ram_quota_mb": 256})
-    assert "requires_confirmation" in out
+    assert "Access denied" in out
+    assert "requires_confirmation" not in out
 
 
 def test_confirm_argument_satisfies_the_gate(srv):
@@ -111,15 +143,35 @@ def test_hard_ceiling_not_bypassable_by_automation_self_confirm(srv):
     assert "hard ceiling" in out.lower()
 
 
-def test_interactive_confirm_still_works_for_ceiling_tool(srv):
-    """A non-automation (interactive/human) session CAN confirm a ceiling tool
-    with confirm:true — the ceiling only blocks automation self-confirmation."""
-    from auth import scope_gate
+def test_ceiling_is_not_satisfiable_by_a_caller_supplied_confirm(srv):
+    """A ceiling tool must NOT be executable on the strength of `confirm: true`.
 
-    scope_gate.clear_token_claims()  # interactive, no automation scope
+    This test previously asserted the opposite — that a non-automation principal
+    could satisfy the ceiling with `confirm: true` — which enshrined a real
+    authorization bypass. The ceiling was gated on
+    `session_has_automation_scope()`, so a principal holding write but NOT
+    automation skipped it entirely and fell through to a value the caller supplies.
+    Dropping a scope from the token therefore GRANTED capability, and the most
+    privileged principal was the only one refused.
+
+    Outside the workstation profile no human is present at the client by definition,
+    so `confirm: true` is the model rubber-stamping itself and the ceiling refuses
+    regardless of scope.
+    """
+    _set_claims("couchbase-admin-mcp:write")
     out = _call(srv, "admin_bucket_delete", {"bucket_name": "b", "confirm": True})
-    # passes the gate (reaches execution; REST error is fine, not a confirm demand)
-    assert "requires_confirmation" not in out
+    assert "hard_ceiling" in out
+    assert "cannot be executed" in out
+
+
+def test_ceiling_is_enforced_through_confirmation_on_a_workstation(srv, monkeypatch):
+    """On a laptop a person really is at the client, so the ordinary confirmation is
+    a genuine second look and a ceiling tool is reachable through it."""
+    import profile_config
+
+    monkeypatch.setattr(profile_config, "PROFILE_NAME", profile_config.WORKSTATION)
+    out = _call(srv, "admin_bucket_delete", {"bucket_name": "b", "confirm": True})
+    assert "hard_ceiling" not in out
 
 
 def test_read_tool_never_gated(srv):
@@ -133,9 +185,7 @@ def test_read_tool_never_gated(srv):
 
 def test_password_redacted_in_confirmation_response(srv):
     """A withheld admin_user_create must not echo the plaintext password."""
-    from auth import scope_gate
-
-    scope_gate.clear_token_claims()
+    _set_claims("couchbase-admin-mcp:write")
     out = _call(
         srv,
         "admin_user_create",

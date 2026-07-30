@@ -604,6 +604,42 @@ MUTATIONS = [
         '                    "false disables it. "',
         CAPELLA,
     ),
+    # ── The live verification record ────────────────────────────────────────
+    (
+        "capella: an operation drops out of the live verification record",
+        "handlers/capella/spec.py",
+        '    "capella_app_endpoint_get": "200",\n',
+        "",
+        CAPELLA,
+    ),
+    (
+        "capella: a GET is recorded as OPTIONS-probed, so its method was never confirmed",
+        "handlers/capella/spec.py",
+        '    "capella_app_endpoint_get": "200",',
+        '    "capella_app_endpoint_get": "405",',
+        CAPELLA,
+    ),
+    (
+        "capella: a write is recorded as a real call, meaning something was performed",
+        "handlers/capella/spec.py",
+        '    "capella_bucket_delete": "405",',
+        '    "capella_bucket_delete": "200",',
+        CAPELLA,
+    ),
+    (
+        "capella: a status the API cannot produce after routing is accepted",
+        "handlers/capella/spec.py",
+        '    "capella_bucket_delete": "405",',
+        '    "capella_bucket_delete": "000",',
+        CAPELLA,
+    ),
+    (
+        "capella: the verification date is dropped",
+        "handlers/capella/spec.py",
+        'LIVE_VERIFIED_ON = "2026-07-30"',
+        'LIVE_VERIFIED_ON = "recently"',
+        CAPELLA,
+    ),
 ]
 
 

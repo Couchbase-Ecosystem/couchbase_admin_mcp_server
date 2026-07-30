@@ -91,6 +91,97 @@ from typing import Any
 
 from mcp.types import Tool, ToolAnnotations
 
+# ── Live verification record ─────────────────────────────────────────────────
+
+#: Date of the last full sweep against a live Capella organization.
+LIVE_VERIFIED_ON = "2026-07-30"
+
+#: Every operation, and the HTTP status the control plane answered when its path was last
+#: exercised for real by scripts/verify_capella_paths.py.
+#:
+#: ALL 61 ARE PRESENT, and a test asserts that — so "every path is verified" is a checkable
+#: property of this file rather than a claim in a commit message. Closing the last of them
+#: needed an App Service, an App Endpoint, a database credential, two allowlist entries and
+#: an App Services admin user to exist, which the script now creates and removes per run.
+#:
+#: HOW TO READ A STATUS
+#:   200  the real GET was performed and answered — path AND method confirmed
+#:   404  a Capella DOMAIN code came back (11040), so the handler ran and reported the
+#:        object absent, which it cannot do before routing — path and method confirmed
+#:   405  an OPTIONS probe matched the route and was refused for the method. Confirms the
+#:        PATH ONLY: OPTIONS deliberately mutates nothing, and a GET-only route answers 405
+#:        just the same. Every write operation is in this category, by design.
+#:
+#: So a 405 here is weaker evidence than a 200, and the distinction is worth keeping: it
+#: says the URL is right and says nothing about the request body. Three bodies in this
+#: registry were wrong while their paths were 405-verified — `access` missing from both
+#: credential creates, and `deltaSync` for `deltaSyncEnabled`. A path probe cannot catch
+#: that, because it never sends a body.
+LIVE_VERIFIED: dict[str, str] = {
+    "capella_allowed_cidr_create": "405",
+    "capella_allowed_cidr_delete": "405",
+    "capella_allowed_cidrs_list": "200",
+    "capella_app_endpoint_access_control_function_get": "200",
+    "capella_app_endpoint_access_control_function_set": "405",
+    "capella_app_endpoint_cors_set": "405",
+    "capella_app_endpoint_create": "405",
+    "capella_app_endpoint_delete": "405",
+    "capella_app_endpoint_get": "200",
+    "capella_app_endpoint_offline": "405",
+    "capella_app_endpoint_online": "405",
+    "capella_app_endpoint_resync_start": "405",
+    "capella_app_endpoint_resync_status": "200",
+    "capella_app_endpoints_list": "200",
+    "capella_app_service_admin_user_create": "405",
+    "capella_app_service_admin_user_delete": "405",
+    "capella_app_service_admin_users_list": "200",
+    "capella_app_service_allowed_cidr_create": "405",
+    "capella_app_service_allowed_cidr_delete": "405",
+    "capella_app_service_allowed_cidrs_list": "200",
+    "capella_app_service_certificate_get": "200",
+    "capella_app_service_create": "405",
+    "capella_app_service_delete": "405",
+    "capella_app_service_get": "200",
+    "capella_app_service_turn_off": "405",
+    "capella_app_service_turn_on": "405",
+    "capella_app_services_list": "200",
+    "capella_bucket_create": "405",
+    "capella_bucket_delete": "405",
+    "capella_bucket_flush": "405",
+    "capella_bucket_get": "200",
+    "capella_buckets_list": "200",
+    "capella_cluster_certificate_get": "200",
+    "capella_cluster_create": "405",
+    "capella_cluster_delete": "405",
+    "capella_cluster_get": "200",
+    "capella_cluster_onoff_schedule_delete": "405",
+    "capella_cluster_onoff_schedule_get": "404",
+    "capella_cluster_onoff_schedule_set": "405",
+    "capella_cluster_turn_off": "405",
+    "capella_cluster_turn_on": "405",
+    "capella_cluster_update": "405",
+    "capella_clusters_list": "200",
+    "capella_collection_create": "405",
+    "capella_collection_delete": "405",
+    "capella_collections_list": "200",
+    "capella_database_credential_create": "405",
+    "capella_database_credential_delete": "405",
+    "capella_database_credential_get": "200",
+    "capella_database_credentials_list": "200",
+    "capella_events_list": "200",
+    "capella_organizations_list": "200",
+    "capella_project_create": "405",
+    "capella_project_delete": "405",
+    "capella_project_events_list": "200",
+    "capella_project_get": "200",
+    "capella_projects_list": "200",
+    "capella_sample_bucket_load": "405",
+    "capella_scope_create": "405",
+    "capella_scope_delete": "405",
+    "capella_scopes_list": "200",
+}
+
+
 # ── Op record ────────────────────────────────────────────────────────────────
 
 

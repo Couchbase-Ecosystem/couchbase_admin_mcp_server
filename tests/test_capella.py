@@ -134,6 +134,82 @@ def test_the_access_control_function_is_keyed_on_a_keyspace():
         assert "{app_endpoint_name}/accessControlFunction" not in OPS_BY_NAME[name].path
 
 
+# ── The live verification record ─────────────────────────────────────────────
+
+
+def test_every_operation_has_been_verified_against_a_live_organization():
+    """Makes "all 61 paths are verified" a CHECKED property of the source.
+
+    It was previously a claim in a commit message, and the last time such a claim was made
+    it was wrong: `--only-pat` reported an all-clear covering ten unverified paths because
+    its selector missed the tag form actually in use. An operation added later, or one whose
+    verification lapses, now fails here instead of being quietly assumed.
+    """
+    from handlers.capella import spec
+
+    declared = {op.name for op in OPS}
+    recorded = set(spec.LIVE_VERIFIED)
+    assert recorded == declared, (
+        "the live verification record and the operation registry disagree.\n"
+        f"  never verified: {sorted(declared - recorded)}\n"
+        f"  recorded but no longer an operation: {sorted(recorded - declared)}"
+    )
+
+
+def test_the_recorded_statuses_are_ones_that_prove_a_route_matched():
+    """A status the API can only produce AFTER routing. Anything else is not evidence — a
+    connection error or a 404 with no domain code would mean the path was never confirmed."""
+    from handlers.capella import spec
+
+    for name, status in spec.LIVE_VERIFIED.items():
+        assert status in {"200", "404", "405"}, f"{name}: implausible status {status}"
+
+
+def test_every_read_operation_was_verified_by_a_real_call():
+    """A GET is CALLED for real, so it must have answered 200 — or 404 with a Capella domain
+    code, which still proves the handler ran. A read recorded as 405 would mean it was
+    probed with OPTIONS instead, i.e. never actually exercised."""
+    from handlers.capella import spec
+
+    for op in OPS:
+        if op.method == "GET":
+            assert spec.LIVE_VERIFIED[op.name] in {"200", "404"}, (
+                f"{op.name} is a GET but was only OPTIONS-probed ("
+                f"{spec.LIVE_VERIFIED[op.name]}), so its method was never confirmed"
+            )
+
+
+def test_write_operations_are_path_verified_only_and_that_is_deliberate():
+    """405 is the expected result for a write: the OPTIONS probe matched the route and was
+    refused for the method, mutating nothing.
+
+    This test exists to record that the weaker evidence is a CHOICE, not an oversight — and
+    to keep the distinction visible, because it is exactly the gap that let three wrong
+    request bodies sit behind verified paths.
+    """
+    from handlers.capella import spec
+
+    writes = [op for op in OPS if op.method != "GET"]
+    assert writes, "expected write operations to exist"
+    for op in writes:
+        assert spec.LIVE_VERIFIED[op.name] == "405", (
+            f"{op.name} recorded {spec.LIVE_VERIFIED[op.name]}; a write verified by anything "
+            "other than an OPTIONS probe means something was actually performed"
+        )
+
+
+def test_the_verification_date_is_recorded():
+    """Provenance without a date is not provenance. Capella's control plane is not frozen,
+    so a reader needs to know how old this evidence is."""
+    import re
+
+    from handlers.capella import spec
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", spec.LIVE_VERIFIED_ON), (
+        spec.LIVE_VERIFIED_ON
+    )
+
+
 def test_credential_ops_redact_their_response():
     assert OPS_BY_NAME["capella_database_credential_create"].sensitive_response
 

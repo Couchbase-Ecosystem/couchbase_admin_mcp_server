@@ -913,6 +913,41 @@ read as a routed request for an object that does not exist.
 write operations are the OPTIONS probe working as designed — route matched, method not
 OPTIONS, nothing mutated.
 
+## All 61 paths are now verified against a live organization
+
+`VERIFIED=61  SKIPPED=0`, 2026-07-30, recorded in `spec.LIVE_VERIFIED` with the status each
+operation answered — so the claim is a checked property of the source, not a line in a commit
+message. Four tests enforce it: every operation appears, every status is one the API can only
+produce after routing, every GET was a real call, and every write is 405-and-only-405.
+
+Getting from 36 to 61 took four rounds, and each round found a defect that reading the code
+could not have:
+
+| | verified | what closed the gap | what it found |
+|---|---|---|---|
+| 1 | 36 | — | App Services list is org-wide, not per-cluster (405) |
+| 2 | 47 | `--bootstrap-app-service` | `nodes: 1` is refused — `capella_env_create` could never have completed its App Service phase |
+| 3 | 49 | `--bootstrap-child-objects` | `access` required on the database credential; rejection bodies truncated before the reason |
+| 4 | **61** | throwaway scope + corrected grants | the verifier was configuring sync on real data; `accessAllEndpoints: false` is rejected; `deltaSync` should be `deltaSyncEnabled` |
+
+**The pattern worth carrying forward:** every one of those defects was in a request BODY or a
+side effect, and none was findable by a path probe — an OPTIONS probe sends no body at all.
+`spec.LIVE_VERIFIED` therefore records 405 separately from 200 and the docstring says plainly
+that a 405 confirms the URL and says nothing about the payload. Three bodies in this registry
+were wrong while their paths sat green.
+
+### The one that should not have shipped
+
+Round 4's App Endpoint bound the DISCOVERED scope and collection — `_default._default` of a
+bucket holding real data. Configuring an App Endpoint over a collection switches on Sync
+Gateway for it and writes sync metadata into the bucket, so a tool whose only job is checking
+that URLs resolve was enabling replication on a live collection as a side effect. The 409 on
+the next run was that metadata outliving its App Service.
+
+It now creates a throwaway scope and collection per run and removes them afterwards. If the
+throwaway cannot be created the endpoint is skipped rather than falling back — nine unverified
+paths is the better outcome. That was a review failure, not a Capella surprise.
+
 ## The 25 skips, and which are real
 
 Three were a gap in the script rather than an absence: `user_id` and `allowed_cidr_id` come

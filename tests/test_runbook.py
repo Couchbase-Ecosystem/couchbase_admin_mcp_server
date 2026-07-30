@@ -37,23 +37,57 @@ def exposed_tools() -> dict[str, set[str]]:
     Loaded with gating off and writes enabled, because that is the union of what an
     operator following this runbook could reach — a Capella-only or read-only load would
     make the check vacuous for whole sections.
+
+    CLEANS UP AFTER ITSELF, and the first version did not. It set os.environ directly and
+    reloaded `server` and `handlers.shared`, leaving both the environment and the reloaded
+    module state mutated for every later test in the session. That made
+    test_automation_model's "no token is refused" case fail whenever this module happened to
+    run first — a real order dependency that the randomised runner surfaced under one seed
+    and hid under others.
+
+    A module-scoped fixture cannot take the function-scoped `monkeypatch`, so it manages its
+    own context explicitly and reloads the modules back on the way out.
     """
-    os.environ["CB_ADMIN_PROFILE"] = "workstation"
-    os.environ["CB_DEPLOYMENT"] = "both"
-    os.environ["CB_ADMIN_READ_ONLY_MODE"] = "false"
+    # A FULL environment snapshot, not monkeypatch.
+    #
+    # profile_config.apply_profile() WRITES os.environ on import — that is how a profile
+    # supplies its defaults. monkeypatch can only undo variables it set itself, so the
+    # workstation default `CB_ADMIN_HTTP_REQUIRE_AUTH=false` leaked out of this fixture and
+    # stayed set for the rest of the session. The enterprise profile then declined to
+    # override it (it only fills UNSET variables, by design), so
+    # test_automation_model's "no token is refused" case saw auth as not required and got no
+    # denial. Two correct behaviours combining into a false pass.
+    #
+    # conftest's autouse snapshot does not help: it is function-scoped, so it runs AFTER
+    # this module-scoped fixture and captures the already-mutated environment as its
+    # baseline.
+    import os as _os
+
+    saved_env = dict(_os.environ)
+    _os.environ["CB_ADMIN_PROFILE"] = "workstation"
+    _os.environ["CB_DEPLOYMENT"] = "both"
+    _os.environ["CB_ADMIN_READ_ONLY_MODE"] = "false"
 
     import handlers.shared
     import profile_config
+    import server
 
     importlib.reload(profile_config)
     importlib.reload(handlers.shared)
-    import server
-
     importlib.reload(server)
-    return {
-        tool.name: set((tool.inputSchema or {}).get("properties", {}))
-        for tool in server._TOOLS
-    }
+    try:
+        yield {
+            tool.name: set((tool.inputSchema or {}).get("properties", {}))
+            for tool in server._TOOLS
+        }
+    finally:
+        _os.environ.clear()
+        _os.environ.update(saved_env)
+        # The modules hold snapshots taken under the mutated environment, and a reload is
+        # the only way to discard them.
+        importlib.reload(profile_config)
+        importlib.reload(handlers.shared)
+        importlib.reload(server)
 
 
 # ── Names and arguments ──────────────────────────────────────────────────────

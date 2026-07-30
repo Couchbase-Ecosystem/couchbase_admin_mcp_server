@@ -22,6 +22,7 @@ COMPAT = "tests/test_mcp_compat.py"
 STATUS = "tests/test_mcp_status.py"
 CONTRACT = "tests/test_handler_contract.py"
 CAPELLA = "tests/test_capella.py tests/test_verify_capella_paths.py"
+TOKEN = "tests/test_token_validation.py"
 
 MUTATIONS = [
     # ── Defect 1: the Secure flag behind a TLS-terminating proxy ────────────
@@ -639,6 +640,154 @@ MUTATIONS = [
         'LIVE_VERIFIED_ON = "2026-07-30"',
         'LIVE_VERIFIED_ON = "recently"',
         CAPELLA,
+    ),
+    # ── The authorization decision itself ───────────────────────────────────
+    #
+    # `validate_token` had NEVER been executed by a test — every test that touched it
+    # monkeypatched it away. These break each control inside it in turn.
+    (
+        "auth: skip-verify no longer refuses to combine with required auth",
+        "auth/oidc.py",
+        '        if _env("CB_ADMIN_HTTP_REQUIRE_AUTH", "").lower() in ("1", "true", "yes", "on"):',
+        "        if False:",
+        TOKEN,
+    ),
+    (
+        "auth: skip-verify no longer refuses a network bind",
+        "auth/oidc.py",
+        '        if host not in ("127.0.0.1", "localhost", "::1", ""):',
+        "        if False:",
+        TOKEN,
+    ),
+    (
+        "auth: a symmetric signing algorithm is accepted, enabling forgery",
+        "auth/oidc.py",
+        "    if unsafe:\n        raise RuntimeError(",
+        "    if False:\n        raise RuntimeError(",
+        TOKEN,
+    ),
+    (
+        "auth: the asymmetric-only check misses HS256",
+        "auth/oidc.py",
+        '        a for a in algorithms if not a.upper().startswith(("RS", "PS", "ES", "ED"))',
+        '        a for a in algorithms if a.upper() == "NONE"',
+        TOKEN,
+    ),
+    (
+        "auth: any token from the issuer is accepted with no audience configured",
+        "auth/oidc.py",
+        '        raise RuntimeError(\n            "OAUTH_AUDIENCE must be set when CB_ADMIN_HTTP_REQUIRE_AUTH=true. "',
+        '        pass\n    if False:\n        raise RuntimeError(\n            "OAUTH_AUDIENCE must be set when CB_ADMIN_HTTP_REQUIRE_AUTH=true. "',
+        TOKEN,
+    ),
+    (
+        "auth: exp is no longer required, so a token without one never expires",
+        "auth/oidc.py",
+        'REQUIRED_CLAIM_NAMES: tuple[str, ...] = ("exp", "iss", "sub")',
+        'REQUIRED_CLAIM_NAMES: tuple[str, ...] = ("iss", "sub")',
+        TOKEN,
+    ),
+    (
+        "auth: sub is no longer required, so an admin action is unattributable",
+        "auth/oidc.py",
+        'REQUIRED_CLAIM_NAMES: tuple[str, ...] = ("exp", "iss", "sub")',
+        'REQUIRED_CLAIM_NAMES: tuple[str, ...] = ("exp", "iss")',
+        TOKEN,
+    ),
+    (
+        "auth: the required-claims list is not passed to the decoder",
+        "auth/oidc.py",
+        '        "options": {"require": required_claims, "verify_exp": True},',
+        '        "options": {"verify_exp": True},',
+        TOKEN,
+    ),
+    (
+        "auth: expiry checking is switched off",
+        "auth/oidc.py",
+        '        "options": {"require": required_claims, "verify_exp": True},',
+        '        "options": {"require": required_claims, "verify_exp": False},',
+        TOKEN,
+    ),
+    (
+        "auth: the audience is never verified, even when configured",
+        "auth/oidc.py",
+        "    if not audience:\n        # Some providers (Keycloak) put the client_id as the audience;",
+        "    if True:\n        # Some providers (Keycloak) put the client_id as the audience;",
+        TOKEN,
+    ),
+    (
+        "auth: the issuer is not checked, so any signer of a known key is trusted",
+        "auth/oidc.py",
+        "        issuer=issuer,",
+        "        issuer=None,",
+        TOKEN,
+    ),
+    (
+        "auth: the signature is verified against no key at all",
+        "auth/oidc.py",
+        "        signing_key.key,",
+        '        signing_key.key,\n        options={"verify_signature": False},',
+        TOKEN,
+    ),
+    # ── The browser login flow: PKCE and state are CSRF controls ────────────
+    (
+        "auth: PKCE downgraded to the plain method, so nothing binds the code",
+        "auth/oidc.py",
+        "    digest = hashlib.sha256(verifier.encode()).digest()",
+        "    digest = verifier.encode()",
+        TOKEN,
+    ),
+    (
+        "auth: the challenge method claims S256 while the value is not hashed",
+        "auth/oidc.py",
+        '        "code_challenge_method": "S256",',
+        '        "code_challenge_method": "plain",',
+        TOKEN,
+    ),
+    (
+        "auth: the state parameter is dropped from the authorization URL",
+        "auth/oidc.py",
+        '        "state": state,',
+        '        "state": "",',
+        TOKEN,
+    ),
+    (
+        "auth: the client secret leaks into the browser redirect",
+        "auth/oidc.py",
+        '        "code_challenge_method": "S256",\n    }',
+        '        "code_challenge_method": "S256",\n        "client_secret": _env("OAUTH_CLIENT_SECRET"),\n    }',
+        TOKEN,
+    ),
+    (
+        "auth: the PKCE verifier is not sent in the code exchange",
+        "auth/oidc.py",
+        '        "code_verifier": code_verifier,',
+        "",
+        TOKEN,
+    ),
+    (
+        "auth: a failed token exchange returns quietly instead of raising",
+        "auth/oidc.py",
+        "    resp = _requests.post(token_ep, data=payload, timeout=15)\n"
+        "    resp.raise_for_status()\n"
+        "    return resp.json()\n\n\ndef refresh_access_token",
+        "    resp = _requests.post(token_ep, data=payload, timeout=15)\n"
+        "    return resp.json()\n\n\ndef refresh_access_token",
+        TOKEN,
+    ),
+    (
+        "auth: human-only scopes are sent on the machine-to-machine request",
+        "auth/oidc.py",
+        '                if s not in ("openid", "profile", "email", "address", "phone")',
+        "                if s",
+        TOKEN,
+    ),
+    (
+        "auth: the dedicated automation identity is ignored",
+        "auth/oidc.py",
+        '    client_id = _env("OAUTH_CC_CLIENT_ID") or _env_required("OAUTH_CLIENT_ID")',
+        '    client_id = _env_required("OAUTH_CLIENT_ID")',
+        TOKEN,
     ),
 ]
 

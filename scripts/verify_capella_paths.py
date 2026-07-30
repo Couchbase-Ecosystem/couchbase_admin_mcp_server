@@ -37,6 +37,20 @@ By default it is READ-ONLY and NON-DESTRUCTIVE:
 It never sends POST, PUT, PATCH or DELETE unless you pass --write-probe, and even then
 only for operations you name explicitly with --only.
 
+CLOSING THE APP SERVICES GAP
+============================
+22 of the 61 operations are App Services and App Endpoint paths. Their paths cannot be
+filled in unless an App Service exists, so they report SKIPPED — honest, but not evidence.
+
+    python scripts/verify_capella_paths.py --bootstrap-app-service --yes-really-mutate
+
+creates a single-node App Service, verifies those paths, and deletes it again. The delete is
+in a `finally`, so it also runs if verification fails or you interrupt the run.
+
+This CREATES BILLABLE INFRASTRUCTURE and provisioning takes several minutes, which is why it
+needs the second flag. If the target project already has an App Service on the cluster, that
+one is reused and nothing is created. Add --keep-app-service to leave it running.
+
 HOW TO READ THE OUTPUT
 ======================
   VERIFIED    the route exists — 2xx, or 401/403/405/409/422, all of which require the
@@ -206,6 +220,157 @@ def _first_id(payload: str, *keys: str) -> str | None:
         if first.get(key):
             return str(first[key])
     return None
+
+
+#: Poll settings for the App Services bootstrap. Provisioning takes minutes, not seconds.
+_BOOTSTRAP_POLL_SECONDS = 15
+_BOOTSTRAP_TIMEOUT_SECONDS = 1800  # 30 min
+
+#: Marker embedded in the description of anything this script creates. Makes an orphan
+#: identifiable in the Capella console, and lets the teardown refuse to delete an App
+#: Service it did not create.
+_BOOTSTRAP_MARKER = "created-by-verify_capella_paths"
+
+
+def _app_service_state(token: str, base: str, app_service_id: str) -> str | None:
+    """The current state of one App Service, or None if it cannot be read."""
+    status, body = _request("GET", f"{base}/appservices/{app_service_id}", token)
+    if status is None or status >= 400:
+        return None
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return None
+    data = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
+    return str(data.get("currentState") or data.get("state") or "") or None
+
+
+def bootstrap_app_service(token: str, base: str, args) -> str | None:
+    """Create an App Service and wait for it to become usable. Returns its id, or None.
+
+    WHY THIS IS PART OF THE VERIFIER
+    ================================
+    22 of the 61 operations are App Services and App Endpoint paths. They cannot be
+    exercised without an App Service existing, so every run reported them SKIPPED — not a
+    failure, but not evidence either. Closing that gap meant clicking through the Capella
+    console and then re-running, which is exactly the kind of manual step that does not get
+    repeated, so the paths stayed unverified.
+
+    It is also the operation the customer engagement needs anyway: standing an App Service up
+    and tearing it down is the Couchbase Lite sync test loop.
+
+    THIS COSTS MONEY AND TAKES TIME
+    ===============================
+    An App Service is billable infrastructure and provisioning is measured in minutes. So
+    this is behind BOTH --bootstrap-app-service and --yes-really-mutate, matching the gate
+    already in front of --write-probe, and the created object carries a marker in its
+    description so the teardown can refuse to delete anything it did not create.
+    """
+    import time
+
+    name = f"verify-{int(time.time())}"
+    payload = {
+        "name": name,
+        "description": (
+            f"Ephemeral App Service for v4 path verification. {_BOOTSTRAP_MARKER}. "
+            "Safe to delete."
+        ),
+        # One node, smallest documented compute. This exists to make paths resolvable, not
+        # to serve traffic, and a 2-node HA pair would double the cost for no extra coverage.
+        "nodes": 1,
+        "compute": {"cpu": 2, "ram": 4},
+    }
+
+    print(f"  creating App Service {name!r} (this takes several minutes)...")
+    status, body = _request("POST", f"{base}/appservices", token, body=payload)
+    if status is None or status >= 400:
+        print(f"  create FAILED: HTTP {status} — {body[:300]}")
+        return None
+
+    try:
+        created = json.loads(body)
+        data = created.get("data", created) if isinstance(created, dict) else {}
+        app_service_id = str(data.get("id") or "")
+    except Exception:
+        app_service_id = ""
+
+    if not app_service_id:
+        # The create succeeded but the id is not where expected. Do NOT return None and
+        # walk away: something is now running and billing. Say so loudly with the response
+        # body, so it can be found and removed by hand.
+        print(
+            f"  create returned HTTP {status} but no id could be read from the response.\n"
+            f"  An App Service named {name!r} may now exist and BILL. Check the Capella "
+            f"console.\n  response: {body[:400]}"
+        )
+        return None
+
+    print(f"  created {app_service_id}; waiting for a terminal state...")
+    deadline = time.time() + _BOOTSTRAP_TIMEOUT_SECONDS
+    state = None
+    while time.time() < deadline:
+        state = _app_service_state(token, base, app_service_id)
+        if state in ("healthy", "turnedOff"):
+            print(f"  App Service is {state}")
+            return app_service_id
+        if state in ("deploymentFailed", "degraded"):
+            # Still return the id. A degraded App Service is useless for serving traffic but
+            # perfectly good for confirming that a URL resolves, which is all this is for —
+            # and the teardown still has to run either way.
+            print(
+                f"  App Service reached {state}; paths are still resolvable, continuing"
+            )
+            return app_service_id
+        print(
+            f"    state={state or 'unknown'} — polling again in {_BOOTSTRAP_POLL_SECONDS}s"
+        )
+        time.sleep(_BOOTSTRAP_POLL_SECONDS)
+
+    print(
+        f"  TIMED OUT after {_BOOTSTRAP_TIMEOUT_SECONDS}s with state={state!r}. "
+        f"App Service {app_service_id} EXISTS and is billing; teardown will still run."
+    )
+    return app_service_id
+
+
+def teardown_app_service(token: str, base: str, app_service_id: str) -> None:
+    """Delete an App Service this script created. Refuses anything it did not create.
+
+    Runs from a `finally`, so it also runs when verification raised or the user interrupted —
+    the failure mode to avoid is leaving billable infrastructure behind because the run did
+    not reach its last line.
+    """
+    status, body = _request("GET", f"{base}/appservices/{app_service_id}", token)
+    description = ""
+    if status is not None and status < 400:
+        try:
+            parsed = json.loads(body)
+            data = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
+            description = str(data.get("description") or "")
+        except Exception:
+            description = ""
+
+    if _BOOTSTRAP_MARKER not in description:
+        # Belt and braces. --bootstrap-app-service only ever passes an id it just created,
+        # so reaching here means something is wrong with that assumption — and deleting a
+        # customer's App Service is not a recoverable mistake.
+        print(
+            f"  REFUSING to delete {app_service_id}: its description does not carry "
+            f"{_BOOTSTRAP_MARKER!r}, so this script did not create it. Delete it by hand "
+            "if it is in fact an orphan."
+        )
+        return
+
+    print(f"  deleting App Service {app_service_id}...")
+    status, body = _request("DELETE", f"{base}/appservices/{app_service_id}", token)
+    if status is not None and status < 400:
+        print("  deleted (Capella removes it asynchronously; confirm in the console)")
+    else:
+        print(
+            f"  DELETE returned HTTP {status} — {body[:200]}\n"
+            f"  App Service {app_service_id} may still exist and BILL. Remove it in the "
+            "Capella console."
+        )
 
 
 def discover(token: str, args) -> dict:
@@ -692,7 +857,28 @@ def main() -> int:
     parser.add_argument(
         "--yes-really-mutate",
         action="store_true",
-        help="Required alongside --write-probe for a destructive operation.",
+        help=(
+            "Required alongside --write-probe for a destructive operation, and alongside "
+            "--bootstrap-app-service."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap-app-service",
+        action="store_true",
+        help=(
+            "CREATE a temporary App Service, verify the 22 App Services and App Endpoint "
+            "paths that need one, then DELETE it. Costs money and takes several minutes. "
+            "Requires --yes-really-mutate. Skipped if the project already has an App "
+            "Service on the target cluster."
+        ),
+    )
+    parser.add_argument(
+        "--keep-app-service",
+        action="store_true",
+        help=(
+            "With --bootstrap-app-service, do not delete it afterwards. It will keep "
+            "billing until you remove it."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
@@ -835,11 +1021,91 @@ def main() -> int:
             )
             return 2
 
+    if args.bootstrap_app_service and not args.yes_really_mutate:
+        print(
+            "Refusing to --bootstrap-app-service without --yes-really-mutate.\n"
+            "\n"
+            "It CREATES an App Service in the target project. That is billable "
+            "infrastructure and provisioning takes several minutes. It is deleted at the "
+            "end (including on failure or Ctrl-C), but a crash between the two leaves it "
+            "running — so the second flag is deliberate.\n"
+            "\n"
+            "Without it, the 22 App Services and App Endpoint operations report SKIPPED, "
+            "which is honest: their paths come from Couchbase's published API document, "
+            "they have simply never been watched returning a response.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.keep_app_service and not args.bootstrap_app_service:
+        print(
+            "--keep-app-service only means something with --bootstrap-app-service.",
+            file=sys.stderr,
+        )
+        return 2
+
     print(f"Capella v4 path verification — {len(ops)} operation(s) against {BASE}")
     if args.write_probe:
         print("  *** --write-probe: real write methods WILL be sent ***")
     print("Discovering identifiers:")
     ids = discover(token, args)
+
+    # The bootstrap runs AFTER discovery, so an App Service the project already has is used
+    # instead of creating a second one. Paying to provision infrastructure that is already
+    # sitting there would be the obvious way to make this feature annoying enough to avoid.
+    created_app_service = None
+    if args.bootstrap_app_service:
+        print()
+        if ids.get("app_service_id"):
+            print(
+                f"  --bootstrap-app-service: not needed, reusing the existing "
+                f"{ids['app_service_id']}"
+            )
+        elif not ids.get("cluster_id"):
+            print("  --bootstrap-app-service: no cluster to attach one to; skipping")
+        else:
+            base = (
+                f"/v4/organizations/{args.org}/projects/{ids['project_id']}"
+                f"/clusters/{ids['cluster_id']}"
+            )
+            created_app_service = bootstrap_app_service(token, base, args)
+            if created_app_service:
+                ids["app_service_id"] = created_app_service
+                # Re-discover the App Services admin user, which only exists once the App
+                # Service does, so its delete path gets a verdict rather than a skip.
+                _, abody = _request(
+                    "GET",
+                    f"{base}/appservices/{created_app_service}/adminUsers",
+                    token,
+                )
+                admin = _first_id(abody, "id", "userId", "name")
+                if admin:
+                    ids["admin_user_id"] = admin
+                    print(f"  admin user   : {admin}")
+
+    try:
+        return _run_probes(ops, ids, token, mode, args)
+    finally:
+        # In a finally so an exception or Ctrl-C during verification does not leave billable
+        # infrastructure behind. This is the whole reason the bootstrap is safe to offer.
+        if created_app_service and not args.keep_app_service:
+            print()
+            print("Tearing down:")
+            base = (
+                f"/v4/organizations/{args.org}/projects/{ids['project_id']}"
+                f"/clusters/{ids['cluster_id']}"
+            )
+            teardown_app_service(token, base, created_app_service)
+        elif created_app_service:
+            print()
+            print(
+                f"--keep-app-service: {created_app_service} is still running and BILLING. "
+                "Delete it in the Capella console when you are done with it."
+            )
+
+
+def _run_probes(ops, ids, token, mode, args) -> int:
+    """Probe every selected operation and print the report. Returns the exit code."""
     print()
 
     results = []

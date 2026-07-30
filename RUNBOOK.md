@@ -386,5 +386,11 @@ successes — a refused call is the more interesting half.
 - [ ] `CB_ADMIN_AUDIT_FILE` points somewhere durable, and a record appears after one call
 - [ ] The automation scope is issued only to principals that should act unattended
 - [ ] `python scripts/verify_capella_paths.py` reports `MISSING=0`
+- [ ] If you will use App Services (Couchbase Lite sync), close the last 22 paths once:
+      `python scripts/verify_capella_paths.py --bootstrap-app-service --yes-really-mutate`.
+      It creates a single-node App Service, verifies those paths, and deletes it again from a
+      `finally`. Without an App Service in the project those 22 report `SKIPPED` — their
+      paths come from Couchbase's published API document but have never been watched
+      returning a response.
 - [ ] A teardown step runs with `if: always()`, and a scheduled reaper exists
 - [ ] One environment has been created and torn down by hand before CI is pointed at it

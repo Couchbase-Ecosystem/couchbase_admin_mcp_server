@@ -931,3 +931,258 @@ def test_skips_are_grouped_by_cause_in_the_summary(script, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Not exercised" in out
     assert "operation(s):" in out, "the skip summary is not grouped by cause"
+
+
+# ── The App Service bootstrap ────────────────────────────────────────────────
+#
+# 22 of the 61 operations need an App Service to exist before their paths can be filled in,
+# so every run reported them SKIPPED. Creating one by hand in the Capella console and then
+# re-running is exactly the sort of manual step that never gets repeated, which is why the
+# script now does it — and why that has to be tested, because it CREATES BILLABLE
+# INFRASTRUCTURE and deletes it again.
+#
+# These use a recording double rather than the fake HTTP server, because what matters is the
+# ORDER and CONTENT of the calls: create, then poll, then delete, with the delete reached even
+# when verification raises.
+
+
+class _RecordingCapella:
+    """Stands in for `_request`, recording calls and replaying scripted states."""
+
+    def __init__(self, states, *, create_status=201, create_id="AS1", marker=True):
+        self.calls: list[tuple[str, str]] = []
+        self.states = list(states)
+        self.create_status = create_status
+        self.create_id = create_id
+        self.marker = marker
+        self.deleted: list[str] = []
+
+    def __call__(self, method, path, token, body=None):
+        self.calls.append((method, path))
+        if method == "POST" and path.endswith("/appservices"):
+            if self.create_status >= 400:
+                return self.create_status, '{"message":"quota exceeded"}'
+            payload = (
+                {"data": {"id": self.create_id}} if self.create_id else {"data": {}}
+            )
+            return self.create_status, json.dumps(payload)
+        if method == "DELETE" and "/appservices/" in path:
+            self.deleted.append(path.rsplit("/", 1)[-1])
+            return 202, "{}"
+        if method == "GET" and "/appservices/" in path and path.endswith("/adminUsers"):
+            return 200, json.dumps({"data": [{"id": "ADMIN1"}]})
+        if method == "GET" and "/appservices/" in path:
+            state = self.states.pop(0) if self.states else "healthy"
+            description = (
+                "Ephemeral App Service for v4 path verification. "
+                "created-by-verify_capella_paths. Safe to delete."
+                if self.marker
+                else "a customer's production App Service"
+            )
+            return 200, json.dumps(
+                {
+                    "data": {
+                        "id": self.create_id,
+                        "currentState": state,
+                        "description": description,
+                    }
+                }
+            )
+        return 404, '{"message":"not found"}'
+
+
+@pytest.fixture
+def fast_polls(script, monkeypatch):
+    """Collapse the 15-second poll interval so a multi-poll test is not a multi-minute one."""
+    monkeypatch.setattr(script, "_BOOTSTRAP_POLL_SECONDS", 0)
+    return script
+
+
+def test_bootstrap_creates_then_waits_for_healthy(fast_polls, monkeypatch):
+    script = fast_polls
+    fake = _RecordingCapella(states=["deploying", "deploying", "healthy"])
+    monkeypatch.setattr(script, "_request", fake)
+
+    app_id = script.bootstrap_app_service("tok", "/base", _Args())
+
+    assert app_id == "AS1"
+    assert fake.calls[0] == ("POST", "/base/appservices")
+    # It polled rather than assuming the create response meant ready.
+    assert sum(1 for m, p in fake.calls if m == "GET") >= 3
+
+
+def test_the_created_app_service_carries_an_identifying_marker(fast_polls, monkeypatch):
+    """So an orphan is recognisable in the Capella console, and so teardown can tell what it
+    is allowed to delete."""
+    script = fast_polls
+    seen = {}
+
+    def _capture(method, path, token, body=None):
+        if method == "POST":
+            seen["body"] = body
+            return 201, json.dumps({"data": {"id": "AS1"}})
+        return 200, json.dumps({"data": {"id": "AS1", "currentState": "healthy"}})
+
+    monkeypatch.setattr(script, "_request", _capture)
+    script.bootstrap_app_service("tok", "/base", _Args())
+
+    assert script._BOOTSTRAP_MARKER in seen["body"]["description"]
+    # One node, not an HA pair: this exists to make paths resolvable, not serve traffic.
+    assert seen["body"]["nodes"] == 1
+
+
+def test_a_failed_deployment_still_returns_the_id(fast_polls, monkeypatch):
+    """A degraded App Service cannot serve traffic but its URLs still resolve, which is all
+    the verifier needs — and the id is required for teardown either way. Returning None here
+    would silently abandon billable infrastructure."""
+    script = fast_polls
+    fake = _RecordingCapella(states=["deploying", "deploymentFailed"])
+    monkeypatch.setattr(script, "_request", fake)
+    assert script.bootstrap_app_service("tok", "/base", _Args()) == "AS1"
+
+
+def test_a_failed_create_returns_none(fast_polls, monkeypatch):
+    script = fast_polls
+    fake = _RecordingCapella(states=[], create_status=422)
+    monkeypatch.setattr(script, "_request", fake)
+    assert script.bootstrap_app_service("tok", "/base", _Args()) is None
+
+
+def test_a_create_with_no_readable_id_says_so_loudly(fast_polls, monkeypatch, capsys):
+    """The dangerous case: the create SUCCEEDED, so something is now billing, but the id is
+    not where expected so teardown cannot run. Returning None quietly would abandon it."""
+    script = fast_polls
+    fake = _RecordingCapella(states=[], create_id="")
+    monkeypatch.setattr(script, "_request", fake)
+
+    assert script.bootstrap_app_service("tok", "/base", _Args()) is None
+    output = capsys.readouterr().out
+    assert "BILL" in output
+    assert "console" in output.lower()
+
+
+def test_teardown_deletes_what_the_script_created(script, monkeypatch):
+    fake = _RecordingCapella(states=["healthy"])
+    monkeypatch.setattr(script, "_request", fake)
+    script.teardown_app_service("tok", "/base", "AS1")
+    assert fake.deleted == ["AS1"]
+
+
+def test_teardown_refuses_an_app_service_it_did_not_create(script, monkeypatch, capsys):
+    """The mistake that is not recoverable. Only ever reachable if the caller's assumption
+    about what it created is wrong, which is exactly when a second check earns its keep."""
+    fake = _RecordingCapella(states=["healthy"], marker=False)
+    monkeypatch.setattr(script, "_request", fake)
+
+    script.teardown_app_service("tok", "/base", "SOMEONE_ELSES")
+
+    assert fake.deleted == []
+    assert "REFUSING" in capsys.readouterr().out
+
+
+def test_a_failed_delete_tells_you_it_is_still_billing(script, monkeypatch, capsys):
+    fake = _RecordingCapella(states=["healthy"])
+
+    def _delete_fails(method, path, token, body=None):
+        if method == "DELETE":
+            return 500, '{"message":"internal error"}'
+        return fake(method, path, token, body)
+
+    monkeypatch.setattr(script, "_request", _delete_fails)
+    script.teardown_app_service("tok", "/base", "AS1")
+    assert "BILL" in capsys.readouterr().out
+
+
+def test_the_timeout_still_returns_the_id_for_teardown(script, monkeypatch, capsys):
+    """A run that gives up waiting must not also give up cleaning up."""
+    monkeypatch.setattr(script, "_BOOTSTRAP_POLL_SECONDS", 0)
+    monkeypatch.setattr(script, "_BOOTSTRAP_TIMEOUT_SECONDS", 0)
+    fake = _RecordingCapella(states=["deploying"])
+    monkeypatch.setattr(script, "_request", fake)
+    assert script.bootstrap_app_service("tok", "/base", _Args()) == "AS1"
+    assert "TIMED OUT" in capsys.readouterr().out
+
+
+def test_teardown_runs_even_when_verification_raises(script, monkeypatch, capsys):
+    """THE property that makes creating billable infrastructure acceptable at all.
+
+    Teardown sits in a `finally`, so an exception or a Ctrl-C part-way through the probe loop
+    still removes the App Service. If it were merely the next statement after the loop, any
+    failure would leave it running and billing — and a verifier is precisely the sort of tool
+    people abandon half-way when it starts reporting problems.
+    """
+    import sys
+
+    fake = _RecordingCapella(states=["healthy"])
+    monkeypatch.setattr(script, "_request", fake)
+    monkeypatch.setattr(script, "_BOOTSTRAP_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        script,
+        "discover",
+        lambda token, args: {"project_id": "PROJ", "cluster_id": "CL"},
+    )
+    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+
+    def _explode(*_a, **_k):
+        raise KeyboardInterrupt("operator gave up")
+
+    monkeypatch.setattr(script, "_run_probes", _explode)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_capella_paths.py",
+            "--org",
+            "ORG",
+            "--bootstrap-app-service",
+            "--yes-really-mutate",
+        ],
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        script.main()
+
+    assert fake.deleted == ["AS1"], (
+        "the App Service was left running after an interrupt"
+    )
+
+
+def test_an_existing_app_service_is_reused_rather_than_paid_for_twice(
+    script, monkeypatch, capsys
+):
+    """The bootstrap runs after discovery for this reason. Provisioning a second App Service
+    when the project already has one would make the flag expensive enough to avoid."""
+    import sys
+
+    created = []
+    monkeypatch.setattr(
+        script,
+        "bootstrap_app_service",
+        lambda *a, **k: created.append(1) or "SHOULD_NOT_HAPPEN",
+    )
+    monkeypatch.setattr(
+        script,
+        "discover",
+        lambda token, args: {
+            "project_id": "PROJ",
+            "cluster_id": "CL",
+            "app_service_id": "PRE_EXISTING",
+        },
+    )
+    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+    monkeypatch.setattr(script, "_run_probes", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_capella_paths.py",
+            "--org",
+            "ORG",
+            "--bootstrap-app-service",
+            "--yes-really-mutate",
+        ],
+    )
+
+    assert script.main() == 0
+    assert created == [], "created a second App Service when one already existed"
+    assert "reusing the existing PRE_EXISTING" in capsys.readouterr().out

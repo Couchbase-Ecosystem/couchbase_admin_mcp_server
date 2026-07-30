@@ -1148,6 +1148,10 @@ _PLACEHOLDER_HINTS = (
     "xxx",
     "todo",
     "replace",
+    # The literal placeholder in this file's OWN usage text
+    # (`$env:CB_CAPELLA_API_KEY = 'paste-the-key-secret-here'`), and therefore the single
+    # most likely value to be pasted verbatim. It matched none of the hints above.
+    "paste",
 )
 
 

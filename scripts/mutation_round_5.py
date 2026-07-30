@@ -29,6 +29,9 @@ SQLB = "tests/test_sql_builders.py"
 DISPATCH = "tests/test_server_dispatch.py"
 PLAN = "tests/test_plan_analysis.py"
 INFRA = "tests/test_logging_and_client.py"
+EDGE = "tests/test_transport_edge.py"
+AUDITP = "tests/test_audit_and_profile.py"
+ENVREC = "tests/test_env_reconciler.py"
 
 MUTATIONS = [
     # ── Defect 1: the Secure flag behind a TLS-terminating proxy ────────────
@@ -1225,6 +1228,120 @@ MUTATIONS = [
         "        if _is_required(default):",
         "        if False:",
         SHARED,
+    ),
+    # ── The ASGI auth edge ──────────────────────────────────────────────────
+    (
+        "edge: a presented token that fails validation is discarded, not rejected",
+        "server.py",
+        '                await _send_401(send, f"Invalid token: {type(exc).__name__}")\n                return',
+        "                pass",
+        EDGE,
+    ),
+    (
+        "edge: token validation moves back onto the event loop",
+        "server.py",
+        "                await asyncio.to_thread(_oidc.validate_token, token)",
+        "                _oidc.validate_token(token)",
+        EDGE,
+    ),
+    (
+        "edge: a missing token is allowed even when auth is required",
+        "server.py",
+        "        elif self._require:",
+        "        elif False:",
+        EDGE,
+    ),
+    (
+        "edge: the bearer scheme is matched case-sensitively",
+        "server.py",
+        'if val.lower().startswith("bearer "):',
+        'if val.startswith("Bearer "):',
+        EDGE,
+    ),
+    (
+        "banner: an issuer with no enforcement is no longer warned about",
+        "server.py",
+        '    if os.environ.get("OAUTH_ISSUER", "").strip() and not env_truthy(',
+        "    if False and env_truthy(",
+        EDGE,
+    ),
+    (
+        "banner: skip-verify is no longer announced",
+        "server.py",
+        '    if env_truthy("OAUTH_SKIP_VERIFY"):',
+        "    if False:",
+        EDGE,
+    ),
+    (
+        "banner: a ceiling entry matching no tool is no longer reported",
+        "server.py",
+        "    if _CEILING_UNKNOWN:",
+        "    if False:",
+        EDGE,
+    ),
+    # ── The audit record of last resort ─────────────────────────────────────
+    (
+        "audit: a serialisation failure loses the record entirely",
+        "audit.py",
+        "    except BaseException:\n        try:\n            _log.info(",
+        "    except BaseException:\n        return\n        try:\n            _log.info(",
+        AUDITP,
+    ),
+    (
+        # Targets the CHECK in audit_sink_error, not the log line beside it in the opener —
+        # removing the log changes nothing observable, and that version of this mutation
+        # survived for that reason.
+        "audit: an unusable audit file is no longer fatal at startup",
+        "audit.py",
+        "    if _audit_file_logger() is not None:\n        return None",
+        "    if True:\n        return None",
+        AUDITP,
+    ),
+    (
+        "audit: a correlation id is no longer bounded",
+        "audit.py",
+        "    if len(text) > _MAX_CORRELATION_LEN:",
+        "    if False:",
+        AUDITP,
+    ),
+    (
+        "audit: newlines survive in a correlation id, so a record can be forged",
+        "audit.py",
+        '    text = " ".join(text.split())',
+        "    text = text",
+        AUDITP,
+    ),
+    (
+        "profile: a hostname is treated as loopback",
+        "profile_config.py",
+        "        return ipaddress.ip_address(host).is_loopback\n    except ValueError:\n        return False",
+        "        return ipaddress.ip_address(host).is_loopback\n    except ValueError:\n        return True",
+        AUDITP,
+    ),
+    (
+        "profile: the enterprise profile stops requiring an audience",
+        "profile_config.py",
+        '            "OAUTH_AUDIENCE is unset in the enterprise profile. Without it, any "',
+        '            "note: "',
+        AUDITP,
+    ),
+    # ── The environment reconciler ──────────────────────────────────────────
+    (
+        "reconciler: a second cluster is created instead of adopting the existing one",
+        "handlers/capella/environment.py",
+        "    if cluster is None:",
+        "    if True:",
+        ENVREC,
+    ),
+    (
+        # The RESULT's password, not the request body's. `"password": password` appears at
+        # both sites and the harness replaces the first — which is the body, so the credential
+        # was still created correctly and the mutation changed nothing the caller sees.
+        "reconciler: the generated credential password is not returned to the caller",
+        "handlers/capella/environment.py",
+        '        result["credential"] = {\n            "name": cred_name,\n            "password": password,',
+        '        result["credential"] = {\n            "name": cred_name,\n            "password": "",',
+        ENVREC,
     ),
 ]
 

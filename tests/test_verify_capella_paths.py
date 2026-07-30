@@ -1941,3 +1941,243 @@ def test_child_teardown_survives_an_interrupt(script, monkeypatch):
         script.main()
 
     assert rec.deletes, "child objects were left behind after an interrupt"
+
+
+# ── main(): argument validation and the discovery paths ──────────────────────
+#
+# `main` is where an operator's mistake is caught, and every refusal here exists because the
+# alternative is worse than an error message: a placeholder sent as a real value, a destructive
+# probe run across the whole surface, or a run that reports success having checked nothing.
+
+
+def _main(script, monkeypatch, *argv, env=None):
+    """Run main() with the given argv. Returns (exit_code, stdout, stderr)."""
+    import io
+    import sys as _sys
+
+    monkeypatch.setenv("CB_CAPELLA_API_KEY", "fake-secret")
+    for key, value in (env or {}).items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+
+    monkeypatch.setattr(_sys, "argv", ["verify_capella_paths.py", *argv])
+    out, err = io.StringIO(), io.StringIO()
+    monkeypatch.setattr(_sys, "stdout", out)
+    monkeypatch.setattr(_sys, "stderr", err)
+    try:
+        code = script.main()
+    except SystemExit as exc:  # argparse errors
+        code = exc.code
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_a_missing_api_key_refuses_before_anything_is_contacted(script, monkeypatch):
+    """It must name the variable, and say it is the SECRET rather than the key id — that is
+    the mistake that produces a 401 looking like a permissions problem."""
+    monkeypatch.delenv("CB_CAPELLA_API_KEY", raising=False)
+    import io
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "argv", ["verify_capella_paths.py", "--org", "ORG"])
+    err = io.StringIO()
+    monkeypatch.setattr(_sys, "stderr", err)
+    assert script.main() == 2
+    assert "CB_CAPELLA_API_KEY" in err.getvalue()
+    assert "SECRET" in err.getvalue()
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["<your-org-id>", "<ORG>", "your-org-id-here", "paste-the-key-secret-here"],
+)
+def test_a_placeholder_value_is_refused(script, monkeypatch, placeholder):
+    """Copying a usage line verbatim is the single most common way to run this wrong, and on
+    PowerShell an angle bracket fails to parse before Python even starts — so the error the
+    operator sees says nothing about this script unless we say it."""
+    code, _out, err = _main(script, monkeypatch, "--org", placeholder)
+    assert code == 2
+    assert "placeholder" in err
+    assert "PowerShell" in err or "redirection" in err
+
+
+def test_write_probe_without_only_is_refused(script, monkeypatch):
+    """It performs real writes. Running it across the whole surface is not something to
+    reach by accident."""
+    code, _out, err = _main(script, monkeypatch, "--org", "ORG", "--write-probe")
+    assert code == 2
+    assert "--only" in err
+
+
+def test_write_probe_and_method_probe_are_mutually_exclusive(script, monkeypatch):
+    """One performs the operation and the other deliberately avoids performing it. Accepting
+    both would silently pick one."""
+    code, _out, err = _main(
+        script,
+        monkeypatch,
+        "--org",
+        "ORG",
+        "--write-probe",
+        "--method-probe",
+        "--only",
+        "capella_projects_list",
+    )
+    assert code == 2
+    assert "mutually exclusive" in err
+
+
+def test_an_unknown_operation_name_is_reported(script, monkeypatch):
+    """A typo'd --only would otherwise select nothing and report a clean run."""
+    code, _out, err = _main(
+        script, monkeypatch, "--org", "ORG", "--only", "capella_nope"
+    )
+    assert code == 2
+    assert "capella_nope" in err
+
+
+def test_keep_app_service_without_bootstrap_is_refused(script, monkeypatch):
+    code, _out, err = _main(script, monkeypatch, "--org", "ORG", "--keep-app-service")
+    assert code == 2
+    assert "--bootstrap-app-service" in err
+
+
+def test_only_pat_with_nothing_left_to_verify_succeeds(script, monkeypatch):
+    """Exit 0, not 2. Every path now cites a primary source, so there is nothing to infer —
+    and failing a CI step for having succeeded is how a check gets removed."""
+    code, out, _err = _main(script, monkeypatch, "--org", "ORG", "--only-pat")
+    assert code == 0
+    assert "No [PAT] paths remain" in out
+
+
+def test_the_organization_is_discovered_when_one_is_visible(
+    script, monkeypatch, capsys
+):
+    """A Capella API key can only see the organizations it belongs to, so discovery removes
+    the most error-prone argument entirely."""
+    code, out, _err = _main(script, monkeypatch, "--only", "capella_projects_list")
+    assert code == 0
+    assert "Discovered organization" in out
+
+
+def test_several_visible_organizations_refuse_to_guess(script, monkeypatch):
+    """Picking one would run the whole sweep against an organization the operator did not
+    name — and the write probes against it too."""
+    _Handler.orgs = [
+        {"data": {"id": "ORG", "name": "first"}},
+        {"data": {"id": "OTHER", "name": "second"}},
+    ]
+    try:
+        code, _out, err = _main(script, monkeypatch, "--only", "capella_projects_list")
+        assert code == 2
+        assert "several organizations" in err
+        assert "OTHER" in err
+    finally:
+        _Handler.orgs = [{"data": {"id": "ORG", "name": "the customer"}}]
+
+
+def test_no_visible_organization_names_the_likely_cause(script, monkeypatch):
+    """The usual cause is the key ID being used instead of the key secret."""
+    _Handler.orgs = []
+    try:
+        code, _out, err = _main(script, monkeypatch, "--only", "capella_projects_list")
+        assert code == 2
+        assert "--org" in err
+        assert "SECRET" in err or "secret" in err
+    finally:
+        _Handler.orgs = [{"data": {"id": "ORG", "name": "the customer"}}]
+
+
+def test_json_output_is_machine_readable(script, monkeypatch):
+    """CI consumes this. A human-formatted table would make the exit code the only signal."""
+    code, out, _err = _main(
+        script, monkeypatch, "--org", "ORG", "--only", "capella_projects_list", "--json"
+    )
+    assert code == 0
+    payload = json.loads(out[out.index("{") :]) if "{" in out else {}
+    assert payload
+
+
+def test_a_missing_path_fails_the_run(script, monkeypatch):
+    """Exit 1 on MISSING is what makes this usable as a CI gate. Reporting the finding and
+    exiting 0 would make the job green while a path was wrong."""
+    ops = [
+        _Op("capella_fake", "GET", "/v4/organizations/{organization_id}/nonexistent")
+    ]
+    monkeypatch.setattr(script, "load_ops", lambda: ops)
+    code, out, _err = _main(script, monkeypatch, "--org", "ORG")
+    assert code == 1
+    assert "MISSING" in out
+
+
+def test_a_clean_sweep_exits_zero(script, monkeypatch):
+    """Guards the gate from failing on success, which is how a CI check gets disabled."""
+    ops = [
+        _Op(
+            "capella_projects_list",
+            "GET",
+            "/v4/organizations/{organization_id}/projects",
+        )
+    ]
+    monkeypatch.setattr(script, "load_ops", lambda: ops)
+    code, _out, _err = _main(script, monkeypatch, "--org", "ORG")
+    assert code == 0
+
+
+def test_the_static_parse_fallback_is_used_when_the_registry_cannot_import(
+    script, monkeypatch, capsys
+):
+    """The script must run with NOTHING installed — that is how it ran on the operator's
+    machine, where `mcp` was absent. The fallback parses spec.py with `ast`."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _block(name, *args, **kwargs):
+        if name.startswith(("handlers", "mcp")):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block)
+    ops = script.load_ops()
+    monkeypatch.undo()
+
+    assert len(ops) > 50, f"the static fallback found only {len(ops)} operations"
+    assert all(op.path.startswith("/v4/") for op in ops)
+
+
+def test_every_placeholder_in_this_script_s_own_usage_text_is_detected(script):
+    """Self-consistency: the examples we hand people must be recognised if pasted verbatim.
+
+    `paste-the-key-secret-here` — the placeholder in this file's own PowerShell example, and so
+    the most likely value to arrive unsubstituted — matched none of the hints. Deriving the
+    check from the documentation rather than from a hand-written list is what keeps the two
+    from drifting again.
+    """
+    import re
+
+    docstring = script.__doc__ or ""
+    quoted = re.findall(r"'([^']{6,60})'", docstring)
+    examples = [
+        value
+        for value in quoted
+        if "-" in value and not value.startswith(("/", "http", "couchbase"))
+    ]
+    assert examples, "no quoted example values found in the usage text"
+
+    undetected = [v for v in examples if not script._looks_like_a_placeholder(v)]
+    assert not undetected, (
+        "these appear as example values in this script's own usage text but would be "
+        f"accepted as real: {undetected}"
+    )
+
+
+def test_a_real_looking_value_is_not_refused(script):
+    """Guards the detector from rejecting genuine input — a UUID, or a base64-ish key secret.
+    Over-refusing would make the script unusable and is not obviously safer."""
+    for real in (
+        "cb89726a-f6c5-452e-b92c-2c72ff292d6d",
+        "aGFydmVzdGVyLXNlY3JldC12YWx1ZQ==",
+        "715ca1af-7a2f-4d12-8eab-262f93fe8c2d",
+    ):
+        assert not script._looks_like_a_placeholder(real), real

@@ -43,18 +43,32 @@ Exit status is 0 only when nothing is MISSING, so this is usable in CI.
 
 USAGE
 =====
-    export CB_CAPELLA_API_KEY='<the API key SECRET, not its id>'
-    python3 scripts/verify_capella_paths.py --org <organization_id>
+Run it from the REPOSITORY ROOT, not from inside scripts/.
 
-    # just the four inferred paths
-    python3 scripts/verify_capella_paths.py --org <org> --only-pat
+Windows PowerShell:
 
-    # pin the project/cluster if the org has several
-    python3 scripts/verify_capella_paths.py --org <org> --project <id> --cluster <id>
+    $env:CB_CAPELLA_API_KEY = 'paste-the-key-secret-here'
+    python scripts\verify_capella_paths.py --only-pat
+
+Linux / macOS:
+
+    export CB_CAPELLA_API_KEY='paste-the-key-secret-here'
+    python3 scripts/verify_capella_paths.py --only-pat
+
+Do NOT copy angle brackets out of a usage example on PowerShell. `<` is a reserved
+redirection operator there, so the shell fails to parse the line before Python starts and
+the error mentions redirection rather than this script.
+
+The organization is discovered from the API key, which can only see organizations it
+belongs to. Pass --org only if the key can see more than one (the script will say so and
+list them). Add --project / --cluster to pin those if the org has several. Omit --only-pat
+to check all 61 operations rather than the four inferred ones. --json gives
+machine-readable output.
 
 The key needs only read access for the default mode: create one under
 Organization Settings -> API Keys with the Organization Member role plus read access to
-the project you point it at.
+the project you point it at. The value to use is the key SECRET, not the key id — that is
+the usual stumble.
 """
 
 from __future__ import annotations
@@ -339,6 +353,28 @@ def _ops_by_static_parse(spec_path: str) -> list:
     return ops
 
 
+_PLACEHOLDER_HINTS = (
+    "<",
+    ">",
+    "your-",
+    "your_",
+    "organization_id",
+    "api key secret",
+    "the api key",
+    "xxx",
+    "todo",
+    "replace",
+)
+
+
+def _looks_like_a_placeholder(value: str) -> bool:
+    """Whether a value is obviously an unsubstituted example rather than a real one."""
+    if not value:
+        return False
+    lowered = value.strip().lower()
+    return any(hint in lowered for hint in _PLACEHOLDER_HINTS)
+
+
 def load_ops() -> list:
     """Every operation, preferring the real registry and falling back to a static parse.
 
@@ -369,7 +405,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--org", required=True, help="Capella organization id")
+    parser.add_argument(
+        "--org",
+        default=os.environ.get("CB_CAPELLA_ORG_ID", "").strip(),
+        help=(
+            "Capella organization id. Optional: if omitted it is discovered from the "
+            "API key, which can only see the organizations it belongs to. May also be "
+            "given as CB_CAPELLA_ORG_ID."
+        ),
+    )
     parser.add_argument("--project", help="project id (discovered if omitted)")
     parser.add_argument("--cluster", help="cluster id (discovered if omitted)")
     parser.add_argument(
@@ -393,6 +437,61 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Reject values that are obviously still a placeholder. Copying a usage line
+    # verbatim is the single most common way to run this wrong, and on PowerShell a
+    # literal <angle-bracket> placeholder is worse than wrong: `<` is a reserved
+    # redirection operator, so the shell fails to parse the command before Python is
+    # even started, with an error that says nothing about this script.
+    for label, value in (("--org", args.org), ("CB_CAPELLA_API_KEY", token)):
+        if _looks_like_a_placeholder(value):
+            print(
+                f"{label} still looks like a placeholder, not a real value: {value!r}\n"
+                "Substitute the actual value. Note that on PowerShell you must not "
+                "include the angle brackets from a usage example — `<` is a redirection "
+                "operator there and the command will not parse.",
+                file=sys.stderr,
+            )
+            return 2
+
+    # Discover the organization from the key if it was not given. A Capella API key can
+    # only see the organizations it belongs to, so this is unambiguous in the common
+    # case of one, and it removes the most error-prone argument entirely.
+    if not args.org:
+        status, body = _request("GET", "/v4/organizations", token)
+        orgs = []
+        try:
+            parsed = json.loads(body)
+            items = parsed.get("data") if isinstance(parsed, dict) else parsed
+            for item in items or []:
+                data = item.get("data", item) if isinstance(item, dict) else {}
+                if data.get("id"):
+                    orgs.append((data["id"], data.get("name", "")))
+        except Exception:
+            orgs = []
+
+        if len(orgs) == 1:
+            args.org = orgs[0][0]
+            print(f"Discovered organization: {orgs[0][0]}  {orgs[0][1]}".rstrip())
+        elif len(orgs) > 1:
+            print(
+                "This API key can see several organizations; name the one you want "
+                "with --org:",
+                file=sys.stderr,
+            )
+            for oid, oname in orgs:
+                print(f"  {oid}  {oname}".rstrip(), file=sys.stderr)
+            return 2
+        else:
+            print(
+                "Could not discover the organization from the API key "
+                f"(GET /v4/organizations returned {status}).\n"
+                f"  {body[:300]}\n"
+                "Pass it explicitly with --org, or check that CB_CAPELLA_API_KEY is the "
+                "key SECRET rather than its id.",
+                file=sys.stderr,
+            )
+            return 2
 
     if args.write_probe and not args.only:
         print(

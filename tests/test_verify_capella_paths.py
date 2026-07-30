@@ -17,6 +17,7 @@ import os
 import pathlib
 import socket
 import threading
+from typing import ClassVar
 
 import pytest
 
@@ -61,8 +62,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    #: Set by a test to make the key see several organizations.
+    orgs: ClassVar[list] = [{"data": {"id": "ORG", "name": "the deployment"}}]
+
     def _route(self):
         path = self.path.split("?")[0]
+        if path == "/v4/organizations":
+            return self._send(200, {"data": _Handler.orgs})
         if path == "/v4/organizations/ORG/projects":
             return self._send(200, {"data": [{"id": "PROJ"}]})
         if path == "/v4/organizations/ORG/projects/PROJ/clusters":
@@ -401,3 +407,106 @@ def test_load_ops_prefers_the_real_registry(script):
     assert ops and isinstance(ops[0], Op), (
         "load_ops returned statically-parsed ops even though the registry imports"
     )
+
+
+# ── Not making the caller supply what the key already knows ──────────────────
+
+
+def test_the_organization_is_discovered_when_not_supplied(script, monkeypatch, capsys):
+    """--org was required, and it is the most error-prone argument: a long opaque UUID
+    that has to be found in a browser URL. A Capella API key can only see organizations
+    it belongs to, so for the common case of one there is nothing to ask.
+
+    This also removes the failure that prompted the change: pasting a usage line with
+    `<organization_id>` still in it.
+    """
+    _Handler.orgs = [{"data": {"id": "ORG", "name": "the deployment"}}]
+    monkeypatch.setattr("sys.argv", ["verify", "--only-pat", "--json"])
+    script.main()
+    out = capsys.readouterr().out
+    assert "Discovered organization: ORG" in out
+    payload = json.loads(_json_tail(out))
+    assert payload["results"], payload
+
+
+def test_several_visible_organizations_asks_rather_than_guesses(
+    script, monkeypatch, capsys
+):
+    """Picking one silently could point the run at the wrong tenant. It lists them and
+    stops."""
+    _Handler.orgs = [
+        {"data": {"id": "ORG", "name": "the deployment"}},
+        {"data": {"id": "ORG2", "name": "Other"}},
+    ]
+    try:
+        monkeypatch.setattr("sys.argv", ["verify", "--only-pat"])
+        assert script.main() == 2
+        err = capsys.readouterr().err
+        assert "several organizations" in err
+        assert "ORG2" in err
+    finally:
+        _Handler.orgs = [{"data": {"id": "ORG", "name": "the deployment"}}]
+
+
+def test_an_explicit_org_skips_discovery(script, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["verify", "--org", "ORG", "--only-pat", "--json"])
+    script.main()
+    assert "Discovered organization" not in capsys.readouterr().out
+
+
+def test_the_org_can_come_from_the_environment(script, monkeypatch, capsys):
+    """So it can be set once in a shell profile or a CI secret."""
+    monkeypatch.setenv("CB_CAPELLA_ORG_ID", "ORG")
+    monkeypatch.setattr("sys.argv", ["verify", "--only-pat", "--json"])
+    script.main()
+    assert "Discovered organization" not in capsys.readouterr().out
+
+
+# ── Placeholders must fail with an explanation, not a confusing error ────────
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "<organization_id>",
+        "<org>",
+        "your-org-id",
+        "YOUR_ORG_ID",
+        "xxx",
+        "TODO",
+        "replace-me",
+    ],
+)
+def test_a_placeholder_org_is_refused_with_an_explanation(
+    script, monkeypatch, capsys, value
+):
+    """Copying a usage line verbatim is the most common way to run this wrong.
+
+    On PowerShell it is worse than wrong: `<` is a reserved redirection operator, so the
+    shell fails to parse the command before Python starts and the error talks about
+    redirection rather than this tool. The message therefore says so explicitly.
+    """
+    monkeypatch.setattr("sys.argv", ["verify", "--org", value, "--only-pat"])
+    assert script.main() == 2
+    err = capsys.readouterr().err
+    assert "placeholder" in err
+    assert "PowerShell" in err
+
+
+def test_a_placeholder_api_key_is_refused(script, monkeypatch, capsys):
+    monkeypatch.setenv("CB_CAPELLA_API_KEY", "<the API key SECRET, not its id>")
+    monkeypatch.setattr("sys.argv", ["verify", "--org", "ORG", "--only-pat"])
+    assert script.main() == 2
+    assert "placeholder" in capsys.readouterr().err
+
+
+def test_a_real_looking_value_is_not_mistaken_for_a_placeholder(script):
+    """The guard must not reject legitimate input: Capella ids are UUIDs and key secrets
+    are long base64-ish strings."""
+    assert not script._looks_like_a_placeholder("6af08c0a-8cab-4c1c-b257-b521575c16d0")
+    assert not script._looks_like_a_placeholder("kZ3xQ8vN2pL9wR4tY7uI1oP5aS6dF0gH")
+    assert not script._looks_like_a_placeholder("")
+
+
+def _json_tail(out: str) -> str:
+    return out[out.index("{") :]

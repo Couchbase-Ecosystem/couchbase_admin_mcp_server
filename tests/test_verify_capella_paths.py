@@ -5,7 +5,7 @@ A verification tool that reports the wrong answer is worse than none: it would e
 send someone chasing a path that is fine, or certify one that is broken. So the script's
 logic is exercised against a local HTTP server that behaves like v4 — including the
 awkward parts (a 404 whose body says the ROUTE matched and the OBJECT was absent, and a
-405 from the OPTIONS probe) — before it is ever pointed at a real organization.
+405 from the OPTIONS probe) — before it is ever pointed at the customer's organization.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     #: Set by a test to make the key see several organizations.
-    orgs: ClassVar[list] = [{"data": {"id": "ORG", "name": "the deployment"}}]
+    orgs: ClassVar[list] = [{"data": {"id": "ORG", "name": "the customer"}}]
 
     def _route(self):
         path = self.path.split("?")[0]
@@ -489,7 +489,7 @@ def test_the_organization_is_discovered_when_not_supplied(script, monkeypatch, c
     This also removes the failure that prompted the change: pasting a usage line with
     `<organization_id>` still in it.
     """
-    _Handler.orgs = [{"data": {"id": "ORG", "name": "the deployment"}}]
+    _Handler.orgs = [{"data": {"id": "ORG", "name": "the customer"}}]
     monkeypatch.setattr(
         "sys.argv", ["verify", "--only", "capella_projects_list", "--json"]
     )
@@ -506,7 +506,7 @@ def test_several_visible_organizations_asks_rather_than_guesses(
     """Picking one silently could point the run at the wrong tenant. It lists them and
     stops."""
     _Handler.orgs = [
-        {"data": {"id": "ORG", "name": "the deployment"}},
+        {"data": {"id": "ORG", "name": "the customer"}},
         {"data": {"id": "ORG2", "name": "Other"}},
     ]
     try:
@@ -516,7 +516,7 @@ def test_several_visible_organizations_asks_rather_than_guesses(
         assert "several organizations" in err
         assert "ORG2" in err
     finally:
-        _Handler.orgs = [{"data": {"id": "ORG", "name": "the deployment"}}]
+        _Handler.orgs = [{"data": {"id": "ORG", "name": "the customer"}}]
 
 
 def test_an_explicit_org_skips_discovery(script, monkeypatch, capsys):

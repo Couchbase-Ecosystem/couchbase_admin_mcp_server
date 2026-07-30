@@ -387,7 +387,9 @@ def test_capella_host_detection():
     assert deployment.looks_like_capella_host(
         "couchbases://cb.abc123.cloud.couchbase.com"
     )
-    assert not deployment.looks_like_capella_host("couchbases://db.internal.acme.example")
+    assert not deployment.looks_like_capella_host(
+        "couchbases://db.internal.acme.example"
+    )
 
 
 def test_mode_detection(monkeypatch):
@@ -493,7 +495,7 @@ def test_guardrails_status_tool_reports_posture(monkeypatch):
 # This table exists because reading the code could not have found these. A live probe
 # returned 405 for the App Services list, and only then did diffing against the spec show
 # that the cluster-scoped collection is POST-only. Recording the authoritative shape here
-# means the next such divergence fails a test instead of failing in a production pipeline.
+# means the next such divergence fails a test instead of failing in a customer's pipeline.
 
 _BASE = (
     "/v4/organizations/{organization_id}/projects/{project_id}"

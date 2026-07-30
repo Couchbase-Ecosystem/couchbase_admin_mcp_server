@@ -30,7 +30,7 @@ fails as an opaque 404 that looks like a missing resource. Sources:
   [LIVE] Path confirmed against a real Capella organization with
          scripts/verify_capella_paths.py — the control plane matched the route
          and answered 405 to an OPTIONS probe, which it can only do after
-         routing. Verified 2026-07-30 against a test
+         routing. Verified 2026-07-30 against a Couchbase-internal test
          organization (v4, cloudapi.cloud.couchbase.com).
 
          [LIVE] alone asserts the PATH. It does not assert the METHOD, because

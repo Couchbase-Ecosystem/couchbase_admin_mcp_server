@@ -96,7 +96,7 @@ security audit at the end of this document.
     contributing guide is the one document a newcomer trusts completely and the one
     nobody re-reads.
 
-## Verify against your own organization before relying on it
+## Verify against the customer's organization before relying on it
 
 Most paths are transcribed from the Terraform provider's Go source or from
 verbatim reference docs, and are marked `[TF]` / `[DOC]` in `spec.py`. A minority
@@ -111,7 +111,7 @@ first thing to check if a call fails:
 - `capella_app_service_turn_on` / `_turn_off` / `_certificate_get`
 - `capella_app_service_admin_user_*`
 
-Also worth confirming with a real credential in your own organization:
+Also worth confirming with a real credential in the customer's org:
 
 - **The `cb_perf_*` advisors.** They read `system:completed_requests`, which
   normally requires `query_system_catalog`. The official Couchbase MCP server
@@ -123,7 +123,7 @@ Also worth confirming with a real credential in your own organization:
   `data,query,index` group at 4 vCPU / 16 GB. That is a reasonable general
   default, not a cheap one. For mobile app testing a smaller single-node shape is
   likely right, and the cost difference across many short-lived environments is
-  the whole ballgame. Confirm the shape you need, then change the default.
+  the whole ballgame. Confirm the shape with the customer, then change the default.
 
 ## Deferred deliberately
 
@@ -373,7 +373,7 @@ CVE-2024-6221.
    token). `.env.example`'s claim that "the automated caller provably cannot bypass
    it" is currently false and should be softened or made true.
 3. **SSRF sinks, unfixed** — they need an allowlist design and a decision about
-   whether the features are needed at all: `admin_xdcr_reference_create`
+   whether the customer needs the features at all: `admin_xdcr_reference_create`
    (`hostname`), `admin_node_add` (`hostname`), `admin_logs_collect_start`
    (`uploadHost` — a one-call cluster-log exfiltration primitive),
    `admin_kmip_set` (`kmipHost` — repoints the master encryption key source),
@@ -550,7 +550,7 @@ mutation suites exist.
   console: the workstation console is unauthenticated, and its origin allowlist must
   admit any localhost port, so a browser request cannot evidence *which* human — the
   CSRF finding showed exactly how a page could supply one. `CB_ADMIN_ALWAYS_CONFIRM`
-  ships empty, so unattended teardown is unaffected unless an operator opts in.
+  ships empty, so the customer's unattended teardown is unaffected unless an operator opts in.
 - **An unwritable `CB_ADMIN_AUDIT_FILE` stops startup.** In an unattended chain the log
   is the only accountability, so degrading quietly is not an option. The image creates
   and chowns `/var/log/couchbase-admin-mcp`.
@@ -678,7 +678,7 @@ mistaken for approval.
 
 # v4 path verification — first live run
 
-Run 2026-07-30 against a test organization
+Run 2026-07-30 against the a Couchbase-internal test organization
 (`00000000-0000-0000-0000-00000000org1`), `--only-pat`:
 
 ```

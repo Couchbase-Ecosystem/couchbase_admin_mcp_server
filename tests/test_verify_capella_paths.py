@@ -1305,3 +1305,424 @@ def test_the_promoted_tags_record_the_status_that_was_observed():
         f"promoted tags should carry the observed status; these do not: "
         f"{sorted(set(tags) - set(with_status))}"
     )
+
+
+# ── Child objects: closing the last 14 skips ─────────────────────────────────
+#
+# After an App Service exists, 14 operations still reported SKIPPED, every one because the
+# list endpoint answered 200 with an EMPTY array — no id to put in the path. Nine of them are
+# the App Endpoint subtree, which is the surface a Couchbase Lite replicator talks to, so
+# leaving those unverified would have meant verifying the easy half.
+#
+# These are real writes against a real organization, so the safety properties get the same
+# treatment as the App Service bootstrap.
+
+
+class _ChildRecorder:
+    """Records creates and deletes, and can be told to reject specific creates."""
+
+    def __init__(self, *, fail: tuple = (), bucket_name="travel"):
+        self.creates: list[tuple[str, dict]] = []
+        self.deletes: list[str] = []
+        self.fail = fail
+        self.bucket_name = bucket_name
+        self.counter = 0
+
+    def __call__(self, method, path, token, body=None):
+        if method == "POST":
+            self.creates.append((path, body or {}))
+            if any(marker in path for marker in self.fail):
+                return 422, '{"code":422,"message":"rejected by the fake"}'
+            self.counter += 1
+            return 201, json.dumps({"data": {"id": f"NEW{self.counter}"}})
+        if method == "DELETE":
+            self.deletes.append(path)
+            return 204, ""
+        if method == "GET" and "/buckets/" in path:
+            return 200, json.dumps({"data": {"id": "BKT", "name": self.bucket_name}})
+        return 200, json.dumps({"data": []})
+
+
+BASE_IDS = {
+    "organization_id": "ORG",
+    "project_id": "PROJ",
+    "cluster_id": "CL",
+    "bucket_id": "BKT",
+    "scope_name": "inventory",
+    "collection_name": "airline",
+    "app_service_id": "AS1",
+}
+
+
+def test_child_bootstrap_supplies_every_missing_identifier(script, monkeypatch):
+    """The whole point: these five ids are what the 14 skips were waiting for."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    ids = dict(BASE_IDS)
+    overrides: dict = {}
+
+    script.bootstrap_child_objects("tok", "/base", ids, overrides)
+
+    assert ids["user_id"]
+    assert ids["allowed_cidr_id"]
+    assert ids["admin_user_id"]
+    assert ids["app_endpoint_name"]
+    assert ids["app_endpoint_keyspace"]
+    assert overrides["capella_app_service_allowed_cidr_delete"]["allowed_cidr_id"]
+
+
+def test_the_two_allowlist_ids_are_kept_apart(script, monkeypatch):
+    """Both routes use the placeholder {allowed_cidr_id} but they are DIFFERENT objects. A
+    single flat dict can hold one, so whichever op did not own it would be probed with the
+    other's id and answer a 404 that has to be argued about instead of a clean verdict."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    ids = dict(BASE_IDS)
+    overrides: dict = {}
+
+    script.bootstrap_child_objects("tok", "/base", ids, overrides)
+
+    cluster_id = ids["allowed_cidr_id"]
+    as_id = overrides["capella_app_service_allowed_cidr_delete"]["allowed_cidr_id"]
+    assert cluster_id != as_id
+
+
+def test_an_override_applies_to_one_operation_only(script):
+    """And must not leak into the shared dict, or it would silently redirect the other
+    allowlist route to the wrong object."""
+    ids = {"organization_id": "ORG", "allowed_cidr_id": "CLUSTER_CIDR"}
+    overrides = {"op_b": {"allowed_cidr_id": "AS_CIDR"}}
+
+    op_a = _Op(
+        "op_a", "DELETE", "/v4/organizations/{organization_id}/a/{allowed_cidr_id}"
+    )
+    op_b = _Op(
+        "op_b", "DELETE", "/v4/organizations/{organization_id}/b/{allowed_cidr_id}"
+    )
+
+    # Assert on the FILLED path, which is what actually gets requested. `probe` would send a
+    # real request; `fill` is the part under test.
+    filled_a, _ = script.fill(op_a.path, {**ids, **overrides.get("op_a", {})})
+    filled_b, _ = script.fill(op_b.path, {**ids, **overrides.get("op_b", {})})
+    assert filled_a.endswith("/CLUSTER_CIDR")
+    assert filled_b.endswith("/AS_CIDR")
+    assert ids["allowed_cidr_id"] == "CLUSTER_CIDR", (
+        "the override mutated the shared dict"
+    )
+
+
+def test_probe_actually_applies_the_override_to_the_request(script, monkeypatch):
+    """Through `probe`, not `fill`.
+
+    The test above exercises the substitution and passed while `probe` ignored overrides
+    entirely — a mutation setting `extra = None` survived it. `fill` being right is worth
+    nothing if the value never reaches the request, so this asserts on the URL that was sent.
+    """
+    requested: list[str] = []
+
+    def _record(method, path, token, body=None):
+        requested.append(path)
+        return 405, '{"message":"method not allowed"}'
+
+    monkeypatch.setattr(script, "_request", _record)
+
+    op = _Op(
+        "capella_app_service_allowed_cidr_delete",
+        "DELETE",
+        "/v4/organizations/{organization_id}/x/{allowed_cidr_id}",
+    )
+    result = script.probe(
+        op,
+        {"organization_id": "ORG", "allowed_cidr_id": "CLUSTER_CIDR"},
+        "tok",
+        "options",
+        {"capella_app_service_allowed_cidr_delete": {"allowed_cidr_id": "AS_CIDR"}},
+    )
+
+    assert result.verdict == "VERIFIED"
+    assert requested == ["/v4/organizations/ORG/x/AS_CIDR"], (
+        "probe sent the shared id instead of the per-operation override"
+    )
+
+
+def test_probe_without_a_matching_override_uses_the_shared_id(script, monkeypatch):
+    """Guards the test above from passing because overrides became mandatory, which would
+    send every other allowlist route at the wrong object."""
+    requested: list[str] = []
+
+    def _record(method, path, token, body=None):
+        requested.append(path)
+        return 405, "{}"
+
+    monkeypatch.setattr(script, "_request", _record)
+
+    op = _Op(
+        "some_other_op",
+        "DELETE",
+        "/v4/organizations/{organization_id}/x/{allowed_cidr_id}",
+    )
+    script.probe(
+        op,
+        {"organization_id": "ORG", "allowed_cidr_id": "CLUSTER_CIDR"},
+        "tok",
+        "options",
+        {"capella_app_service_allowed_cidr_delete": {"allowed_cidr_id": "AS_CIDR"}},
+    )
+
+    assert requested == ["/v4/organizations/ORG/x/CLUSTER_CIDR"]
+
+
+def test_the_allowlist_entries_use_a_documentation_range(script, monkeypatch):
+    """THE security property. An allowlist entry is the one object here whose survival would
+    WIDEN network exposure. RFC 5737 TEST-NET-1 is reserved for documentation and assigned to
+    no real host, so allowlisting it grants access to nothing.
+
+    Explicitly NOT an RFC 1918 range: 10/8 and 192.168/16 are somebody's actual private
+    network, and 0.0.0.0/0 would expose the cluster to the internet.
+    """
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    cidrs = [body["cidr"] for path, body in rec.creates if "cidr" in body]
+    assert len(cidrs) == 2
+    for cidr in cidrs:
+        assert cidr.startswith("192.0.2."), f"{cidr} is not RFC 5737 TEST-NET-1"
+        assert cidr.endswith("/32"), f"{cidr} is wider than a single host"
+    assert "0.0.0.0/0" not in cidrs
+
+
+def test_the_allowlist_entries_expire_on_their_own(script, monkeypatch):
+    """Belt and braces for the only object whose survival matters. Teardown runs from a
+    `finally`, but a machine that loses power between create and delete would otherwise leave
+    an allowlist rule in place indefinitely."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    for path, body in rec.creates:
+        if "cidr" in body:
+            assert body.get("expiresAt"), (
+                f"no expiresAt on the allowlist entry at {path}"
+            )
+
+
+def test_no_generated_password_is_ever_printed(script, monkeypatch, capsys):
+    """Two of these objects carry credentials. The script prints every id it creates, and a
+    password alongside one would land in a terminal and a CI log."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    output = capsys.readouterr().out
+    passwords = [b["password"] for _p, b in rec.creates if "password" in b]
+    assert passwords, "expected the credential objects to set a password"
+    for password in passwords:
+        assert password not in output
+
+
+def test_passwords_are_supplied_rather_than_left_to_capella(script, monkeypatch):
+    """Capella generates one if the field is omitted — and returns it in the create response,
+    which this script parses and reports on. Supplying one keeps the secret out of a body we
+    handle at all."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    credential_creates = [
+        b for p, b in rec.creates if p.endswith(("/users", "/adminUsers"))
+    ]
+    assert len(credential_creates) == 2
+    for body in credential_creates:
+        assert body.get("password"), (
+            "a credential object was created without a password"
+        )
+        assert len(body["password"]) >= 16
+
+
+def test_the_app_endpoint_keyspace_is_spelled_out(script, monkeypatch):
+    """A bare endpoint name is ACCEPTED by v4 and read as `<name>._default._default`, so on a
+    cluster with named scopes it silently targets the wrong collection. The two
+    accessControlFunction paths take a keyspace, so getting this wrong would verify the right
+    route against the wrong object."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    ids = dict(BASE_IDS)
+    script.bootstrap_child_objects("tok", "/base", ids, {})
+
+    assert (
+        ids["app_endpoint_keyspace"] == f"{ids['app_endpoint_name']}.inventory.airline"
+    )
+
+
+def test_the_app_endpoint_is_bound_by_bucket_name_not_id(script, monkeypatch):
+    """v4 wants the bucket NAME here, while every other path uses the opaque id. Passing the
+    id produces a 422 that reads like a schema problem."""
+    rec = _ChildRecorder(bucket_name="travel-sample")
+    monkeypatch.setattr(script, "_request", rec)
+    script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    endpoint = next(b for p, b in rec.creates if p.endswith("/appEndpoints"))
+    assert endpoint["bucket"] == "travel-sample"
+    assert endpoint["bucket"] != "BKT"
+
+
+def test_one_failed_create_does_not_abort_the_others(script, monkeypatch, capsys):
+    """None of these are prerequisites for one another, and a rejection body names the field
+    that is wrong — which is how the App Service node floor was found. Aborting would discard
+    that and the remaining verifications with it."""
+    rec = _ChildRecorder(fail=("/users",))
+    monkeypatch.setattr(script, "_request", rec)
+    ids = dict(BASE_IDS)
+
+    created = script.bootstrap_child_objects("tok", "/base", ids, {})
+
+    assert "user_id" not in ids
+    assert ids["app_endpoint_name"], (
+        "a later create was abandoned after an earlier failure"
+    )
+    assert len(created) >= 3
+    assert "422" in capsys.readouterr().out
+
+
+def test_a_missing_app_service_skips_only_its_own_children(script, monkeypatch):
+    """The database credential and cluster allowlist entry are cluster-level and do not need
+    one, so they must still be created."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    ids = {k: v for k, v in BASE_IDS.items() if k != "app_service_id"}
+
+    script.bootstrap_child_objects("tok", "/base", ids, {})
+
+    assert ids["user_id"]
+    assert ids["allowed_cidr_id"]
+    assert "app_endpoint_name" not in ids
+    assert "admin_user_id" not in ids
+
+
+def test_teardown_removes_children_in_reverse_order(script, monkeypatch):
+    """The App Endpoint and admin user live UNDER the App Service. Creation order is
+    cluster-level first, so deletion has to run backwards."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    created = script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    rec.deletes.clear()
+    script.teardown_child_objects("tok", created)
+
+    assert len(rec.deletes) == len(created)
+    assert rec.deletes == [path for _label, path in reversed(created)]
+
+
+def test_every_created_child_is_torn_down(script, monkeypatch):
+    """A create with no matching delete is an object left behind in a real organization."""
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    created = script.bootstrap_child_objects("tok", "/base", dict(BASE_IDS), {})
+
+    successful_creates = [p for p, _b in rec.creates]
+    assert len(created) == len(successful_creates), (
+        "a child object was created without a teardown record"
+    )
+
+
+def test_a_failed_child_delete_is_reported_with_its_path(script, monkeypatch, capsys):
+    """So it can be removed by hand. A silent failure is an orphan nobody knows about."""
+
+    def _delete_fails(method, path, token, body=None):
+        if method == "DELETE":
+            return 500, '{"message":"internal error"}'
+        return 200, "{}"
+
+    monkeypatch.setattr(script, "_request", _delete_fails)
+    script.teardown_child_objects("tok", [("db credential", "/base/users/NEW1")])
+
+    output = capsys.readouterr().out
+    assert "/base/users/NEW1" in output
+    assert "500" in output
+
+
+def test_child_teardown_runs_before_the_app_service_is_deleted(script, monkeypatch):
+    """Deleting the parent first would orphan the DELETE calls that verify the children, and
+    the run would report a teardown failure for objects Capella had already removed."""
+    import sys
+
+    order: list[str] = []
+    rec = _ChildRecorder()
+
+    def _record(method, path, token, body=None):
+        if method == "DELETE":
+            order.append("app_service" if path.count("/") == 4 else "child")
+        return rec(method, path, token, body)
+
+    monkeypatch.setattr(script, "_request", _record)
+    monkeypatch.setattr(script, "_BOOTSTRAP_POLL_SECONDS", 0)
+    monkeypatch.setattr(
+        script,
+        "discover",
+        lambda token, args: {"project_id": "PROJ", "cluster_id": "CL"},
+    )
+    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+    monkeypatch.setattr(script, "_run_probes", lambda *a, **k: 0)
+    monkeypatch.setattr(script, "bootstrap_app_service", lambda *a, **k: "AS1")
+    monkeypatch.setattr(
+        script,
+        "teardown_app_service",
+        lambda token, base, app_id: order.append("app_service"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_capella_paths.py",
+            "--org",
+            "ORG",
+            "--bootstrap-app-service",
+            "--bootstrap-child-objects",
+            "--yes-really-mutate",
+        ],
+    )
+
+    assert script.main() == 0
+    assert order, "nothing was torn down"
+    assert order[-1] == "app_service", f"the App Service was not deleted last: {order}"
+
+
+def test_child_teardown_survives_an_interrupt(script, monkeypatch):
+    """Same property as the App Service teardown, for the same reason."""
+    import sys
+
+    rec = _ChildRecorder()
+    monkeypatch.setattr(script, "_request", rec)
+    monkeypatch.setattr(
+        script,
+        "discover",
+        lambda token, args: {
+            "project_id": "PROJ",
+            "cluster_id": "CL",
+            "bucket_id": "BKT",
+            "app_service_id": "AS1",
+        },
+    )
+    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+
+    def _explode(*_a, **_k):
+        raise KeyboardInterrupt("operator gave up")
+
+    monkeypatch.setattr(script, "_run_probes", _explode)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_capella_paths.py",
+            "--org",
+            "ORG",
+            "--bootstrap-child-objects",
+            "--yes-really-mutate",
+        ],
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        script.main()
+
+    assert rec.deletes, "child objects were left behind after an interrupt"

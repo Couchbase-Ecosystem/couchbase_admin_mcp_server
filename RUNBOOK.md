@@ -386,11 +386,19 @@ successes — a refused call is the more interesting half.
 - [ ] `CB_ADMIN_AUDIT_FILE` points somewhere durable, and a record appears after one call
 - [ ] The automation scope is issued only to principals that should act unattended
 - [ ] `python scripts/verify_capella_paths.py` reports `MISSING=0`
-- [ ] If you will use App Services (Couchbase Lite sync), close the last 22 paths once:
-      `python scripts/verify_capella_paths.py --bootstrap-app-service --yes-really-mutate`.
-      It creates a single-node App Service, verifies those paths, and deletes it again from a
-      `finally`. Without an App Service in the project those 22 report `SKIPPED` — their
-      paths come from Couchbase's published API document but have never been watched
-      returning a response.
+- [ ] If you will use App Services (Couchbase Lite sync), close the remaining paths once:
+      `python scripts/verify_capella_paths.py --bootstrap-app-service --bootstrap-child-objects --yes-really-mutate`.
+      Without an App Service, 22 operations report `SKIPPED`; with one but no App Endpoint,
+      14 still do. Their paths come from Couchbase's published API document but have never
+      been watched returning a response.
+
+      It creates a two-node App Service (Capella's minimum — it refuses 1), then a database
+      credential, two allowlist entries, an App Services admin user and an App Endpoint;
+      verifies everything; then deletes it all from a `finally`, children before the parent.
+
+      The allowlist entries use `192.0.2.x/32` — RFC 5737 TEST-NET-1, reserved for
+      documentation and assigned to no real host, so neither grants access to anything — and
+      carry a one-hour `expiresAt` so a failed teardown still lapses. The App Service is the
+      only billable part; budget several minutes for it to provision.
 - [ ] A teardown step runs with `if: always()`, and a scheduled reaper exists
 - [ ] One environment has been created and torn down by hand before CI is pointed at it

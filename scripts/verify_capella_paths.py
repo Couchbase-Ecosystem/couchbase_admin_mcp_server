@@ -51,6 +51,26 @@ This CREATES BILLABLE INFRASTRUCTURE and provisioning takes several minutes, whi
 needs the second flag. If the target project already has an App Service on the cluster, that
 one is reused and nothing is created. Add --keep-app-service to leave it running.
 
+After that, 14 operations still report SKIPPED — every one because a list endpoint answered
+200 with an EMPTY array, so there was no id to put in the path. Add:
+
+    --bootstrap-child-objects
+
+and it creates a database credential, a cluster allowlist entry, an App Service allowlist
+entry, an App Services admin user and an App Endpoint; verifies those paths; then deletes
+them, children before the App Service. Free and near-instant, unlike the App Service itself.
+
+Nine of those 14 are the App Endpoint subtree — the surface a Couchbase Lite replicator
+actually targets — so it is the half worth verifying most.
+
+Both allowlist entries use 192.0.2.x/32 from RFC 5737 TEST-NET-1, which is reserved for
+documentation and assigned to no real host, so neither grants access to anything. They also
+carry a one-hour expiresAt, so a teardown that never runs still leaves a rule that lapses.
+Full sweep:
+
+    python scripts/verify_capella_paths.py \
+        --bootstrap-app-service --bootstrap-child-objects --yes-really-mutate
+
 HOW TO READ THE OUTPUT
 ======================
   VERIFIED    the route exists — 2xx, or 401/403/405/409/422, all of which require the
@@ -367,6 +387,203 @@ def bootstrap_app_service(token: str, base: str, args) -> str | None:
     return app_service_id
 
 
+#: RFC 5737 TEST-NET-1. Reserved for documentation and examples, so it is guaranteed not to
+#: be assigned to any real host — allowlisting it grants access to nothing. Deliberately not
+#: an RFC 1918 range: 10/8 and 192.168/16 are somebody's actual private network.
+_DOC_CIDR_CLUSTER = "192.0.2.10/32"
+_DOC_CIDR_APP_SERVICE = "192.0.2.11/32"
+
+
+def _throwaway_password() -> str:
+    """A password for an object that exists for a few minutes and is then deleted.
+
+    Never printed and never returned to the caller. Capella will generate one if the field is
+    omitted, but it then returns it in the create response — so supplying one keeps the
+    generated secret out of a response body this script parses and might report on.
+    """
+    import secrets
+    import string
+
+    alphabet = string.ascii_letters + string.digits
+    return "Vv1!" + "".join(secrets.choice(alphabet) for _ in range(20))
+
+
+def _bucket_name(token: str, base: str, bucket_id: str) -> str | None:
+    """The bucket's NAME, which App Endpoint creation wants instead of its v4 id."""
+    status, body = _request("GET", f"{base}/buckets/{bucket_id}", token)
+    if status is None or status >= 400:
+        return None
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return None
+    data = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
+    return str(data.get("name") or "") or None
+
+
+def bootstrap_child_objects(token: str, base: str, ids: dict, overrides: dict) -> list:
+    """Create the small objects the last 14 skipped paths need. Returns teardown records.
+
+    WHY
+    ===
+    After an App Service exists, 14 operations still reported SKIPPED — and every one for the
+    same reason: the list endpoint answered 200 with an EMPTY array, so there was no id to
+    put in the path. Nine of them are the App Endpoint subtree, which is the surface a
+    Couchbase Lite replicator actually talks to. Leaving those unverified while verifying the
+    App Service that hosts them would be verifying the easy half.
+
+    Unlike the App Service, none of these cost anything or take more than a moment.
+
+    WHAT IS CREATED, AND WHY EACH IS SAFE
+    =====================================
+    * a database credential — a name and a throwaway password, deleted at the end
+    * a cluster allowlist entry, and an App Service allowlist entry — both on
+      192.0.2.x/32 from RFC 5737 TEST-NET-1, reserved for documentation and therefore
+      assigned to no real host, so neither grants access to anything. Both also carry a
+      short `expiresAt`, so even a teardown that fails leaves a rule that lapses on its own.
+      That belt-and-braces matters more here than elsewhere: an allowlist entry is the one
+      object in this list whose survival would WIDEN network exposure.
+    * an App Services admin user — again name plus throwaway password
+    * an App Endpoint bound to the discovered bucket/scope/collection, which yields both
+      `app_endpoint_name` and `app_endpoint_keyspace`
+
+    Each is created independently and a failure is reported and skipped rather than aborting,
+    because they are not prerequisites for one another — and a 422 body is the fastest way to
+    learn a body shape this registry has only ever had from documentation.
+    """
+    import datetime
+
+    created: list[tuple[str, str]] = []  # (label, DELETE path)
+    stamp = int(time.time())
+    expires = (
+        datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _create(label: str, path: str, payload: dict, *, delete_suffix=True):
+        status, body = _request("POST", path, token, body=payload)
+        if status is None or status >= 400:
+            # Not fatal. The point of the run is to learn, and the rejection body names the
+            # field that is wrong — which is how the App Service node floor was found.
+            print(f"  {label:14s}: create failed HTTP {status} — {body[:220]}")
+            return None
+        try:
+            parsed = json.loads(body)
+            data = parsed.get("data", parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            data = {}
+        new_id = str(data.get("id") or data.get("name") or "")
+        if not new_id:
+            print(f"  {label:14s}: created but no id in the response — {body[:160]}")
+            return None
+        print(f"  {label:14s}: {new_id}")
+        if delete_suffix:
+            created.append((label, f"{path}/{urllib.parse.quote(new_id, safe='')}"))
+        return new_id
+
+    # ── Database credential ─────────────────────────────────────────────────
+    user_id = _create(
+        "db credential",
+        f"{base}/users",
+        {"name": f"verify-{stamp}", "password": _throwaway_password()},
+    )
+    if user_id:
+        ids["user_id"] = user_id
+
+    # ── Cluster allowlist entry ─────────────────────────────────────────────
+    cidr_id = _create(
+        "cluster cidr",
+        f"{base}/allowedcidrs",
+        {
+            "cidr": _DOC_CIDR_CLUSTER,
+            "comment": f"{_BOOTSTRAP_MARKER} — RFC 5737 documentation range, routes nowhere",
+            "expiresAt": expires,
+        },
+    )
+    if cidr_id:
+        ids["allowed_cidr_id"] = cidr_id
+
+    app_service_id = ids.get("app_service_id")
+    if not app_service_id:
+        print("  (no App Service, so the App Service child objects are skipped)")
+        return created
+
+    as_base = f"{base}/appservices/{urllib.parse.quote(str(app_service_id), safe='')}"
+
+    # ── App Service allowlist entry ─────────────────────────────────────────
+    # Its id goes in an OVERRIDE, not in `ids`. Both allowlist routes use the placeholder
+    # {allowed_cidr_id}, and they are different objects — see probe().
+    as_cidr_id = _create(
+        "as cidr",
+        f"{as_base}/allowedcidrs",
+        {
+            "cidr": _DOC_CIDR_APP_SERVICE,
+            "comment": f"{_BOOTSTRAP_MARKER} — RFC 5737 documentation range, routes nowhere",
+            "expiresAt": expires,
+        },
+    )
+    if as_cidr_id:
+        overrides["capella_app_service_allowed_cidr_delete"] = {
+            "allowed_cidr_id": as_cidr_id
+        }
+
+    # ── App Services admin user ─────────────────────────────────────────────
+    admin_id = _create(
+        "as admin user",
+        f"{as_base}/adminUsers",
+        {"name": f"verify{stamp}", "password": _throwaway_password()},
+    )
+    if admin_id:
+        ids["admin_user_id"] = admin_id
+
+    # ── App Endpoint ────────────────────────────────────────────────────────
+    # The one that matters most: nine of the fourteen skips are this subtree, and it is what
+    # a Couchbase Lite replicator targets.
+    bucket_id = ids.get("bucket_id")
+    bucket = _bucket_name(token, base, bucket_id) if bucket_id else None
+    if not bucket:
+        print("  app endpoint  : skipped, could not resolve the bucket NAME")
+        return created
+
+    scope = str(ids.get("scope_name") or "_default")
+    collection = str(ids.get("collection_name") or "_default")
+    endpoint_name = f"verify{stamp}"
+    endpoint_id = _create(
+        "app endpoint",
+        f"{as_base}/appEndpoints",
+        {
+            "name": endpoint_name,
+            "bucket": bucket,
+            "scopes": {scope: {"collections": {collection: {}}}},
+            "deltaSync": False,
+        },
+    )
+    if endpoint_id:
+        ids["app_endpoint_name"] = endpoint_id
+        # A keyspace is endpoint.scope.collection. A bare endpoint name is accepted but v4
+        # reads it as `<endpoint>._default._default`, which silently targets the wrong
+        # collection on a cluster with named scopes — so it is spelled out.
+        ids["app_endpoint_keyspace"] = f"{endpoint_id}.{scope}.{collection}"
+
+    return created
+
+
+def teardown_child_objects(token: str, created: list) -> None:
+    """Delete what bootstrap_child_objects created, most recent first.
+
+    Reverse order because the App Endpoint and admin user live under the App Service, and the
+    caller deletes the App Service after this returns.
+    """
+    for label, path in reversed(created):
+        status, body = _request("DELETE", path, token)
+        if status is not None and status < 400:
+            print(f"  deleted {label}")
+        else:
+            print(
+                f"  DELETE of {label} returned HTTP {status} — {body[:160]}\n"
+                f"    path: {path}"
+            )
+
+
 def teardown_app_service(token: str, base: str, app_service_id: str) -> None:
     """Delete an App Service this script created. Refuses anything it did not create.
 
@@ -595,7 +812,9 @@ def _has_required_body(op) -> bool:
     return bool(value)
 
 
-def probe(op, ids: dict, token: str, mode: str = "options") -> Result:
+def probe(
+    op, ids: dict, token: str, mode: str = "options", overrides: dict | None = None
+) -> Result:
     """Check one operation.
 
     ``mode`` is one of:
@@ -614,8 +833,21 @@ def probe(op, ids: dict, token: str, mode: str = "options") -> Result:
                its own rather than a lucky side effect.
 
       write    Actually perform the operation.
+
+    ``overrides`` maps an operation NAME to identifiers that apply only to it.
+
+    Needed because two different routes share the placeholder ``{allowed_cidr_id}``: the
+    cluster allowlist and the App Service allowlist. They are separate objects with separate
+    ids, and a single flat ``ids`` dict can only hold one — so whichever op did not own the
+    stored id would be probed with the other's, and answer a 404 that has to be argued about
+    rather than a clean verdict. Per-op overrides let each be probed with its own.
     """
-    path, missing = fill(op.path, ids)
+    effective = ids
+    extra = (overrides or {}).get(op.name)
+    if extra:
+        effective = {**ids, **extra}
+
+    path, missing = fill(op.path, effective)
     if path is None:
         return Result(op, "SKIPPED", detail=f"no value for {', '.join(missing)}")
 
@@ -907,6 +1139,17 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--bootstrap-child-objects",
+        action="store_true",
+        help=(
+            "CREATE the small objects the remaining skips need — a database credential, a "
+            "cluster and an App Service allowlist entry on RFC 5737 documentation "
+            "addresses, an App Services admin user, and an App Endpoint — verify those "
+            "paths, then delete them. Free and near-instant, unlike the App Service. "
+            "Requires --yes-really-mutate."
+        ),
+    )
+    parser.add_argument(
         "--keep-app-service",
         action="store_true",
         help=(
@@ -1071,6 +1314,23 @@ def main() -> int:
         )
         return 2
 
+    if args.bootstrap_child_objects and not args.yes_really_mutate:
+        print(
+            "Refusing to --bootstrap-child-objects without --yes-really-mutate.\n"
+            "\n"
+            "It CREATES a database credential, two allowlist entries, an App Services admin "
+            "user and an App Endpoint in the target project, then deletes them. None of it "
+            "is billable and none of it takes more than a moment, but they are real objects "
+            "in a real organization.\n"
+            "\n"
+            "The allowlist entries are the ones worth understanding: both use addresses from "
+            "RFC 5737 TEST-NET-1 (192.0.2.0/24), which is reserved for documentation and "
+            "assigned to no real host, so neither grants access to anything. They also carry "
+            "a one-hour expiresAt, so a failed teardown leaves a rule that lapses by itself.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.keep_app_service and not args.bootstrap_app_service:
         print(
             "--keep-app-service only means something with --bootstrap-app-service.",
@@ -1117,11 +1377,36 @@ def main() -> int:
                     ids["admin_user_id"] = admin
                     print(f"  admin user   : {admin}")
 
+    # Identifiers that apply to ONE operation only. See probe(): the cluster and App Service
+    # allowlists both use {allowed_cidr_id} and are different objects.
+    overrides: dict[str, dict] = {}
+    created_children: list = []
+    if args.bootstrap_child_objects:
+        if not ids.get("cluster_id"):
+            print()
+            print("  --bootstrap-child-objects: no cluster; skipping")
+        else:
+            print()
+            print("Creating child objects:")
+            base = (
+                f"/v4/organizations/{args.org}/projects/{ids['project_id']}"
+                f"/clusters/{ids['cluster_id']}"
+            )
+            created_children = bootstrap_child_objects(token, base, ids, overrides)
+
     try:
-        return _run_probes(ops, ids, token, mode, args)
+        return _run_probes(ops, ids, token, mode, args, overrides)
     finally:
-        # In a finally so an exception or Ctrl-C during verification does not leave billable
-        # infrastructure behind. This is the whole reason the bootstrap is safe to offer.
+        # In a finally so an exception or Ctrl-C during verification does not leave anything
+        # behind. This is the whole reason the bootstrap is safe to offer.
+        #
+        # Children first: the App Endpoint and admin user live UNDER the App Service, and
+        # deleting the parent first would orphan the DELETE calls that verify them.
+        if created_children:
+            print()
+            print("Tearing down child objects:")
+            teardown_child_objects(token, created_children)
+
         if created_app_service and not args.keep_app_service:
             print()
             print("Tearing down:")
@@ -1138,13 +1423,13 @@ def main() -> int:
             )
 
 
-def _run_probes(ops, ids, token, mode, args) -> int:
+def _run_probes(ops, ids, token, mode, args, overrides=None) -> int:
     """Probe every selected operation and print the report. Returns the exit code."""
     print()
 
     results = []
     for op in sorted(ops, key=lambda o: (o.group, o.name)):
-        result = probe(op, ids, token, mode)
+        result = probe(op, ids, token, mode, overrides)
         results.append(result)
         if not args.json:
             tag = "[PAT]" if _is_inferred(op) else "     "

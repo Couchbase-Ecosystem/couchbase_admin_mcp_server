@@ -387,6 +387,103 @@ MUTATIONS = [
         'summary="List collections in a scope. [PAT — sibling of the scopes path]",',
         CAPELLA,
     ),
+    # ── The child-object bootstrap ──────────────────────────────────────────
+    (
+        "capella: an allowlist entry on a real private range instead of TEST-NET",
+        "scripts/verify_capella_paths.py",
+        '_DOC_CIDR_CLUSTER = "192.0.2.10/32"',
+        '_DOC_CIDR_CLUSTER = "10.0.0.10/32"',
+        CAPELLA,
+    ),
+    (
+        "capella: an allowlist entry open to the whole internet",
+        "scripts/verify_capella_paths.py",
+        '_DOC_CIDR_APP_SERVICE = "192.0.2.11/32"',
+        '_DOC_CIDR_APP_SERVICE = "0.0.0.0/0"',
+        CAPELLA,
+    ),
+    (
+        "capella: allowlist entries no longer self-expire",
+        "scripts/verify_capella_paths.py",
+        '            "expiresAt": expires,\n        },\n    )\n    if cidr_id:',
+        "        },\n    )\n    if cidr_id:",
+        CAPELLA,
+    ),
+    (
+        "capella: the two allowlist ids collapse into one",
+        "scripts/verify_capella_paths.py",
+        '        overrides["capella_app_service_allowed_cidr_delete"] = {\n'
+        '            "allowed_cidr_id": as_cidr_id\n'
+        "        }",
+        '        ids["allowed_cidr_id"] = as_cidr_id',
+        CAPELLA,
+    ),
+    (
+        "capella: per-op overrides are ignored, so one route probes the wrong object",
+        "scripts/verify_capella_paths.py",
+        "    extra = (overrides or {}).get(op.name)",
+        "    extra = None",
+        CAPELLA,
+    ),
+    (
+        "capella: the throwaway password is omitted, so Capella returns a generated one",
+        "scripts/verify_capella_paths.py",
+        '        {"name": f"verify-{stamp}", "password": _throwaway_password()},',
+        '        {"name": f"verify-{stamp}"},',
+        CAPELLA,
+    ),
+    (
+        "capella: a created child object gets no teardown record",
+        "scripts/verify_capella_paths.py",
+        "        if delete_suffix:\n"
+        "            created.append((label, f\"{path}/{urllib.parse.quote(new_id, safe='')}\"))",
+        "        if False:\n"
+        "            created.append((label, f\"{path}/{urllib.parse.quote(new_id, safe='')}\"))",
+        CAPELLA,
+    ),
+    (
+        "capella: children are torn down in creation order, orphaning the nested ones",
+        "scripts/verify_capella_paths.py",
+        "    for label, path in reversed(created):",
+        "    for label, path in created:",
+        CAPELLA,
+    ),
+    (
+        "capella: the App Endpoint is bound by bucket id instead of name",
+        "scripts/verify_capella_paths.py",
+        '            "bucket": bucket,',
+        '            "bucket": bucket_id,',
+        CAPELLA,
+    ),
+    (
+        "capella: the keyspace collapses to a bare endpoint name",
+        "scripts/verify_capella_paths.py",
+        '        ids["app_endpoint_keyspace"] = f"{endpoint_id}.{scope}.{collection}"',
+        '        ids["app_endpoint_keyspace"] = endpoint_id',
+        CAPELLA,
+    ),
+    (
+        "capella: one failed create aborts the rest of the bootstrap",
+        "scripts/verify_capella_paths.py",
+        '            print(f"  {label:14s}: create failed HTTP {status} — {body[:220]}")\n'
+        "            return None",
+        '            print(f"  {label:14s}: create failed HTTP {status} — {body[:220]}")\n'
+        "            raise SystemExit(3)",
+        CAPELLA,
+    ),
+    (
+        "capella: child teardown does not run when verification raises",
+        "scripts/verify_capella_paths.py",
+        "        if created_children:\n"
+        "            print()\n"
+        '            print("Tearing down child objects:")\n'
+        "            teardown_child_objects(token, created_children)",
+        "        if False:\n"
+        "            print()\n"
+        '            print("Tearing down child objects:")\n'
+        "            teardown_child_objects(token, created_children)",
+        CAPELLA,
+    ),
 ]
 
 

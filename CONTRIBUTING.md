@@ -80,8 +80,8 @@ ruff version as CI, so the two cannot disagree.
 ## 🧪 Testing
 
 ```bash
-uv run pytest                        # everything (~40s)
-uv run pytest -m "not live"          # skip the 9 tests that bind a local port (~20s)
+uv run pytest                        # everything (~60s)
+uv run pytest -m "not live"          # skip the 9 tests that bind a local port (~35s)
 uv run pytest -m live                # only those
 uv run pytest tests/test_capella.py  # one file
 ```
@@ -283,6 +283,8 @@ best guide to the house style.
 - [Couchbase Management REST API](https://docs.couchbase.com/server/current/rest-api/rest-intro.html)
 - [Capella Management API v4](https://docs.couchbase.com/cloud/management-api-reference/index.html)
 - [Ruff](https://docs.astral.sh/ruff/)
+- `RUNBOOK.md` — the operator guide: both deployment shapes, the environment lifecycle,
+  a worked CI pipeline, troubleshooting
 - `CAPELLA_HANDOFF.md` — the full record of the security review, including the findings
   that produced the conventions above
 

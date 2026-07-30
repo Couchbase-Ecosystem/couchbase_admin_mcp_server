@@ -62,7 +62,7 @@ def test_the_readme_sends_bug_reports_to_the_right_place():
     )
 
 
-def test_no_file_points_at_a_different_org_for_this_project():
+def test_no_file_points_at_a_different_org_for_this_project(repo_files):
     """Catches a half-finished rename: this project's own repo URL under any other org.
 
     Deliberately narrow. It looks for THIS repository's name under a DIFFERENT
@@ -73,9 +73,22 @@ def test_no_file_points_at_a_different_org_for_this_project():
     pattern = re.compile(
         r"github\.com/(?!" + re.escape(ORG) + r"/)([\w.-]+)/" + re.escape(REPO)
     )
+    # Skip directories that hold vendored or generated content: nothing in them names this
+    # repository, and walking them was most of this test's 4.9s runtime.
+    skip_dirs = {
+        ".git",
+        "__pycache__",
+        "vendor",
+        "dist",
+        "build",
+        ".ruff_cache",
+        ".pytest_cache",
+        "node_modules",
+    }
+
     offenders: list[str] = []
     for path in ROOT.rglob("*"):
-        if not path.is_file() or ".git" in path.parts:
+        if not path.is_file() or skip_dirs & set(path.parts):
             continue
         if path.suffix.lower() not in (
             ".py",

@@ -16,6 +16,7 @@ global.
 from __future__ import annotations
 
 import os
+import pathlib
 
 import pytest
 
@@ -45,3 +46,60 @@ def _restore_environ():
     yield
     os.environ.clear()
     os.environ.update(snapshot)
+
+
+# ── Shared, PRUNING repository walk ──────────────────────────────────────────
+#
+# Several documentation tests need "every file in the repository". The obvious
+# `ROOT.rglob("*")` cannot prune, so it enumerates .git (2.4 MB) and the vendored console
+# runtime (3.0 MB) in full before any filter runs. Three tests doing that made themselves
+# the slowest in the suite — 21 seconds between them — and a slow suite is one people stop
+# running, which costs more than the checks are worth.
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+#: Directories with nothing a documentation check needs to read.
+PRUNED_DIRS = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "venv",
+        "node_modules",
+        "dist",
+        "build",
+        ".mypy_cache",
+        "vendor",  # third-party bundles; nothing in them refers to this project
+    }
+)
+
+
+@pytest.fixture(scope="session")
+def repo_files():
+    """Session fixture exposing `_repo_files`.
+
+    A fixture rather than a plain import: `from conftest import ...` is not valid from a
+    test module (conftest is not on the import path under that name), and a session scope
+    means the walk is shared rather than repeated per test.
+    """
+    return _repo_files
+
+
+def _repo_files(*suffixes: str) -> list[pathlib.Path]:
+    """Every tracked-ish file under the repository root, pruning noise directories.
+
+    `suffixes` filters by extension (with the dot, case-insensitive); omit it for all
+    files. os.walk is used rather than rglob specifically because it allows pruning the
+    directory list in place, which rglob does not.
+    """
+    wanted = {s.lower() for s in suffixes}
+    found: list[pathlib.Path] = []
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in PRUNED_DIRS]
+        for filename in filenames:
+            path = pathlib.Path(dirpath) / filename
+            if not wanted or path.suffix.lower() in wanted:
+                found.append(path)
+    return found

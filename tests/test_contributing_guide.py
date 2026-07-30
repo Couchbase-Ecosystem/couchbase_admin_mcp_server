@@ -31,7 +31,7 @@ def test_the_guide_exists_and_is_substantial(guide):
     assert len(guide) > 4000
 
 
-def test_every_repository_path_it_names_exists(guide):
+def test_every_repository_path_it_names_exists(guide, repo_files):
     """A guide that points at a moved file teaches the wrong layout."""
     # Paths in the layout tree and inline code spans, e.g. `handlers/egress.py`.
     candidates = set(
@@ -43,16 +43,21 @@ def test_every_repository_path_it_names_exists(guide):
     # Names that are illustrative rather than real paths in this repo.
     ignore = {"pyproject.toml", ".env.example", "index.html", "server.json"}
 
-    missing = []
-    for candidate in sorted(candidates - ignore):
-        if "*" in candidate:
-            continue
-        # Layout-tree entries are relative to the root; so are the code spans.
-        if not (ROOT / candidate).exists():
-            # Some spans name a file inside a package listed one level down.
-            alternatives = list(ROOT.rglob(candidate))
-            if not alternatives:
-                missing.append(candidate)
+    # One walk, not one per candidate. The previous version called ROOT.rglob() inside the
+    # loop for every path that was not found relative to the root, which walked the whole
+    # tree — including the 2.9 MB vendored console runtime — dozens of times and made this
+    # the slowest test in the suite at 12.6s. A slow suite gets skipped, which costs more
+    # than the check is worth.
+    every_name = {path.name for path in repo_files()}
+
+    missing = [
+        candidate
+        for candidate in sorted(candidates - ignore)
+        if "*" not in candidate
+        and not (ROOT / candidate).exists()
+        # Some spans name a file by its basename inside a package listed elsewhere.
+        and pathlib.Path(candidate).name not in every_name
+    ]
     assert not missing, f"CONTRIBUTING.md points at files that do not exist: {missing}"
 
 

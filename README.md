@@ -76,6 +76,12 @@ To enable writes, set `CB_ADMIN_READ_ONLY_MODE=false` — but read
 
 ---
 
+> **Running ephemeral Capella environments for app testing?** See
+> **[RUNBOOK.md](RUNBOOK.md)** — the operator guide for both deployment shapes, the
+> environment lifecycle, a worked CI pipeline, and a troubleshooting table.
+
+---
+
 ## Deployment profiles
 
 There are two ways this server runs, and they are not variations of one thing — they

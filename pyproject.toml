@@ -16,7 +16,20 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.0.0",
+    # UPPER BOUND IS LOAD-BEARING, not caution.
+    #
+    # mcp 2.0 renamed the Tool model's fields: inputSchema -> input_schema, and the
+    # annotation hints likewise. This codebase uses the 1.x names in 400+ places, so with
+    # an unbounded ">=1.0.0" a fresh `pip install` resolved mcp 2.0.0 and the server died
+    # on first use with:
+    #
+    #     AttributeError: 'Tool' object has no attribute 'inputSchema'
+    #
+    # The development environment had 1.29.0 and worked, so nothing surfaced it until a
+    # CI job installed the built wheel into a clean virtualenv and imported from THAT
+    # rather than from the source tree. Supporting 2.x needs a compatibility layer over
+    # the Tool model; it is not a constraint change.
+    "mcp>=1.10,<2.0",
     "couchbase>=4.4.0,<5.0.0",
 ]
 

@@ -177,3 +177,79 @@ def test_every_shipped_package_directory_exists():
 
     for package in config["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]:
         assert (ROOT / package).is_dir(), f"{package} is declared but does not exist"
+
+
+# ── Dependency ranges that a fresh install must resolve to something working ──
+
+
+def _declared_mcp_constraint() -> str:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - 3.10
+        tomllib = pytest.importorskip("tomli")
+    with open(ROOT / "pyproject.toml", "rb") as handle:
+        config = tomllib.load(handle)
+    for requirement in config["project"]["dependencies"]:
+        if requirement.replace(" ", "").startswith("mcp"):
+            return requirement
+    raise AssertionError("mcp is not a declared dependency")
+
+
+def test_the_mcp_dependency_has_an_upper_bound():
+    """A fresh `pip install` must not resolve a version this code cannot use.
+
+    mcp 2.0 renamed the Tool model's fields — `inputSchema` became `input_schema`, and the
+    annotation hints likewise. This codebase uses the 1.x names in over 400 places, so with
+    an unbounded ">=1.0.0" a clean install resolved 2.0.0 and the server died on first use:
+
+        AttributeError: 'Tool' object has no attribute 'inputSchema'
+
+    Nothing surfaced it because the development environment already had 1.29.0 pinned and
+    the test suite runs against THAT. It took installing the built wheel into an empty
+    virtualenv and importing from the installed copy rather than the source tree.
+    """
+    constraint = _declared_mcp_constraint()
+    assert "<2" in constraint.replace(" ", ""), (
+        f"mcp is declared as {constraint!r} with no upper bound below 2.0. A fresh install "
+        "will resolve mcp 2.x, whose Tool model uses input_schema rather than inputSchema, "
+        "and every tool definition in this project will fail at import."
+    )
+
+
+def test_the_dockerfile_pins_mcp_the_same_way():
+    """The image installs its own dependencies, so an unbounded range there builds an
+    image whose server raises AttributeError however correct pyproject.toml is."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    pinned = re.search(r'"mcp>=[\d.]+,<2\.0"', dockerfile)
+    assert pinned, (
+        "the Dockerfile does not pin mcp below 2.0; the built image would install a "
+        "version whose Tool model this code cannot read"
+    )
+
+
+def test_the_installed_mcp_satisfies_the_declared_range():
+    """Guards against the inverse: a constraint that excludes what is actually tested.
+
+    If the development environment drifted outside the declared range, the suite would be
+    proving something about a version users will never get.
+    """
+    import importlib.metadata
+
+    installed = importlib.metadata.version("mcp")
+    major = int(installed.split(".")[0])
+    assert major < 2, (
+        f"the environment these tests run against has mcp {installed}, which the declared "
+        "constraint excludes — the suite is testing a version nobody will install"
+    )
+
+
+def test_the_tool_model_still_uses_the_field_names_this_code_reads():
+    """The concrete property the upper bound protects. If a future mcp keeps the 1.x names,
+    the bound can be relaxed; until then this is what would break."""
+    from mcp.types import Tool
+
+    tool = Tool(name="probe", description="d", inputSchema={"type": "object"})
+    assert hasattr(tool, "inputSchema"), (
+        "the installed mcp no longer exposes Tool.inputSchema; this codebase reads that "
+        "name in over 400 places"
+    )

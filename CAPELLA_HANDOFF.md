@@ -891,3 +891,61 @@ python scripts\verify_capella_paths.py --method-probe   # + proves 12 write meth
 
 Exit status is 0 only when nothing is `MISSING`. Worth running in CI against a long-lived
 test organization that has an App Service, which would close the last 22.
+
+---
+
+# CI, and a release blocker it found immediately
+
+## The release blocker
+
+`pyproject.toml` declared `"mcp>=1.0.0"` with **no upper bound**. mcp 2.0 renamed the Tool
+model's fields — `inputSchema` became `input_schema`, and the annotation hints likewise —
+and this codebase reads the 1.x names in **over 400 places**. So:
+
+```
+$ pip install couchbase-admin-mcp-server && python -c "import server"
+AttributeError: 'Tool' object has no attribute 'inputSchema'. Did you mean: 'input_schema'?
+```
+
+**`pip install` produced a broken server, and so would the container image** — the
+Dockerfile carried the same unbounded range. 656 tests passed throughout, because the
+development environment already had 1.29.0 and the suite runs against *that*. It took a CI
+job that builds the wheel, installs it into an empty virtualenv, and imports from the
+**installed copy** rather than the source tree.
+
+Both are now pinned `mcp>=1.10,<2.0`, with tests that fail if either loses the bound, if
+the environment the suite runs in drifts outside the declared range, or if
+`Tool.inputSchema` stops existing. Supporting mcp 2.x needs a compatibility layer over the
+Tool model — a separate piece of work, not a constraint change.
+
+## `.github/workflows/ci.yml`
+
+There was no CI at all. 656 tests and 45 mutation entries existed and had only ever been
+run by hand, which makes them a snapshot rather than a guarantee.
+
+| Job | What it does |
+|---|---|
+| `lint` | `ruff check` + `ruff format --check` |
+| `test` | Full suite on 3.10 **and** 3.13, in **both** randomised and file order — several modules read env at import time and order-dependent tests have hidden real bugs here |
+| `mutation` | Both harnesses; a surviving mutation means a control has no test behind it |
+| `package` | Builds the wheel **and** the image, then imports from each — the check that found the mcp 2.0 blocker |
+| `capella-paths` | Runs the v4 verifier against a live org; skips cleanly when the secret is absent, since a fork's PR cannot have it |
+
+Node is installed in CI because the console's compile-and-render tests skip without it, and
+a skipped frontend test is how the console came to render a blank page unnoticed.
+
+## Documentation that did not survive its own instructions
+
+The Quick start said "at minimum `CB_CONNECTION_STRING` / `CB_USERNAME` / `CB_PASSWORD`".
+Following it produced `REFUSING TO START: CB_ADMIN_PROFILE is not set`. The refusal is
+correct; the README simply predated it. The docker-compose example was worse — `workstation`
++ HTTP + `0.0.0.0` is fatal **twice** without two explicit acknowledgements, and it carried
+neither.
+
+Every startup control added during the review made some documented example stale, and none
+of them failed a test. `tests/test_documented_configurations_start.py` now **extracts the
+examples from the README** and runs them through the real validation, including a check that
+each enterprise requirement is individually load-bearing.
+
+The README also gained a **Deployment profiles** section, because the profile model was
+enforced in code and explained nowhere an operator would look.

@@ -50,14 +50,57 @@ pip install -e .
 
 # 2. Configure
 cp .env.example .env
-#    edit .env — at minimum CB_CONNECTION_STRING / CB_USERNAME / CB_PASSWORD
+#    edit .env — at minimum:
+#      CB_ADMIN_PROFILE          workstation | enterprise   (NO DEFAULT — see below)
+#      CB_CONNECTION_STRING
+#      CB_USERNAME / CB_PASSWORD
 
 # 3. Run (stdio transport, read-only by default)
 couchbase-admin-mcp-server
 ```
 
+**`CB_ADMIN_PROFILE` has no default and the server refuses to start without it.**
+That is deliberate, and it is the first thing to know:
+
+```
+[couchbase-admin-mcp] REFUSING TO START: CB_ADMIN_PROFILE is not set.
+```
+
+The two supported deployments have opposite security postures, and guessing between
+them is how you end up with an unauthenticated administration API on a network
+interface. Use `workstation` for local work; see
+[Deployment profiles](#deployment-profiles).
+
 To enable writes, set `CB_ADMIN_READ_ONLY_MODE=false` — but read
 [Trust models](#trust-models) first.
+
+---
+
+## Deployment profiles
+
+There are two ways this server runs, and they are not variations of one thing — they
+have different trust models, so the deployment states which it is, once:
+
+| | `workstation` | `enterprise` |
+|---|---|---|
+| Shape | Laptop or local container, driven by Claude Desktop over stdio | A workflow-manager agent instructs child agents, which act unattended |
+| Human present at the moment of action? | **Yes** — the MCP client surfaces each call | **No, by design** |
+| `confirm: true` means | A person really looked | Nothing — the model supplies it |
+| What authorizes a write | That confirmation | The automation scope in the caller's OAuth token |
+| Identity in the audit record | OS user and host | The token's service principal |
+| HTTP auth | Off (there is no IdP on a laptop) | **Required** |
+| Admin console | Loopback only, peer-address checked | Behind SSO |
+
+`profile_config.py` derives the posture from that single variable and **refuses
+incoherent combinations at startup** rather than at 3am. For example
+`CB_ADMIN_PROFILE=workstation` with `CB_ADMIN_TRANSPORT=http` on a non-loopback
+address is fatal: every relaxation the workstation profile makes is justified by
+nothing being network-reachable. If that is a container publishing its port to
+loopback on the host, say so with
+`CB_ADMIN_WORKSTATION_CONTAINER_BIND=1`.
+
+The hard ceiling (`CB_ADMIN_ALWAYS_CONFIRM`) is only satisfiable over **stdio**, where a
+person answers the client's prompt. It ships empty; see [Trust models](#trust-models).
 
 ---
 
@@ -186,6 +229,7 @@ container still reaches the Couchbase container over the Docker network for the
       "args": [
         "run", "-i", "--rm",
         "--network", "your_docker_network",
+        "-e", "CB_ADMIN_PROFILE=workstation",
         "-e", "CB_ADMIN_TRANSPORT=stdio",
         "-e", "CB_CONNECTION_STRING=couchbase://couchbase",
         "-e", "CB_USERNAME=Administrator",
@@ -258,14 +302,33 @@ services:
     depends_on: [couchbase]
     ports: ["8000:8000"]
     environment:
+      CB_ADMIN_PROFILE: workstation     # no default; the server refuses to start without it
       CB_CONNECTION_STRING: couchbase://couchbase   # the service name above
       CB_USERNAME: Administrator
       CB_PASSWORD: password
       CB_ADMIN_READ_ONLY_MODE: "false"  # opt in to writes (default is true/read-only)
       CB_ADMIN_TRANSPORT: http          # opt in to HTTP for a networked service
       CB_ADMIN_HOST: 0.0.0.0            # accept connections from other containers/host
-      # For automation on a shared cluster, also set the auth + ceiling vars —
-      # see "Trust models" above.
+
+      # The two acknowledgements this combination requires. Both are deliberately
+      # awkward: `workstation` + HTTP + a non-loopback bind is exactly the shape that
+      # produces unauthenticated admin over a network, so the server will not start
+      # unless you state that you know what you are doing and why.
+      #
+      #   ...CONTAINER_BIND: inside a container the process MUST bind 0.0.0.0; the
+      #      isolation comes from publishing the port narrowly, not from the bind
+      #      address. Publish it as 127.0.0.1:8000:8000 if the host should be the only
+      #      client.
+      #   ...TLS_TERMINATED_EXTERNALLY: this listener is cleartext. Acceptable on a
+      #      private Docker network you control; NOT acceptable anywhere a bearer token
+      #      could be observed. Set CB_ADMIN_TLS_CERT_FILE / _KEY_FILE instead to
+      #      terminate TLS here.
+      CB_ADMIN_WORKSTATION_CONTAINER_BIND: "1"
+      CB_ADMIN_TLS_TERMINATED_EXTERNALLY: "1"
+
+      # For unattended automation on a shared cluster use CB_ADMIN_PROFILE=enterprise
+      # instead, which requires OAuth and refuses hard-ceiling tools outright.
+      # See "Deployment profiles" and "Trust models" above.
 ```
 
 Your MCP client (or agent) then connects to `http://<host>:8000/mcp`. To run

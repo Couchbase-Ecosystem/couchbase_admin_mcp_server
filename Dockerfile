@@ -59,7 +59,10 @@ COPY pyproject.toml ./
 # HTTP transport fails to start after a rebuild, pin mcp to a known-good version
 # here (e.g. "mcp==1.28.1") rather than the open ">=1.0.0" range.
 RUN pip install --prefix=/install \
-    "mcp>=1.0.0" \
+    # Same upper bound as pyproject.toml, and for the same reason: mcp 2.0 renamed the
+    # Tool model's fields, so an unbounded range builds an image whose server raises
+    # AttributeError on first use.
+    "mcp>=1.10,<2.0" \
     "couchbase>=4.4.0,<5.0.0" \
     "uvicorn>=0.27" \
     "starlette>=0.35" \

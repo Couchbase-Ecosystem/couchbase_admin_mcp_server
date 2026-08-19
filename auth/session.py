@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
 import time
@@ -175,6 +176,18 @@ def delete_session(cookie_value: str) -> None:
         _store.pop(session_id, None)
 
 
+def _is_loopback_address(host: str) -> bool:
+    """Whether a bind address is loopback. An EMPTY value is not: it binds everything."""
+    if not host:
+        return False
+    if host in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
 def cookie_is_secure() -> bool:
     """Whether the session cookie must carry the `Secure` flag.
 
@@ -204,11 +217,36 @@ def cookie_is_secure() -> bool:
     # `return bool(cert_file or terminated_externally)`. Kept as two branches so the comment
     # further down can explain why returning False is deliberate rather than an oversight —
     # this decides a security flag, and the reasoning matters more than the line count.
-    if settings.cert_file or settings.terminated_externally:  # noqa: SIM103
+    if settings.cert_file or settings.terminated_externally:
         return True
 
-    # No TLS configured at all. `tls_config.validate()` already refuses to start in this
-    # state on a non-loopback bind, so reaching here means local development over http://.
+    # No TLS configured at all.
+    #
+    # The justification here USED to be "tls_config.validate() already refuses to start
+    # in this state on a non-loopback bind" -- and that premise was false for the
+    # console, which never called tls_config.validate at all. So an enterprise console
+    # on GUI_HOST=0.0.0.0 with CB_GUI_ALLOW_REMOTE=1 and no CB_ADMIN_TLS_* started
+    # happily and issued the session cookie -- the credential fronting the whole
+    # destructive tool surface -- WITHOUT Secure, over cleartext, on a network
+    # interface. gui_server._enforce_gui_posture now does call it, which makes the
+    # premise true.
+    #
+    # It is still not sufficient on its own, because CB_ADMIN_TLS_* describes the MCP
+    # TRANSPORT and says nothing about this process. So the console's OWN bind is
+    # consulted: a non-loopback console with no TLS anywhere gets Secure regardless,
+    # even though that will break its cookie -- a console that cannot log in is a much
+    # better outcome than a session id crossing a network in clear, and the operator
+    # gets a startup error from _enforce_gui_posture telling them why.
+    # Read directly, do NOT substitute the loopback default for a SET-BUT-EMPTY value.
+    # `(get("GUI_HOST") or "127.0.0.1")` turned "bind every interface" into "loopback",
+    # which is the most exposed shape being read as the least.
+    raw_host = os.environ.get("GUI_HOST")
+    gui_host = "127.0.0.1" if raw_host is None else raw_host.strip()
+    if not _is_loopback_address(gui_host):  # noqa: SIM103
+        return True
+
+    # Loopback development over http://. Secure here would stop the browser sending the
+    # cookie back to http://127.0.0.1 and break local login outright.
     return False
 
 

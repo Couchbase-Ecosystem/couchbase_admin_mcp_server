@@ -166,8 +166,15 @@ class PrivateRotatingFileHandler(RotatingFileHandler):
         finally:
             os.umask(previous)
 
-    def _opener(self, path, flags):  # pragma: no cover - used via delay/rotation
-        return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    # `_opener` was DELETED, not fixed.
+    #
+    # It existed behind `# pragma: no cover - used via delay/rotation`, and that stated
+    # reason was false: logging.FileHandler._open never passes an `opener`, and the only
+    # occurrence of the name in the whole repo was its own definition. Mutating its
+    # 0o600 to 0o644 survived the suite -- because the mode is actually delivered by the
+    # umask(0o077) in _open above, whose equivalent mutation IS killed. Dead code
+    # carrying a security-looking constant is worse than no code: it reads as the
+    # control and is not.
 
 
 def _ensure_private_logfile(path: str) -> bool:
@@ -281,7 +288,13 @@ def _attach_per_level_file_handlers(
     attached: dict[str, str] = {}
     for lvl_name in _PER_LEVEL_FILE_LEVELS:
         lvl_no = logging.getLevelName(lvl_name)
-        if lvl_no < logger.level:
+        # INFO is attached REGARDLESS of the configured level, because audit records
+        # are emitted at INFO and audit.py pins that logger's level so a raised
+        # verbosity cannot suppress them. Skipping the handler here defeated that from
+        # the other end: with CB_ADMIN_LOG_LEVEL=WARNING and `file` as the only sink,
+        # emit_tool_call for a bucket delete landed in no file at all. The audit trail
+        # must not be a function of how chatty the operator wants the server to be.
+        if lvl_no < logger.level and lvl_name != "INFO":
             continue
         path = _per_level_path(log_file, lvl_name)
         if not _ensure_private_logfile(path):

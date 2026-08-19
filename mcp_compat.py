@@ -103,3 +103,68 @@ def is_destructive(tool: Any) -> bool:
 
 def is_idempotent(tool: Any) -> bool:
     return annotation(tool, "idempotentHint")
+
+
+def with_control_fields(
+    tool: Any,
+    *,
+    read_only: bool,
+    always_loaded: set[str] | None = None,
+    needs_confirm: bool = False,
+) -> Any:
+    """Declare the dispatch's control fields on a tool's advertised schema.
+
+    Lives here because BOTH dispatch paths must advertise the same surface and only
+    one did. server.py injected `dry_run` and `correlation_id`; gui/gui_server.py
+    served the raw schema, so neither field existed on the console's advertised
+    surface -- `dry_run` was unofferable on any write tool there and `correlation_id`
+    could not be supplied at all, making console calls unattributable to the workflow
+    that started them while transport calls were attributable. The console dispatch
+    read both out of the arguments, so the capability was present and undiscoverable,
+    which is the worst of the three possible states: nothing fails and nobody uses it.
+
+    `confirm` is injected too. It was injected nowhere, yet 44 confirmation-gated
+    tools do not declare it in their own schema, so a schema-driven agent could
+    discover `dry_run` but not the two-step protocol that actually gates the write.
+    """
+    import dryrun
+
+    always = always_loaded or set()
+    schema = dict(input_schema(tool))
+    properties = dict(schema.get("properties") or {})
+    name = getattr(tool, "name", "")
+
+    if (
+        not read_only
+        and name not in always
+        and not dryrun.handler_owns(tool)
+        and dryrun.ARG not in properties
+    ):
+        properties[dryrun.ARG] = dict(dryrun.SCHEMA_PROPERTY)
+
+    if needs_confirm and "confirm" not in properties:
+        properties["confirm"] = {
+            "type": "boolean",
+            "description": (
+                "Set true to perform this operation. It is withheld without it. On a "
+                "workstation profile this is a human's second look; in an unattended "
+                "deployment the token's automation scope satisfies the gate instead, "
+                "and a tool in CB_ADMIN_ALWAYS_CONFIRM cannot be satisfied by this "
+                "field at all."
+            ),
+        }
+
+    if "correlation_id" not in properties:
+        properties["correlation_id"] = {
+            "type": "string",
+            "description": (
+                "Optional provenance for the audit record: a git SHA, a workflow run "
+                "id or URL — whatever ties this call back to the human action that "
+                "started it. Recorded in the audit log and NEVER used for "
+                "authorization. Pass the same value on every call in one workflow run "
+                "so the whole fan-out can be correlated afterwards."
+            ),
+        }
+
+    schema["properties"] = properties
+    return tool.model_copy(update={"inputSchema": schema})

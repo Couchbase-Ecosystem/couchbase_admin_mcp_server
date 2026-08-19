@@ -255,10 +255,40 @@ def test_plain_couchbase_is_not_reported_as_tls_enabled(fake_server, monkeypatch
 
 
 def test_tool_counts_by_category_are_correct(fake_server):
-    """These come from `mcp_compat.is_read_only` / `is_destructive`. If those read the
-    wrong field name every tool counts as a write, and the reported posture is wrong."""
-    tools = _payload(mcp_status.handle("cb_mcp_status", {}))["tools"]
-    assert tools["by_category"] == {"read": 1, "write": 2, "destructive": 1}
+    """These come from `_category_of`, the SAME classifier cb_mcp_list_tools filters
+    with. If they read the wrong field name every tool counts as a write, and the
+    reported posture is wrong.
+
+    The categories are MUTUALLY EXCLUSIVE and sum to the loaded count. This asserted
+    write=2 while counting the destructive tool in it, so cb_mcp_status and
+    cb_mcp_list_tools(category="write") disagreed by every destructive tool -- 70
+    versus 32 on the real inventory -- and an operator auditing the write surface saw
+    38 tools vanish unexplained. Whichever way the split is defined, the two tools
+    must define it the same way; the test now pins that they do."""
+    payload = _payload(mcp_status.handle("cb_mcp_status", {}))
+    tools = payload["tools"]
+    assert tools["by_category"] == {"read": 1, "write": 1, "destructive": 1}
+    assert sum(tools["by_category"].values()) == tools["loaded"], (
+        "categories must partition the loaded tools, or the counts cannot be reconciled"
+    )
+
+
+def test_status_counts_agree_with_the_list_tools_filter(fake_server):
+    """The two introspection tools must not contradict each other.
+
+    Closes the defect above at the level that matters: whatever `by_category` says for
+    a category, asking cb_mcp_list_tools for that category must return that many rows.
+    """
+    counts = _payload(mcp_status.handle("cb_mcp_status", {}))["tools"]["by_category"]
+    for category, expected in counts.items():
+        listed = _payload(
+            mcp_status.handle("cb_mcp_list_tools", {"category": category})
+        )
+        rows = listed.get("tools", listed.get("matched", []))
+        assert len(rows) == expected, (
+            f"cb_mcp_status reports {expected} {category} tools but "
+            f"cb_mcp_list_tools(category={category!r}) returned {len(rows)}"
+        )
 
 
 def test_filtered_out_tools_are_reported(fake_server):

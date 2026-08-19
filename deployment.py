@@ -31,7 +31,10 @@ Capella's equivalents live on three *different* planes:
      ``/prometheus_sd_config``, authenticated with a *database* credential
      that has read access to all buckets. This is the supported route to the
      per-cluster/per-node statistics that ``admin_stats_*`` reads on
-     self-managed. Covered by ``handlers.capella.metrics``.
+     self-managed. Reached through ``admin_prometheus_targets``
+     (``handlers/stats.py``), which is the one ``admin_*`` tool allowlisted in
+     Capella mode -- there is no ``handlers.capella.metrics`` module, and an
+     earlier version of this docstring named one that never existed.
 
   3. SQL++ / SDK DATA PLANE — ``couchbases://`` to the cluster. Schema
      inference, ``system:indexes``, ``EXPLAIN``, ``ADVISE`` and the
@@ -132,6 +135,21 @@ def detect_mode() -> str:
     if has_key and not conn:
         return CAPELLA
     if has_key and conn:
+        # WARN. `both` switches capability gating off entirely, and reaching it by
+        # inference is how an operator ends up with all ~120 ns_server admin tools
+        # loaded against Capella, each failing with an opaque 401 -- the exact
+        # condition the gating layer exists to prevent. The most common route is a
+        # Capella key added while CB_CONNECTION_STRING still holds the .env.example
+        # placeholder. Inferring it stays (an operator who configures both plainly
+        # intends both), but it must not be silent.
+        _log.warning(
+            "CB_DEPLOYMENT is not set and both CAPELLA_API_KEY_SECRET and "
+            "CB_CONNECTION_STRING are configured, so the mode was INFERRED as "
+            "'both': capability gating is OFF and every tool loads, including ones "
+            "that cannot work against the target. Set CB_DEPLOYMENT=capella or "
+            "CB_DEPLOYMENT=self_managed to state which interface this instance "
+            "manages, or CB_DEPLOYMENT=both to confirm this is intended."
+        )
         return BOTH
     return SELF_MANAGED
 
@@ -206,8 +224,8 @@ def unavailable_reason(tool_name: str, mode: str) -> str:
         f"`{tool_name}` uses the self-managed Couchbase Management REST API on "
         "port 8091/18091, which Capella does not expose to tenants — a Capella "
         "database credential has bucket-scoped data roles, never Full Admin. "
-        "Use the Capella v4 equivalent (a capella_* tool) instead, or the "
-        "Prometheus scrape (capella_metrics_query) for statistics. If you really "
+        "Use the Capella v4 equivalent (a capella_* tool) instead, or "
+        "`admin_prometheus_targets` for statistics. If you really "
         "are pointing at a self-managed cluster, set CB_DEPLOYMENT=self_managed."
     )
 

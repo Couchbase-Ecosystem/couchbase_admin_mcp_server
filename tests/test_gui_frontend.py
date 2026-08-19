@@ -224,7 +224,33 @@ def test_the_compiled_app_renders_markup(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     out = result.stdout.strip()
     if out == "DEFINED_ONLY":
-        pytest.skip("react not resolvable here; compile + App definition verified")
+        # HARD FAILURE IN CI, skip only on a developer machine.
+        #
+        # This skip was permanent EVERYWHERE, including CI: the node script does
+        # `try { require("react") } catch {}` with NODE_PATH=/tmp/node_modules, and
+        # nothing -- not this test, not conftest, not the workflow -- ever installed
+        # react. The repo vendors browser UMD bundles, which cannot satisfy
+        # `require("react-dom/server")`. So the assertions below, which the docstring
+        # calls "the assertion that would have failed on the broken version", never ran
+        # anywhere, and the CI comment "a skipped frontend test is how the console came
+        # to render a blank page unnoticed -- so CI installs Node" was true in letter
+        # only: Node was installed, React was not.
+        #
+        # CI now runs `npm install --prefix /tmp react react-dom`, so in CI a
+        # DEFINED_ONLY result means that install broke and the render is genuinely
+        # unverified -- which must fail rather than skip.
+        if os.environ.get("CI"):
+            pytest.fail(
+                "react is not resolvable in CI, so the console render was NOT "
+                "verified. The workflow installs react/react-dom into /tmp; check "
+                "that step. A skipped frontend test is how the console came to render "
+                "a blank page unnoticed."
+            )
+        pytest.skip(
+            "react not resolvable locally; compile + App definition verified. "
+            "Run `npm install --prefix /tmp react react-dom` to exercise the render "
+            "assertions, which CI does."
+        )
     assert out.startswith("RENDERED "), out
     _, size, hasdiv = out.split()
     assert int(size) > 500, f"render produced only {size} bytes"

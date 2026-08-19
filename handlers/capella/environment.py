@@ -52,7 +52,13 @@ from handlers.shared import err, ok, ok_allow_secrets
 from logging_config import get_logger
 
 from . import guardrails as g
-from .client import CapellaError, build_path, capella_list, capella_request
+from .client import (
+    CapellaError,
+    build_path,
+    capella_error_code,
+    capella_list,
+    capella_request,
+)
 from .spec import (
     IN_FLIGHT_CLUSTER_STATES,
     MIN_APP_SERVICE_NODES,
@@ -145,11 +151,26 @@ def _invoke(
 
 
 def _items(envelope: Any) -> list[dict]:
-    """Extract the item list from either a normalized envelope or a bare array."""
+    """Extract the item list from a normalized envelope, a bare array, or v4's
+    nested scope/collection object.
+
+    v4 answers the scope and collection endpoints with {"scopes": [{..., "collections":
+    [...]}]} rather than the {"data": [...]} envelope every other list endpoint uses,
+    and those two ops are declared non-paginated precisely because of it. Reading only
+    "data" meant the existence check in _ensure always said "absent": pass 1 created
+    the scope and reached ready, then EVERY later pass re-POSTed the create and died on
+    HTTP 409 "Scope with name X already exists", so a poll-until-ready loop never
+    converged and the tool's "existing resources are reused, never duplicated" promise
+    did not hold.
+    """
     if isinstance(envelope, dict):
         data = envelope.get("data")
         if isinstance(data, list):
             return [d for d in data if isinstance(d, dict)]
+        for key in ("scopes", "collections"):
+            nested = envelope.get(key)
+            if isinstance(nested, list):
+                return [d for d in nested if isinstance(d, dict)]
         return []
     if isinstance(envelope, list):
         return [d for d in envelope if isinstance(d, dict)]
@@ -571,6 +592,31 @@ def _get_cluster_for_destructive(org: str, project: str, env_name: str) -> dict 
     return _find_by_name(clusters, _cluster_name(env_name)) or _find_by_name(
         clusters, env_name
     )
+
+
+def _fetch_cluster_by_id(org: str, project: str, cluster_id: str) -> dict | None:
+    """GET one cluster by its id, or None when it genuinely is not there.
+
+    Exists so teardown can TARGET the id the reaper already resolved, rather than only
+    verifying a name lookup against it. Without this, an environment whose name no
+    longer resolves -- a prefix change, a rename in the Capella UI -- was reported as
+    "already torn down" and counted as reaped while nothing was deleted.
+    """
+    try:
+        fetched = _invoke(
+            "capella_cluster_get",
+            {
+                "organization_id": org,
+                "project_id": project,
+                "cluster_id": cluster_id,
+            },
+            composite="capella_env_teardown",
+        )
+    except CapellaError as exc:
+        if exc.status == 404:
+            return None
+        raise
+    return fetched if isinstance(fetched, dict) and fetched.get("id") else None
 
 
 def _refetch_cluster(org: str, project: str, cluster: dict) -> dict:
@@ -1027,8 +1073,17 @@ def _ensure(args: dict) -> dict:
         _invoke("capella_app_endpoint_online", ep_base)
         actions.append(f"brought app endpoint {endpoint_name} online")
     except CapellaError as exc:
-        # Already online is a success, not a failure, in a reconciler.
-        if exc.status not in (400, 409):
+        # Already online is a success in a reconciler. A blanket 400 is NOT: with
+        # `400 {"code":40004,"message":"App Endpoint is not in a state that can be
+        # resumed"}` this returned phase "ready" plus a couchbase_lite_url while the
+        # endpoint was offline and accepting no replication -- exactly the
+        # "presents as an auth/connectivity failure rather than 'not started yet'"
+        # confusion this op's own description warns about. Only a 409, or a 400 whose
+        # body actually says already-online, counts.
+        already = "already online" in str(exc).lower() or (
+            "already" in str(exc).lower() and "online" in str(exc).lower()
+        )
+        if exc.status != 409 and not (exc.status == 400 and already):
             raise
 
     result["app_endpoint"] = endpoint_name
@@ -1234,7 +1289,13 @@ def _park(args: dict) -> dict:
         _invoke("capella_cluster_turn_off", base)
     except CapellaError as exc:
         # 7011: already off. Idempotent success.
-        if "7011" not in str(exc):
+        #
+        # Matched on the PARSED code, never on the rendered message. `"7011" in
+        # str(exc)` also matched the status, the path's cluster and project UUIDs and
+        # the request id, so any failure whose text happened to contain those digits
+        # -- a 500, a 503, a cluster whose UUID contains 7011 -- was reported as
+        # `billing: stopped` for a cluster that was still running and still billing.
+        if capella_error_code(exc) != 7011:
             raise
         return {"environment": env_name, "state": "already_off", "billing": "stopped"}
 
@@ -1269,8 +1330,9 @@ def _resume(args: dict) -> dict:
     try:
         _invoke("capella_cluster_turn_on", base, body={"turnOnLinkedAppService": True})
     except CapellaError as exc:
-        # 7010: already on.
-        if "7010" not in str(exc):
+        # 7010: already on. Parsed code, not a substring of the rendered message --
+        # see the note on the turn-off path above.
+        if capella_error_code(exc) != 7010:
             raise
         return {"environment": env_name, "state": "already_on"}
 
@@ -1312,11 +1374,33 @@ def _teardown(args: dict) -> dict:
                 ),
             )
     if cluster is None:
-        return {
-            "environment": env_name,
-            "result": "nothing_to_do",
-            "note": "No matching cluster; already torn down.",
-        }
+        # `expected_cluster_id` was used only to VERIFY a name lookup, never to
+        # TARGET one. So when the marker's env no longer resolved to a cluster name --
+        # after CAPELLA_ENV_NAME_PREFIX changed, or a rename in the UI -- this
+        # returned "already torn down", _reap filed it under reaped/reaped_count as a
+        # success, and ZERO deletes were issued. The operator's dashboard said the
+        # sweep worked while the cluster billed on. If the caller pinned an id, use it.
+        if expected_id:
+            fetched = _fetch_cluster_by_id(org, project, expected_id)
+            if fetched is not None:
+                cluster = fetched
+            else:
+                return {
+                    "environment": env_name,
+                    "result": "not_found",
+                    "note": (
+                        f"Neither the name {env_name!r} nor the pinned cluster id "
+                        f"{expected_id!r} resolved to a cluster. Nothing was deleted, "
+                        "and this is NOT counted as reaped -- verify by hand whether "
+                        "the cluster still exists under a different name."
+                    ),
+                }
+        else:
+            return {
+                "environment": env_name,
+                "result": "nothing_to_do",
+                "note": "No matching cluster; already torn down.",
+            }
 
     cluster_id = str(cluster.get("id"))
     # Re-read individually before the destructive decision. A LIST response may
@@ -1328,6 +1412,15 @@ def _teardown(args: dict) -> dict:
 
     base = {"organization_id": org, "project_id": project, "cluster_id": cluster_id}
     actions: list[str] = []
+
+    # PRE-FLIGHT the cluster delete before destroying anything.
+    #
+    # Teardown deleted the App Service first and only discovered afterwards that
+    # capella_cluster_delete was disabled or ceiling-gated: pass 1 really did DELETE
+    # the App Service, pass 2 raised, and the operator was left with the App Service
+    # and all its endpoints, admin users and access-control functions gone while the
+    # billable cluster survived. Checking first makes the refusal cost nothing.
+    _assert_primitive_permitted("capella_cluster_delete", "capella_env_teardown")
 
     # App Service must go first — the cluster delete fails while one is attached.
     # If the App Service cannot be read (cluster off, or already partly deleted)
@@ -1389,13 +1482,24 @@ def _classify_expired(entries: list[dict]) -> tuple[list[dict], list[dict]]:
     for entry in entries:
         if entry.get("environment") and entry.get("cluster_id"):
             reapable.append(entry)
-        elif entry.get("environment"):
+        else:
+            # EVERY non-reapable entry is reported, not just those with a name. The
+            # `elif entry.get("environment")` form dropped an expired entry whose
+            # marker carried env:"" from both lists, so capella_env_list advertised it
+            # as expired and reapable while both reap modes returned reaped:[] and
+            # refused:[] -- a billing resource simultaneously flagged for collection
+            # and silently skipped. Nothing may leave this function unaccounted for.
             unpinnable.append(
                 {
-                    "environment": entry.get("environment"),
+                    "environment": entry.get("environment") or "(unnamed)",
+                    "cluster_id": entry.get("cluster_id") or "",
                     "error": (
                         "listing returned no cluster id, so the reap target cannot "
                         "be pinned; skipped rather than resolved by name"
+                        if entry.get("environment")
+                        else "marker has a blank `env` name, so this environment "
+                        "cannot be identified for reaping; fix or remove the "
+                        "mcp-env marker on the cluster's description"
                     ),
                 }
             )
@@ -1437,7 +1541,31 @@ def _reap(args: dict) -> dict:
                     "expected_cluster_id": pinned_id,
                 }
             )
-            reaped.append({"environment": env_name, "outcome": outcome.get("result")})
+            result_kind = outcome.get("result")
+            # A sweep that deleted NOTHING must not be counted as a reap. Any
+            # outcome was appended to `reaped` and into reaped_count, so a
+            # "nothing_to_do" or "not_found" -- the very cases where zero DELETEs
+            # were issued and the cluster may still be billing -- read on the
+            # operator's dashboard as a successful collection.
+            if result_kind in ("nothing_to_do", "not_found"):
+                refused.append(
+                    {
+                        "environment": env_name,
+                        "cluster_id": pinned_id,
+                        "error": (
+                            f"teardown returned {result_kind!r}: nothing was deleted. "
+                            "Verify by hand whether this cluster still exists — it "
+                            "was expired and is not counted as reaped."
+                        ),
+                    }
+                )
+                _log.warning(
+                    "reap issued no delete for %s (%s); reporting as refused",
+                    env_name,
+                    result_kind,
+                )
+            else:
+                reaped.append({"environment": env_name, "outcome": result_kind})
         except (g.GuardrailError, CapellaError) as exc:
             # One environment refusing must not abort the whole sweep.
             refused.append({"environment": env_name, "error": str(exc)})

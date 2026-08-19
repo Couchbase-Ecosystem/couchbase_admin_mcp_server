@@ -29,6 +29,7 @@ from .shared import (
     DISABLED_TOOLS,
     ELICITATION_HINTS,
     READ_ONLY_MODE,
+    env_truthy,
     err,
     get_cluster_version,
     ok,
@@ -113,11 +114,11 @@ def _tls_state() -> dict:
     """Report TLS configuration without exposing credential paths."""
     conn = os.environ.get("CB_CONNECTION_STRING", "couchbase://localhost")
     is_tls = "couchbases://" in conn
-    insecure = os.environ.get("CB_ADMIN_TLS_INSECURE", "").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    # env_truthy, not a third hand-rolled set. This one omitted "on", "y" and "t",
+    # so cb_mcp_status reported tls_verify_disabled=false while verification was in
+    # fact disabled -- the status tool is what an operator checks to confirm the
+    # posture, so a wrong answer here is worse than no answer.
+    insecure = env_truthy("CB_ADMIN_TLS_INSECURE")
     return {
         "tls_enabled": is_tls,
         "tls_verify_disabled": insecure,
@@ -135,10 +136,17 @@ def _status_payload(server_module) -> dict:
     loaded_tools = getattr(server_module, "_TOOLS", [])
     confirmation_required = getattr(server_module, "_CONFIRMATION_REQUIRED", set())
 
+    # Counted through _category_of, the SAME classifier cb_mcp_list_tools filters
+    # with. These were computed independently: "write" here meant every non-read
+    # tool (destructive included) while the list filter excluded destructive ones, so
+    # cb_mcp_status reported write=70 and cb_mcp_list_tools(category="write") returned
+    # 32 rows. An operator auditing the write surface saw 38 tools vanish with no
+    # explanation. The categories are now mutually exclusive and sum to the total.
+    _categories = [_category_of(t) for t in loaded_tools]
     by_category = {
-        "read": sum(1 for t in loaded_tools if mcp_compat.is_read_only(t)),
-        "write": sum(1 for t in loaded_tools if not mcp_compat.is_read_only(t)),
-        "destructive": sum(1 for t in loaded_tools if mcp_compat.is_destructive(t)),
+        "read": _categories.count("read"),
+        "write": _categories.count("write"),
+        "destructive": _categories.count("destructive"),
     }
 
     return {

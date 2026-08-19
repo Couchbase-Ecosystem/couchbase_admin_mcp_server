@@ -253,3 +253,35 @@ def test_the_tool_model_still_uses_the_field_names_this_code_reads():
         "the installed mcp no longer exposes Tool.inputSchema; this codebase reads that "
         "name in over 400 places"
     )
+
+
+def test_the_reported_server_version_is_this_project_not_the_mcp_library():
+    """serverInfo.version is what a client's connection panel shows and what a support
+    question starts from.
+
+    The mcp SDK's fallback when a Server is constructed without a version is
+    `version("mcp")` -- the LIBRARY's version -- so this server reported itself as 1.27.0
+    or 1.29.0 depending on which mcp was resolved, while pyproject said 0.1.0. Verified
+    over real stdio before the fix.
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - 3.10
+        tomllib = pytest.importorskip("tomli")
+
+    with open(ROOT / "pyproject.toml", "rb") as handle:
+        declared = tomllib.load(handle)["project"]["version"]
+
+    import mcp
+
+    import server
+
+    assert server.__version__ == declared, (
+        "server.__version__ has drifted from pyproject.toml; it mirrors the packaged "
+        "version and this assertion is what keeps the mirror honest"
+    )
+    reported = server.app.create_initialization_options().server_version
+    assert reported == declared
+    assert reported != getattr(mcp, "__version__", None), (
+        "the server is reporting the mcp library's version as its own"
+    )

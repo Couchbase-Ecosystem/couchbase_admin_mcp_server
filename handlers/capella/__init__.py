@@ -30,6 +30,7 @@ App Services pathed under /projects/{p}/appservices (the real path is under
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from mcp.types import TextContent, Tool
@@ -37,7 +38,7 @@ from mcp.types import TextContent, Tool
 from handlers.shared import err, ok
 from logging_config import get_logger
 
-from . import environment, guardrails
+from . import environment, fixture, guardrails
 from .client import (
     CapellaError,
     build_path,
@@ -57,8 +58,9 @@ _log = get_logger("handlers.capella")
 #: spend ceiling. Correctness of a lookup matters more than its response size.
 _INTERNAL_LOOKUP_MAX = 10_000
 
-#: Every Capella tool: primitives plus the environment orchestration layer.
-TOOLS: list[Tool] = build_tools() + environment.TOOLS
+#: Every Capella tool: primitives, the environment orchestration layer, and
+#: the fixture layer. Order matters only for display.
+TOOLS: list[Tool] = build_tools() + environment.TOOLS + fixture.TOOLS
 
 _ENV_TOOL_NAMES = {t.name for t in environment.TOOLS}
 
@@ -72,6 +74,48 @@ def _query_params(op, args: dict) -> dict:
 #: convention. The prefix is load-bearing — a resource created without it can
 #: never be torn down or reaped by this server.
 _NAME_CHECKED_CREATES = frozenset({"capella_cluster_create", "capella_project_create"})
+
+#: Ops whose body carries a `name` that must satisfy the prefix rule. A RENAME is as
+#: capable of moving a resource out of the sandbox as a create is of putting one
+#: outside it, and only the creates were covered.
+_NAME_CHECKED_RENAMES = _NAME_CHECKED_CREATES | frozenset({"capella_cluster_update"})
+
+#: Ops whose body can erase the ownership marker held in `description`.
+_MARKER_PRESERVING_UPDATES = frozenset({"capella_cluster_update"})
+
+
+def _preserve_ownership_marker(name: str, args: dict, body_in: dict) -> None:
+    """Carry an existing ownership marker across an update that would drop it.
+
+    The marker lives in a free-text field a caller legitimately edits, so this
+    preserves the marker line and leaves the caller's prose alone. When the body
+    supplies no description at all, nothing is done: the field is absent from the PUT
+    and Capella leaves the stored value untouched.
+    """
+    if "description" not in body_in:
+        return
+    supplied = str(body_in.get("description") or "")
+    if guardrails.parse_marker(supplied):
+        return  # caller kept a valid marker; leave it exactly as written
+    try:
+        current = _fetch_cluster(args)
+    except guardrails.GuardrailError:
+        raise
+    existing_marker = guardrails.parse_marker(current.get("description"))
+    if not existing_marker:
+        return  # nothing to preserve
+    marker_line = guardrails.ENV_MARKER_PREFIX + json.dumps(
+        existing_marker, separators=(",", ":"), sort_keys=True
+    )
+    prose = supplied.rstrip()
+    body_in["description"] = f"{prose}\n{marker_line}" if prose else marker_line
+    _log.info(
+        "%s: re-attached the ownership marker the update would have dropped "
+        "(env=%r). Without it the cluster becomes invisible to the environment "
+        "ceiling and to capella_env_reap.",
+        name,
+        existing_marker.get("env"),
+    )
 
 
 def _fetch_cluster(args: dict) -> dict:
@@ -162,6 +206,38 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
             if isinstance(c, dict)
             and not guardrails.is_managed_name(str(c.get("name") or ""), policy)
         ]
+        # CAPELLA_PROTECTED_CLUSTERS, on the one operation that can take a cluster
+        # with the project. The containment check refused only clusters failing the
+        # NAME rule, so a protected cluster sitting alone in an allowlisted project
+        # passed -- while capella_cluster_delete on the same cluster was refused, and
+        # the hint says "No override exists."
+        protected_names = {
+            p.strip().casefold() for p in policy.protected_clusters if p.strip()
+        }
+        if protected_names:
+            contained_protected = [
+                str(c.get("name") or c.get("id"))
+                for c in clusters
+                if isinstance(c, dict)
+                and (
+                    str(c.get("name") or "").casefold() in protected_names
+                    or str(c.get("id") or "").casefold() in protected_names
+                )
+            ]
+            if contained_protected:
+                raise guardrails.GuardrailError(
+                    f"Refusing to delete project {args.get('project_id')!r}: it "
+                    f"contains {len(contained_protected)} cluster(s) listed in "
+                    f"CAPELLA_PROTECTED_CLUSTERS "
+                    f"({', '.join(contained_protected[:5])}).",
+                    hint=(
+                        "Deleting the project would delete these clusters with it, "
+                        "reaching resources capella_cluster_delete refuses outright. "
+                        "Remove them from CAPELLA_PROTECTED_CLUSTERS if that is "
+                        "genuinely intended, or delete the project from the Capella UI."
+                    ),
+                )
+
         if unmanaged:
             raise guardrails.GuardrailError(
                 f"Refusing to delete project {args.get('project_id')!r}: it contains "
@@ -175,14 +251,66 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
                 ),
             )
 
-    # 3. Naming convention on the creates that establish a new managed resource.
+    # 3. Naming convention on the creates that establish a new managed resource, and
+    #    on any RENAME. `and body_in.get("name")` used to guard this: a body whose
+    #    name was "" skipped assert_name_allowed entirely instead of being refused,
+    #    so the check was absent on exactly the branch it exists to cover. A blank
+    #    name on one of these ops is now a refusal.
     body_in = args.get("body")
     if (
-        name in _NAME_CHECKED_CREATES
+        name in _NAME_CHECKED_RENAMES
         and isinstance(body_in, dict)
-        and body_in.get("name")
+        and "name" in body_in
     ):
-        guardrails.assert_name_allowed(str(body_in["name"]), policy)
+        guardrails.assert_name_allowed(str(body_in.get("name") or ""), policy)
+
+    # 3a. An UPDATE must not be able to launder a resource out of the sandbox.
+    #
+    #     capella_cluster_update checked that the CURRENT cluster was owned, then
+    #     forwarded the caller's body verbatim. Both of the sandbox's identifying
+    #     marks live in that body, so one PUT could erase both: rename the cluster
+    #     off the prefix and blank the description holding the ownership marker.
+    #     Afterwards the ceiling counted it as 0, capella_env_list filed it as
+    #     unmanaged and not reapable, capella_env_teardown answered "already torn
+    #     down", and capella_cluster_delete refused it forever for lacking the
+    #     prefix. Every removal path this server has was closed, and the cluster
+    #     billed indefinitely. Verified: 6 live clusters against a ceiling of 2.
+    #
+    #     capella_cluster_update is also destructive=False, so an automation
+    #     principal reaches it with no confirmation.
+    #
+    #     So: the new name is prefix-checked above, and an existing marker is carried
+    #     across rather than dropped. A caller may edit the prose around it.
+    if name in _MARKER_PRESERVING_UPDATES and isinstance(body_in, dict):
+        _preserve_ownership_marker(name, args, body_in)
+
+    # 3b. Stamp the ownership marker on the raw create primitive.
+    #
+    #     capella_cluster_create forwarded the caller's body verbatim, so a cluster
+    #     created through it carried no marker -- and the ceiling, capella_env_list
+    #     and the reaper are all built on that marker. The cluster was therefore
+    #     invisible to the guard meant to bound it and to the reaper meant to collect
+    #     it: created by this server, owned by nothing.
+    #
+    #     A caller-supplied description is preserved and the marker appended on its
+    #     own line, because parse_marker is anchored per line and a human may want to
+    #     write a note next to it.
+    #     ttl_hours=0 is load-bearing and NOT the default. build_marker's default is
+    #     CAPELLA_ENV_TTL_HOURS (8), and stamping that here would enrol every
+    #     primitive-created cluster into the unattended reaper's delete list -- a tool
+    #     with no ttl_hours argument and no mention of expiry in its description would
+    #     silently arm capella_env_reap to DELETE the cluster eight hours later. A
+    #     caller who writes "long-lived perf baseline, do not delete" in the
+    #     description would lose it overnight. 0 means pinned: counted by the ceiling,
+    #     never auto-reaped. Deliberate lifecycle stays with capella_env_ensure, which
+    #     takes ttl_hours explicitly and says so.
+    if name == "capella_cluster_create" and isinstance(body_in, dict):
+        if not guardrails.parse_marker(body_in.get("description")):
+            marker = guardrails.build_marker(
+                str(body_in.get("name") or ""), ttl_hours=0
+            )
+            existing = str(body_in.get("description") or "").rstrip()
+            body_in["description"] = f"{existing}\n{marker}" if existing else marker
 
     # 4. Spend ceiling. Previously enforced only inside capella_env_ensure, so an
     #    agent looping on the raw create primitive could provision without bound.
@@ -263,6 +391,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
     """Dispatch a Capella tool call."""
     if name in _ENV_TOOL_NAMES or name == "capella_guardrails_status":
         return environment.handle(name, args)
+
+    if name in fixture.TOOL_NAMES:
+        return fixture.handle(name, args)
 
     if name not in OPS_BY_NAME:
         return err(f"Unknown Capella tool: {name}", tool=name)

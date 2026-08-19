@@ -1,0 +1,41 @@
+flowchart LR
+  subgraph A["INSTANCE A   ·   CAPELLA INTERFACE ONLY"]
+    direction TB
+    AC["SET ONCE AT STARTUP<br/>CB_ADMIN_PROFILE = workstation | enterprise<br/>CB_DEPLOYMENT = capella"]
+    A1["ACCESS PATH 1 · MCP transport<br/>server.py · stdio or streamable_http<br/>client: Claude Desktop, an agent<br/><br/>Security ON: OAuth / JWT scopes<br/>OFF for sandbox:<br/>CB_ADMIN_HTTP_REQUIRE_AUTH=false"]
+    A2["ACCESS PATH 2 · Operator console<br/>gui/gui_server.py · Flask, browser<br/>client: a person<br/><br/>Security ON: OIDC + signed session<br/>OFF for sandbox:<br/>CB_GUI_INSECURE_NO_AUTH=true"]
+    AG["SHARED POLICY LAYER · authz.evaluate<br/>scope gate → hard ceiling → read-only<br/>→ confirmation → dry run<br/>CB_ADMIN_READ_ONLY_MODE<br/>CB_ADMIN_ALWAYS_CONFIRM · CB_ADMIN_DRY_RUN"]
+    AT["capella_* · 74 tools<br/>Guardrails: CAPELLA_ORG_ID pin,<br/>CAPELLA_ALLOWED_PROJECTS,<br/>CAPELLA_ENV_NAME_PREFIX,<br/>CAPELLA_MAX_ENVIRONMENTS"]
+    AE["Capella v4 control plane<br/>cloudapi.cloud.couchbase.com/v4<br/>Bearer CAPELLA_API_KEY_SECRET"]
+    AC -.-> A1
+    AC -.-> A2
+    A1 --> AG
+    A2 --> AG
+    AG --> AT --> AE
+  end
+
+  subgraph B["INSTANCE B   ·   ENTERPRISE SELF-MANAGED INTERFACE ONLY"]
+    direction TB
+    BC["SET ONCE AT STARTUP<br/>CB_ADMIN_PROFILE = workstation | enterprise<br/>CB_DEPLOYMENT = self_managed"]
+    B1["ACCESS PATH 1 · MCP transport<br/>server.py · stdio or streamable_http<br/>client: Claude Desktop, an agent<br/><br/>Security ON: OAuth / JWT scopes<br/>OFF for sandbox:<br/>CB_ADMIN_HTTP_REQUIRE_AUTH=false"]
+    B2["ACCESS PATH 2 · Operator console<br/>gui/gui_server.py · Flask, browser<br/>client: a person<br/><br/>Security ON: OIDC + signed session<br/>OFF for sandbox:<br/>CB_GUI_INSECURE_NO_AUTH=true"]
+    BG["SHARED POLICY LAYER · authz.evaluate<br/>scope gate → hard ceiling → read-only<br/>→ confirmation → dry run<br/>CB_ADMIN_READ_ONLY_MODE<br/>CB_ADMIN_ALWAYS_CONFIRM · CB_ADMIN_DRY_RUN"]
+    BT["admin_* and cb_* · 134 tools<br/>Guardrails: CB_ADMIN_EGRESS_ALLOWED_HOSTS,<br/>SQL++ statement guards,<br/>CB_ADMIN_TLS_INSECURE (leave off),<br/>CB_ADMIN_DISABLED_TOOLS"]
+    BE["Self-managed cluster<br/>ns_server REST :18091 + SDK<br/>Basic CB_USERNAME / CB_PASSWORD"]
+    BC -.-> B1
+    BC -.-> B2
+    B1 --> BG
+    B2 --> BG
+    BG --> BT --> BE
+  end
+
+  A ~~~ B
+
+  style A fill:#eef4fb,stroke:#2c6fb5,stroke-width:2px
+  style B fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+  style AC fill:#fff8e1,stroke:#f9a825
+  style BC fill:#fff8e1,stroke:#f9a825
+  style AG fill:#f3e5f5,stroke:#6a1b9a
+  style BG fill:#f3e5f5,stroke:#6a1b9a
+  style AE fill:#ffffff,stroke:#5a5a5a
+  style BE fill:#ffffff,stroke:#5a5a5a

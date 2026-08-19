@@ -178,5 +178,5 @@ def test_the_precommit_config_the_guide_promises_exists():
 
 def test_the_issue_link_points_at_the_chosen_org(guide):
     assert (
-        "github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server/issues" in guide
+        "github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server/issues" in guide
     ), "the guide sends bug reports somewhere other than the chosen org"

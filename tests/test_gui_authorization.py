@@ -38,8 +38,23 @@ def _load_gui(monkeypatch, **env):
         else:
             monkeypatch.setenv(key, value)
 
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config
 
     importlib.reload(profile_config)
@@ -267,3 +282,96 @@ def test_claims_do_not_leak_between_requests(gui):
         client.get("/api/tools")
     # before_request clears it; the stale identity must not survive into the next call.
     assert scope_gate.current_claims() is None
+
+
+# ── The console's SUCCESS badge must reflect the decision ─────────────────────
+
+
+def test_a_handler_refusal_is_not_reported_to_the_browser_as_a_success(
+    gui, monkeypatch
+):
+    """`{"ok": true}` was hardcoded on this path, for every result.
+
+    The gate refusals above answer 4xx, so they were never the problem. A refusal the
+    HANDLER makes -- the egress allowlist, a Capella guardrail, a validation error --
+    comes back as a normal 200 payload, and the console's own code renders
+    `result.ok ? "SUCCESS" : "ERROR"`. So a blocked exfiltration attempt got a green
+    SUCCESS badge and a success entry in the run history, while the payload underneath
+    said it had been denied. The MCP transport had the mirror-image defect in its
+    isError flag; this is the second half of that fix.
+    """
+    import handlers.shared as shared_mod
+
+    tool = "admin_bucket_list"
+    real = gui.HANDLERS[tool]
+
+    class _Refusing:
+        def handle(self, name, arguments):
+            return shared_mod.err(
+                "EgressDenied: host not in EGRESS_ALLOWED_HOSTS", tool=name
+            )
+
+    monkeypatch.setitem(gui.HANDLERS, tool, _Refusing())
+    try:
+        with gui.app.test_client() as client:
+            resp = _call(client, tool)
+    finally:
+        gui.HANDLERS[tool] = real
+
+    body = resp.get_json()
+    assert body["ok"] is False, (
+        "the console reported a refused operation as a successful call; index.html "
+        "renders a green SUCCESS badge from this field"
+    )
+    assert "EGRESS_ALLOWED_HOSTS" in json.dumps(body["result"]), (
+        "the refusal text must still be returned in full -- it is the part the "
+        "operator needs"
+    )
+
+
+def test_a_successful_console_call_is_still_reported_as_a_success(gui, monkeypatch):
+    """The other half: a wrapper that always said false would make every call look
+    refused, and a badge that is always ERROR is no more informative than one that is
+    always SUCCESS."""
+    import handlers.shared as shared_mod
+
+    tool = "admin_bucket_list"
+    real = gui.HANDLERS[tool]
+
+    class _Succeeding:
+        def handle(self, name, arguments):
+            return shared_mod.ok({"buckets": []})
+
+    monkeypatch.setitem(gui.HANDLERS, tool, _Succeeding())
+    try:
+        with gui.app.test_client() as client:
+            resp = _call(client, tool)
+    finally:
+        gui.HANDLERS[tool] = real
+
+    assert resp.get_json()["ok"] is True
+
+
+def test_a_sub_resource_error_inside_a_success_is_still_a_success(gui, monkeypatch):
+    """capella_env_ensure returns phase progress with a top-level "error" while
+    succeeding. Reading the "error" KEY rather than the marker would paint those runs
+    red -- the same misclassification the shared audit classifier exists to prevent."""
+    import handlers.shared as shared_mod
+
+    tool = "admin_bucket_list"
+    real = gui.HANDLERS[tool]
+
+    class _Progressing:
+        def handle(self, name, arguments):
+            return shared_mod.ok(
+                {"phase": "deploying", "error": "waiting for the cluster"}
+            )
+
+    monkeypatch.setitem(gui.HANDLERS, tool, _Progressing())
+    try:
+        with gui.app.test_client() as client:
+            resp = _call(client, tool)
+    finally:
+        gui.HANDLERS[tool] = real
+
+    assert resp.get_json()["ok"] is True

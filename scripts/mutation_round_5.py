@@ -16,6 +16,11 @@ import subprocess
 import sys
 import tempfile
 
+
+class MutationTimeoutError(RuntimeError):
+    """A mutation run that neither passed nor failed. Never counted as caught."""
+
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SESSION = "tests/test_session.py"
 COMPAT = "tests/test_mcp_compat.py"
@@ -25,6 +30,7 @@ CAPELLA = "tests/test_capella.py tests/test_verify_capella_paths.py"
 TOKEN = "tests/test_token_validation.py"
 SHARED = "tests/test_shared_http.py tests/test_shared_helpers.py"
 GUI_OAUTH = "tests/test_gui_oauth_routes.py"
+GUI_AUTHZ = "tests/test_gui_authorization.py"
 SQLB = "tests/test_sql_builders.py"
 DISPATCH = "tests/test_server_dispatch.py"
 PLAN = "tests/test_plan_analysis.py"
@@ -52,7 +58,8 @@ MUTATIONS = [
     (
         "session cookie: Secure dropped entirely",
         "auth/session.py",
-        "    if settings.cert_file or settings.terminated_externally:  # noqa: SIM103\n"
+        # Anchor updated: the code it pointed at was edited during the security pass.
+        "    if settings.cert_file or settings.terminated_externally:\n"
         "        return True",
         "    if False:\n        return True",
         SESSION,
@@ -60,8 +67,9 @@ MUTATIONS = [
     (
         "session cookie: Secure always on, breaking http://127.0.0.1 login",
         "auth/session.py",
-        "    # No TLS configured at all. `tls_config.validate()` already refuses to start in this\n"
-        "    # state on a non-loopback bind, so reaching here means local development over http://.\n"
+        # Anchor updated: the code it pointed at was edited during the security pass.
+        "    # Loopback development over http://. Secure here would stop the browser sending the\n"
+        "    # cookie back to http://127.0.0.1 and break local login outright.\n"
         "    return False",
         "    return True",
         SESSION,
@@ -202,22 +210,31 @@ MUTATIONS = [
     (
         "mcp_compat: a direct .inputSchema read is reintroduced at a call site",
         "handlers/mcp_status.py",
-        '        "read": sum(1 for t in loaded_tools if mcp_compat.is_read_only(t)),',
+        # Anchor updated: the code it pointed at was edited during the security pass.
+        '        "read": _categories.count("read"),',
         '        "read": sum(1 for t in loaded_tools if t.inputSchema),',
         COMPAT,
     ),
     # ── The connection-string password disclosure ───────────────────────────
-    (
-        "status: the connection string is reported verbatim again",
-        "handlers/mcp_status.py",
-        '            "connection_string": redact_uri_credentials(\n'
-        '                os.environ.get("CB_CONNECTION_STRING", "couchbase://localhost")\n'
-        "            ),",
-        '            "connection_string": os.environ.get(\n'
-        '                "CB_CONNECTION_STRING", "couchbase://localhost"\n'
-        "            ),",
-        STATUS,
-    ),
+    #
+    # WITHDRAWN, and the reason matters more than the entry did.
+    #
+    # This slot used to remove `redact_uri_credentials` from cb_mcp_status's
+    # connection_string field, and round 5 reported "no test caught it". Writing a test
+    # for it showed why: nothing catches it because it is no longer a defect. redact()
+    # gained content masking on every string LEAF during the security pass, and that path
+    # runs redact_text -> redact_uri_credentials, so the password is masked whether or not
+    # mcp_status asks for it. The mutated build returns
+    # `couchbases://admin:***REDACTED***@cb.example.com` -- the same output as the
+    # unmutated one.
+    #
+    # Deleting one of two layers that both hold is not a mutation, and a test written to
+    # "catch" it would have had to assert on the layer rather than the behaviour. The
+    # property itself IS still enforced by mutation: the entry immediately below breaks
+    # redact_uri_credentials at the source, which takes out BOTH layers at once, and it is
+    # caught. tests/test_unguarded_controls.py::
+    # test_status_never_reports_the_connection_string_verbatim asserts the observable
+    # behaviour alongside it.
     (
         "redaction: URI userinfo masking is a no-op",
         "handlers/shared.py",
@@ -916,7 +933,18 @@ MUTATIONS = [
         "console: the callback no longer checks state, so login CSRF works",
         "gui/gui_server.py",
         "    pkce = _pkce_store.pop(state, None)",
-        '    pkce = _pkce_store.pop(state, None) or {"verifier": "", "next": "/"}',
+        # created_at is part of the substitute entry ON PURPOSE. The obvious form of this
+        # mutation -- `or {"verifier": "", "next": "/"}` -- is not a real hole: the
+        # substitute has no created_at, so the TTL check three lines down computes an
+        # infinite age and refuses anyway. A test that only asserted "400" therefore
+        # passed against the mutated build, for the wrong reason. With a fresh created_at
+        # the fabricated state clears BOTH checks and reaches exchange_code, which is the
+        # actual vulnerability this entry is meant to describe.
+        "    pkce = _pkce_store.pop(state, None) or {\n"
+        '        "verifier": "",\n'
+        '        "next": "/",\n'
+        '        "created_at": str(time.time()),\n'
+        "    }",
         GUI_OAUTH,
     ),
     (
@@ -979,8 +1007,9 @@ MUTATIONS = [
     (
         "sql: the index list interpolates its filters instead of binding them",
         "handlers/indexes.py",
-        '                wheres.append("bucket_id = $bucket")',
-        "                wheres.append(f\"bucket_id = '{args['bucket_name']}'\")",
+        # Anchor updated: the code it pointed at was edited during the security pass.
+        '                    "(bucket_id = $bucket OR (bucket_id IS MISSING "',
+        "                    f\"bucket_id = '{args['bucket_name']}' OR (\"",
         SQLB,
     ),
     (
@@ -992,36 +1021,42 @@ MUTATIONS = [
     ),
     # ── Audit classification ────────────────────────────────────────────────
     (
+        # Anchor updated: the code it pointed at was edited during the security pass.
         "audit: a successful non-JSON response is recorded as a denial",
-        "server.py",
+        "audit.py",
         '        if not isinstance(text, str):\n            return "allowed", ""',
         '        if not isinstance(text, str):\n            return "denied_handler", "unreadable"',
         DISPATCH,
     ),
     (
+        # Anchor RETARGETED: _classify_result moved out of server.py into
+        # audit.classify_result so BOTH dispatch paths share one refusal
+        # vocabulary -- the console was collapsing every refusal to
+        # denied_handler. The harness correctly reported ANCHOR-GONE when the
+        # code moved, which is the whole point of it.
         "audit: a guardrail refusal is indistinguishable from a cluster error",
-        "server.py",
+        "audit.py",
         '            if payload.get("guardrail"):',
         "            if False:",
         DISPATCH,
     ),
     (
         "audit: an egress refusal is indistinguishable from a cluster error",
-        "server.py",
+        "audit.py",
         '            if "EgressDenied" in reason or "EGRESS_ALLOWED_HOSTS" in reason:',
         "            if False:",
         DISPATCH,
     ),
     (
         "audit: the reason is no longer truncated",
-        "server.py",
+        "audit.py",
         '            reason = str(payload.get("error"))[:400]',
         '            reason = str(payload.get("error"))',
         DISPATCH,
     ),
     (
         "audit: an unparseable result is invented as a denial",
-        "server.py",
+        "audit.py",
         '    except Exception:\n        # Not JSON, or an unexpected shape. Treat as success rather than inventing a\n        # denial; the handler returned normally.\n        return "allowed", ""',
         '    except Exception:\n        return "denied_handler", "unparseable"',
         DISPATCH,
@@ -1343,6 +1378,29 @@ MUTATIONS = [
         '        result["credential"] = {\n            "name": cred_name,\n            "password": "",',
         ENVREC,
     ),
+    # ── The protocol-level isError flag, and the console's half of it ───────
+    (
+        "console: a refused call is reported to the browser as a success again",
+        "gui/gui_server.py",
+        'return jsonify({"ok": decision == "allowed", "result": parsed})',
+        'return jsonify({"ok": True, "result": parsed})',
+        GUI_AUTHZ,
+    ),
+    # ── The protocol-level isError flag ─────────────────────────────────────
+    (
+        "dispatch: a refusal is reported to the client as a successful call again",
+        "server.py",
+        '    if not _carries_error_marker(getattr(result, "content", None)):\n        return server_result',
+        '    if _carries_error_marker(getattr(result, "content", None)):\n        return server_result',
+        DISPATCH,
+    ),
+    (
+        "dispatch: every call is flagged as an error, so the flag means nothing",
+        "server.py",
+        "        if isinstance(payload, dict) and payload.get(shared.ERROR_MARKER) is True:\n            return True\n    return False",
+        "        if isinstance(payload, dict):\n            return True\n    return False",
+        DISPATCH,
+    ),
 ]
 
 
@@ -1369,7 +1427,16 @@ def run(target: str, cwd: pathlib.Path) -> bool:
             timeout=150,
         )
     except subprocess.TimeoutExpired:
-        return False
+        # A TIMEOUT IS NOT A KILL. `return False` here means "tests failed", which this
+        # harness reports as the mutation being CAUGHT -- with no assertion having failed
+        # anywhere. So any mutation that merely made the target slow enough to exceed the
+        # timeout was recorded as covered by a test. That is the harness telling the
+        # comfortable story, in the one tool whose entire job is to say which controls
+        # are untested. Raised so the run fails loudly instead.
+        raise MutationTimeoutError(
+            f"pytest timed out on {target}; this mutation is NOT proven caught. "
+            "Re-run with a longer timeout before trusting the result."
+        ) from None
     return result.returncode == 0
 
 

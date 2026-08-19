@@ -13,11 +13,17 @@ So the exclusions are pinned here, each with the reason it is defensible:
   * `scripts/mutation_*` — those harnesses COPY the tree and run pytest in a subprocess, so
     their lines never execute in the measured process.
   * `gui/static/*` — vendored third-party JavaScript.
+  * `.venv/*` — the virtual environment. Third-party library code is not this
+    project's to test, and on a local run it dwarfs the first-party total.
   * `if __name__ == "__main__":` — reaching it means running the module as a program, which the
     packaging tests do in a subprocess. The lines DO execute; not in this process.
 
 Anything beyond that list should have to argue for itself in review, which is what a failing
 test here forces.
+
+AND the number has to actually be produced and gated, which it was not: no CI job ran
+`--cov` and there was no `fail_under`, so every assertion in this file constrained the
+shape of a measurement that never happened. `fail_under` is now pinned here too.
 """
 
 from __future__ import annotations
@@ -178,3 +184,34 @@ def test_branch_coverage_is_off_and_that_is_stated(parsed):
     """Stated so the number is not read as stronger than it is: 92% of STATEMENTS is not 92%
     of branches, and the difference matters for a codebase this full of guards."""
     assert parsed["run"]["branch"] is False
+
+
+def test_coverage_is_actually_gated():
+    """A configured coverage block with no threshold gates nothing.
+
+    This file pinned the exclusions -- which shape the number -- while nothing produced
+    or checked the number itself. Pinning `fail_under` means lowering the bar becomes a
+    visible edit to a tested value rather than a quiet deletion.
+    """
+    text = CONFIG.read_text(encoding="utf-8")
+    assert "fail_under" in text, (
+        "no fail_under in [tool.coverage.report]: the coverage configuration shapes a "
+        "number that nothing enforces"
+    )
+    import re
+
+    match = re.search(r"^fail_under\s*=\s*(\d+)", text, re.MULTILINE)
+    assert match, "fail_under is present but not parseable as a number"
+    floor = int(match.group(1))
+    assert floor >= 85, f"fail_under={floor} is too low to catch a real regression"
+
+
+def test_the_ci_workflow_measures_coverage():
+    """The gate has to run somewhere, or fail_under is also decoration."""
+    workflow = ROOT / ".github" / "workflows" / "ci.yml"
+    if not workflow.is_file():
+        pytest.skip("no CI workflow in this checkout")
+    text = workflow.read_text(encoding="utf-8")
+    assert "--cov" in text, (
+        "no CI step runs pytest with --cov, so fail_under is never evaluated"
+    )

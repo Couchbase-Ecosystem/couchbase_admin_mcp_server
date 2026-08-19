@@ -13,6 +13,7 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 from .egress import assert_egress_allowed
 from .shared import (
     admin_request,
+    arg_truthy,
     err,
     form_data_declared,
     ok,
@@ -289,7 +290,12 @@ def handle(name: str, args: dict) -> list[TextContent]:
             if args.get("filterExpression"):
                 data["filterExpression"] = args["filterExpression"]
             if args.get("conflictLogging") is not None:
-                data["conflictLogging"] = "true" if args["conflictLogging"] else "false"
+                # arg_truthy: "false" is truthy as a raw string, so this ENABLED
+                # conflict logging when the caller asked to disable it -- writing
+                # conflict documents into a mapping that may not be configured.
+                data["conflictLogging"] = (
+                    "true" if arg_truthy(args["conflictLogging"]) else "false"
+                )
             if args.get("conflictLoggingMapping"):
                 # Form encoding requires a JSON string for nested objects.
                 import json as _json

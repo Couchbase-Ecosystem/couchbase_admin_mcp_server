@@ -354,8 +354,20 @@ def test_the_retry_count_is_at_least_one(cluster):
         # A path or query is not part of the host.
         ("couchbase://host/somepath", "http://host:8091"),
         ("couchbases://host/?ssl=no_verify", "https://host:18091"),
-        # Only the first host of a multi-node string is contacted.
-        ("couchbase://node1,node2", "http://node1,node2:8091"),
+        # A query with NO preceding slash is still not part of the host. This form
+        # produced "http://host?kv_timeout=5s:8091", which urllib reads as host
+        # `host`, port 80 and selector "/?kv_timeout=5s:8091/pools/..." -- so every
+        # call silently hit `/` instead of the intended path.
+        ("couchbase://host?kv_timeout=5s", "http://host:8091"),
+        ("couchbases://host#frag", "https://host:18091"),
+        # Only the first host of a multi-node string is contacted. The HA spelling
+        # `couchbase://n1,n2,n3` previously yielded "http://n1,n2,n3:8091", so every
+        # admin REST call failed DNS resolution while the SDK path worked.
+        ("couchbase://node1,node2", "http://node1:8091"),
+        ("couchbase://n1,n2,n3", "http://n1:8091"),
+        ("couchbases://n1,n2", "https://n1:18091"),
+        # An IPv6 literal is bracketed; the port split must not cut inside it.
+        ("couchbase://[2001:db8::1]:11210", "http://[2001:db8::1]:8091"),
     ],
 )
 def test_the_management_url_is_derived_from_the_connection_string(

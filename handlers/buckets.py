@@ -256,11 +256,19 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # "False" — non-empty, and read as ENABLED by a truthy-string parser.
             # flushEnabled=false arming flush instead of disarming it is the failure
             # that matters, and create had it while update was fixed.
+            #
+            # Rename BEFORE the allow-list filter, matching admin_bucket_update.
+            # Filtering first dropped `ramQuota` -- the schema's own required
+            # argument, and not a member of _BUCKET_CREATE_KEYS, which holds the
+            # ns_server spelling `ramQuotaMB` -- so the rename below it could never
+            # fire and the POST went out with no quota at all. ns_server rejects
+            # that, so admin_bucket_create failed on every call.
+            renamed = dict(args)
+            if "ramQuota" in renamed:
+                renamed["ramQuotaMB"] = renamed.pop("ramQuota")
             data = form_data(
-                {k: v for k, v in args.items() if k in _BUCKET_CREATE_KEYS}
+                {k: v for k, v in renamed.items() if k in _BUCKET_CREATE_KEYS}
             )
-            if "ramQuota" in data:
-                data["ramQuotaMB"] = data.pop("ramQuota")
             return ok(admin_request("POST", "/pools/default/buckets", data=data))
 
         if name == "admin_bucket_update":

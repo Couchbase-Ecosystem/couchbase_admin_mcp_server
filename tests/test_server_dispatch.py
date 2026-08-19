@@ -144,9 +144,16 @@ def dispatch(monkeypatch):
     )
 
     def _call(name, arguments=None):
-        return asyncio.get_event_loop().run_until_complete(
-            server.call_tool(name, arguments or {})
-        )
+        # asyncio.run, not get_event_loop().run_until_complete. The bare
+        # get_event_loop form reads AMBIENT state: any earlier test in the session
+        # that called asyncio.run leaves the main thread's loop closed and set to
+        # None, and get_event_loop then raises "no current event loop" instead of
+        # creating one. test_http_authorization.py does exactly that, so these five
+        # refusal-path tests passed when run alone and never executed at all in a
+        # full-suite CI -- the refusal paths for an unregistered tool, an unloaded
+        # tool, and a deployment-gated tool were unverified in the only run that
+        # gates a merge. asyncio.run owns its own loop and depends on nothing.
+        return asyncio.run(server.call_tool(name, arguments or {}))
 
     return _call, records
 
@@ -343,3 +350,84 @@ def test_the_correlation_id_is_never_required():
     for tool in server._TOOLS:
         required = mcp_compat.input_schema(tool).get("required", [])
         assert "correlation_id" not in required, tool.name
+
+
+# ── The protocol-level isError flag ──────────────────────────────────────────
+#
+# Verified over real stdio before this was written: `tools/call` for a tool that does
+# not exist answered `isError: false`, i.e. a successful call. Every refusal this server
+# makes is a normal structured return value rather than a raised exception -- which is
+# what keeps the reason machine-readable -- and the mcp lowlevel server sets isError=True
+# only for an exception. So the flag was false for every denial, and a caller that
+# branches on it (a script, a workflow step, a UI) read a refused destructive operation
+# as success.
+
+
+def _wire_call(name: str, arguments: dict | None = None):
+    """Go through the REGISTERED request handler, not server.call_tool.
+
+    The flag is set at the wire boundary on purpose -- call_tool still returns
+    list[TextContent] for the console and for every internal caller -- so a test that
+    called call_tool directly could not see it. That is the whole reason this helper
+    exists rather than reusing the `dispatch` fixture above.
+    """
+    import asyncio
+
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    request = CallToolRequest(
+        method="tools/call",
+        params=CallToolRequestParams(name=name, arguments=arguments or {}),
+    )
+    handler = server.app.request_handlers[CallToolRequest]
+    return asyncio.run(handler(request)).root
+
+
+def test_a_refusal_sets_the_protocol_error_flag():
+    result = _wire_call("admin_not_a_real_tool")
+    assert result.isError is True, (
+        "a refused call was reported to the client as a successful tool call; isError is "
+        "the field the protocol defines for this and a non-conversational caller has "
+        "nothing else to branch on"
+    )
+    assert server.shared.ERROR_MARKER in result.content[0].text
+
+
+def test_a_successful_call_does_not_set_the_error_flag():
+    """The other half. A wrapper that always set the flag would be worse than none: every
+    successful call would look like a failure and the field would stop meaning anything."""
+    result = _wire_call("cb_mcp_status")
+    assert result.isError is False
+
+
+def test_a_success_payload_carrying_a_sub_resource_error_is_not_flagged():
+    """Capella phase results and per-item batch failures carry a top-level "error" while
+    being successful responses. Flagging those was the exact mistake _classify_result was
+    fixed for; the flag reads the same marker so the two cannot disagree."""
+    payload = {"phase": "deploying", "error": "waiting for the cluster to be healthy"}
+    assert server._carries_error_marker(_text(payload)) is False
+    assert (
+        server._carries_error_marker(_text({server.shared.ERROR_MARKER: True})) is True
+    )
+
+
+def test_non_json_content_is_not_mistaken_for_a_refusal():
+    """A handler that returns prose, or a proxy's text/plain error body folded into a
+    result, must not be parsed as a marker payload -- and must not raise here either,
+    because this code runs on the reply path for every single call."""
+    assert (
+        server._carries_error_marker([TextContent(type="text", text="not json")])
+        is False
+    )
+    assert server._carries_error_marker([]) is False
+    assert server._carries_error_marker(None) is False
+
+
+def test_a_missing_sdk_handler_is_a_clear_startup_error():
+    """Fail loudly, not silently. If a future mcp reorganises the request registry the
+    wrapper cannot be installed, and skipping it quietly would put the isError flag back
+    to reporting every refusal as a success -- with a green suite."""
+    with pytest.raises(RuntimeError) as caught:
+        server._registered_call_tool_handler({})
+    assert "isError" in str(caught.value)
+    assert "pyproject.toml" in str(caught.value)

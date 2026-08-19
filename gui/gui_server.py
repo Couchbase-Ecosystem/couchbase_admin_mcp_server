@@ -153,6 +153,18 @@ def _enforce_gui_posture() -> None:
             "address and CB_GUI_ALLOW_REMOTE is not set."
         )
 
+    # TLS posture, on the console's OWN bind. server._enforce_profile calls
+    # tls_config.validate for the MCP transport; this process never did, so the
+    # console would start on a network interface in cleartext with no
+    # external-termination acknowledgement -- and auth.session.cookie_is_secure()
+    # then returns False, so the session cookie fronting the whole destructive tool
+    # surface was issued without Secure over plain HTTP. The MCP transport refuses
+    # the identical posture with a fatal error.
+    if exposed:
+        import tls_config as _tls
+
+        problems.extend(_tls.validate(host, "http"))
+
     if problems:
         for problem in problems:
             print(
@@ -163,9 +175,11 @@ def _enforce_gui_posture() -> None:
 
 import audit  # noqa: E402
 import authz  # noqa: E402
+import dryrun  # noqa: E402
 from auth.scope_gate import (  # noqa: E402
     check_scope,
     clear_token_claims,
+    is_read_side,
     principal_of,
     session_has_automation_scope,
     set_token_claims,
@@ -301,6 +315,23 @@ HANDLERS = {
 }
 
 TOOL_INDEX = {t.name: t for t in ALL_TOOLS}
+
+#: The same confirmation set server.py computes, so `confirm` is advertised on the
+#: same tools through both paths. require_confirmation() below is the authority; this
+#: only decides what the schema SAYS.
+_CONSOLE_CONFIRMATION_REQUIRED: set[str] = {
+    t.name for t in ALL_TOOLS if not is_read_side(t)
+} | _CUSTOM_CONFIRMATION_TOOLS
+
+# Register the handler-owned dry_run set in THIS process too.
+#
+# Only server.py called this, so _HANDLER_OWNED was empty here: handler_owns() was
+# False for capella_env_reap, the console intercepted its dry_run and stripped the
+# flag, and the handler fell back to its own default of True. A reap through the
+# console was therefore ALWAYS a preview and expired Capella environments billed
+# forever -- BUG-2 reintroduced through the second dispatch path, which is the exact
+# defect class this codebase keeps producing.
+dryrun.register_handler_owned(ALL_TOOLS)
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +584,36 @@ def _reject_cross_site_request():
             if parts.scheme and parts.netloc:
                 origin = f"{parts.scheme}://{parts.netloc}"
 
+    # Sec-Fetch-Site closes the gap the Origin/Referer pair leaves open.
+    #
+    # The check below only fires `if origin`, so an attacker page with
+    # `Referrer-Policy: no-referrer` embedding <img src=".../auth/logout"> sent NEITHER
+    # header, passed, and cleared the operator's session -- the one route the comment
+    # above claims is covered.
+    #
+    # Requiring Origin/Referer instead would break ordinary direct navigation to
+    # /auth/logout, which legitimately sends neither. Sec-Fetch-Site is the right
+    # instrument: it is a FORBIDDEN header, so page script cannot set or strip it, every
+    # current browser sends it, and it distinguishes the two cases the other headers
+    # cannot -- `cross-site` for the img-tag attack versus `none` for someone typing the
+    # URL. Absent (an old client) falls through rather than breaking them.
+    fetch_site = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if fetch_site in ("cross-site", "same-site") and not _origin_is_allowed(origin):
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        f"Cross-site request refused: this request was initiated from "
+                        f"another site (Sec-Fetch-Site: {fetch_site}). If a different "
+                        "origin legitimately serves this console, set "
+                        "CB_GUI_ALLOWED_ORIGINS."
+                    ),
+                }
+            ),
+            403,
+        )
+
     if origin and not _origin_is_allowed(origin):
         return (
             jsonify(
@@ -662,6 +723,10 @@ def global_auth_check():
         return cross_site
 
     if _INSECURE_NO_AUTH_ACKNOWLEDGED and not _client_is_local():
+        audit.emit_auth_failure(
+            reason="non-loopback request while CB_GUI_INSECURE_NO_AUTH is set",
+            source=request.remote_addr or "",
+        )
         return (
             jsonify(
                 {
@@ -685,6 +750,10 @@ def global_auth_check():
         # the port: full tool enumeration and execution of every loaded tool,
         # destructive ones included.
         if not _INSECURE_NO_AUTH_ACKNOWLEDGED and request.path.startswith("/api/"):
+            audit.emit_auth_failure(
+                reason="admin API requested with OAuth disabled and no acknowledgement",
+                source=request.remote_addr or "",
+            )
             return (
                 jsonify(
                     {
@@ -709,6 +778,15 @@ def global_auth_check():
     if claims is None:
         # For API routes return JSON; for all others (SPA) let the frontend handle it
         if request.path.startswith("/api/"):
+            # AUDIT it. The MCP transport emits emit_auth_failure at its edge, so an
+            # attacker spraying tokens there leaves a trail; on the console the same
+            # traffic produced 401s and no audit events at all, which meant "an audit
+            # trail that only contains successful calls cannot show an attempted
+            # intrusion" held for one dispatch path and not the other.
+            audit.emit_auth_failure(
+                reason="no valid session or bearer token",
+                source=request.remote_addr or "",
+            )
             return jsonify({"error": "Unauthorized", "auth_required": True}), 401
         # Non-API routes serve the SPA which handles the redirect
         return None
@@ -734,6 +812,18 @@ def _clear_claims(_exc=None):
 # Entries are cleaned up on each new login attempt (max 10-minute lifetime).
 _pkce_store: dict[str, dict[str, str]] = {}
 _PKCE_TTL = 600  # 10 minutes — enough to complete a browser login
+
+#: Upper bound on outstanding logins, so an unauthenticated flood cannot grow the
+#: store for a whole TTL window.
+_MAX_PKCE_ENTRIES = 256
+
+#: Cookie carrying the state of the login this browser started. Path-scoped to
+#: /auth/ so it is not sent with ordinary console traffic.
+_LOGIN_STATE_COOKIE = "cb_admin_login_state"
+
+#: The shape secrets.token_urlsafe(32) produces. Checked before any comparison so a
+#: malformed `state` is a 400 rather than a TypeError from compare_digest.
+_STATE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
 def _pkce_purge() -> None:
@@ -786,6 +876,8 @@ def auth_login():
     parsed = _urlparse(raw_next)
     next_url = raw_next if (not parsed.scheme and not parsed.netloc) else "/"
 
+    from auth import session as _session
+
     _pkce_purge()
     state = secrets.token_urlsafe(32)
     verifier, challenge = _oidc.generate_pkce_pair()
@@ -794,13 +886,40 @@ def auth_login():
         "next": next_url,
         "created_at": str(time.time()),
     }
+    # Hard cap in addition to the TTL purge. _pkce_purge only evicts entries older
+    # than _PKCE_TTL and only runs on this route, so unauthenticated login floods
+    # grew the store unboundedly for a full 10-minute window while making the purge's
+    # scan quadratic.
+    if len(_pkce_store) > _MAX_PKCE_ENTRIES:
+        for stale_state in sorted(
+            _pkce_store, key=lambda k: float(_pkce_store[k].get("created_at", 0))
+        )[: len(_pkce_store) - _MAX_PKCE_ENTRIES]:
+            _pkce_store.pop(stale_state, None)
 
     try:
         url = _oidc.build_authorization_url(state=state, code_challenge=challenge)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 500
 
-    return redirect(url)
+    # BIND the state to the browser that started this login.
+    #
+    # The store was keyed only by `state`, so any browser could redeem any outstanding
+    # state: an attacker starts a login, authenticates at the IdP, then links the
+    # victim to /auth/callback?code=<attacker code>&state=<attacker state> and the
+    # victim's browser is issued a session for the ATTACKER's identity. Verified with
+    # two independent clients. The state now has to arrive in BOTH the query string
+    # and a cookie only the initiating browser holds.
+    response = redirect(url)
+    response.set_cookie(
+        _LOGIN_STATE_COOKIE,
+        state,
+        max_age=_PKCE_TTL,
+        httponly=True,
+        samesite="Lax",
+        secure=_session.cookie_is_secure(),
+        path="/auth/",
+    )
+    return response
 
 
 @app.route("/auth/callback")
@@ -824,12 +943,61 @@ def auth_callback():
     if not code:
         return jsonify({"error": "Missing authorization code in callback."}), 400
 
+    # The state must match the cookie set when THIS browser began the login.
+    #
+    # Compared as BYTES: secrets.compare_digest raises TypeError on a non-ASCII str, and
+    # `state` is unvalidated query input -- so /auth/callback?state=%C3%A9 was an
+    # unauthenticated HTTP 500 with a traceback. The shape is checked first, so a value
+    # that cannot be one of our states is refused before any comparison.
+    cookie_state = request.cookies.get(_LOGIN_STATE_COOKIE, "")
+    if not _STATE_RE.fullmatch(state or "") or not cookie_state:
+        return jsonify(
+            {
+                "error": (
+                    "This login was not started in this browser. Begin again from "
+                    "/auth/login."
+                )
+            }
+        ), 400
+    if not secrets.compare_digest(cookie_state.encode(), state.encode()):
+        # The entry is NOT popped on a cookie mismatch, so a mismatched callback cannot
+        # be used to delete an outstanding login someone else is mid-way through. It is
+        # collected by the TTL purge and bounded by _MAX_PKCE_ENTRIES.
+        #
+        # To be accurate about what this does NOT fix: two concurrent logins in one
+        # browser still leave the FIRST tab unusable, because there is a single
+        # state cookie and the second login overwrites it. The first tab gets a 400 and
+        # must start again. That is a usability wart, not a security one -- the state is
+        # a 43-character secret, an attacker without the cookie gets 400, and the owner
+        # of the newest login still completes normally. Fixing it properly means a
+        # per-login cookie, which is not worth the surface today.
+        return jsonify(
+            {
+                "error": (
+                    "This login was not started in this browser, or a newer login "
+                    "replaced it. Begin again from /auth/login."
+                )
+            }
+        ), 400
+
     pkce = _pkce_store.pop(state, None)
     if pkce is None:
         return jsonify(
             {
                 "error": "Invalid or expired state parameter. Please try logging in again."
             }
+        ), 400
+
+    # Enforce the TTL HERE too. _pkce_purge runs only on /auth/login, so with no
+    # further logins a state stayed redeemable indefinitely -- a day-old state was
+    # accepted.
+    try:
+        age = time.time() - float(pkce.get("created_at", 0))
+    except (TypeError, ValueError):
+        age = _PKCE_TTL + 1
+    if age > _PKCE_TTL:
+        return jsonify(
+            {"error": "This login attempt has expired. Please start again."}
         ), 400
 
     try:
@@ -958,7 +1126,18 @@ def list_tools():
             {
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": mcp_compat.input_schema(tool),
+                # The SHARED injector, so the console advertises the same control
+                # fields as the transport. Serving the raw schema here meant neither
+                # dry_run nor correlation_id existed on the console's surface while
+                # the console dispatch below read both out of the arguments -- the
+                # capability was present and undiscoverable.
+                "inputSchema": mcp_compat.input_schema(
+                    mcp_compat.with_control_fields(
+                        tool,
+                        read_only=is_read_side(tool),
+                        needs_confirm=tool.name in _CONSOLE_CONFIRMATION_REQUIRED,
+                    )
+                ),
                 "readOnly": _is_read_only(tool),
                 "destructive": _is_destructive(tool),
             }
@@ -1010,17 +1189,51 @@ def call_tool():
     body = request.get_json(silent=True) or {}
     tool_name = body.get("tool")
     arguments = body.get("arguments", {}) or {}
+    # A non-object `arguments` raised an unhandled AttributeError inside
+    # require_confirmation: HTTP 500, no audit record, and a full traceback when
+    # FLASK_DEBUG is on. Refuse it as the client error it is.
+    if not isinstance(arguments, dict):
+        return jsonify(
+            {
+                "error": (
+                    "`arguments` must be a JSON object, not "
+                    f"{type(arguments).__name__}."
+                )
+            }
+        ), 400
+    # Captured HERE, before any refusal can return. It used to be read further down,
+    # so the seven refusal records and the dry-run record -- the one an operator keeps
+    # as the proposal artifact -- all lost the provenance the MCP path records.
+    _correlation = arguments.get("correlation_id")
 
     if not tool_name:
         return jsonify({"error": "Missing 'tool' field"}), 400
     if tool_name in DISABLED_TOOLS:
-        _audit_gui(tool_name, arguments, "denied_disabled", "CB_ADMIN_DISABLED_TOOLS")
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_disabled",
+            "CB_ADMIN_DISABLED_TOOLS",
+            correlation_id=_correlation,
+        )
         return jsonify(
             {"error": f"Tool '{tool_name}' is disabled by configuration"}
         ), 403
 
     tool = TOOL_INDEX.get(tool_name)
     if tool is None:
+        # AUDIT the probe. server.py:461 emits denied_unknown_tool for the same
+        # decision, so tool-name enumeration through the transport left a trail and
+        # the same enumeration through the console left none. This branch sits ABOVE
+        # the block where every other decision is audited, which is why the earlier
+        # console-convergence pass missed it.
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_unknown_tool",
+            "no such tool",
+            correlation_id=_correlation,
+        )
         return jsonify({"error": f"Unknown tool: {tool_name}"}), 404
 
     if not _tool_is_deployable(tool_name):
@@ -1029,6 +1242,7 @@ def call_tool():
             arguments,
             "denied_deployment",
             f"not available in {_DEPLOYMENT_MODE!r}",
+            correlation_id=_correlation,
         )
         return jsonify(
             {
@@ -1045,7 +1259,13 @@ def call_tool():
         and not _is_read_only(tool)
         and True  # admin server has no internally-DML-gated tools
     ):
-        _audit_gui(tool_name, arguments, "denied_read_only", "read-only mode")
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_read_only",
+            "read-only mode",
+            correlation_id=_correlation,
+        )
         return jsonify(
             {
                 "error": (
@@ -1067,12 +1287,16 @@ def call_tool():
     # It now calls the same authz.evaluate() the MCP dispatch calls.
     scope_denial = check_scope(tool)
     if scope_denial:
-        _audit_gui(tool_name, arguments, "denied_scope", scope_denial)
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_scope",
+            scope_denial,
+            correlation_id=_correlation,
+        )
         return jsonify({"ok": False, "error": scope_denial}), 403
 
-    is_write = not (
-        tool.annotations and getattr(tool.annotations, "readOnlyHint", False)
-    )
+    is_write = not (tool.annotations and mcp_compat.is_read_only(tool))
     in_confirm_set = is_write or tool_name in _CUSTOM_CONFIRMATION_TOOLS
 
     # Automation comes ONLY from the token's scopes, never from the request body.
@@ -1112,12 +1336,24 @@ def call_tool():
         human_present=False,
     )
     if not ceiling.allowed:
-        _audit_gui(tool_name, arguments, ceiling.decision, "hard ceiling")
+        _audit_gui(
+            tool_name,
+            arguments,
+            ceiling.decision,
+            "hard ceiling",
+            correlation_id=_correlation,
+        )
         return jsonify({"ok": False, "error": ceiling.reason, **ceiling.detail}), 403
 
     confirm_err = require_confirmation(tool_name, arguments, in_confirm_set)
     if confirm_err is not None:
-        _audit_gui(tool_name, arguments, "denied_confirmation", confirm_err)
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_confirmation",
+            confirm_err,
+            correlation_id=_correlation,
+        )
         return jsonify(
             {
                 "ok": False,
@@ -1131,35 +1367,83 @@ def call_tool():
     # `confirm`, so a caller following the documented advice to pass correlation_id was
     # refused by the mass-assignment allow-list — the provenance field breaking the
     # very tools it was meant to annotate.
-    _correlation = arguments.get("correlation_id")
-    arguments = {
-        k: v for k, v in arguments.items() if k not in ("confirm", "correlation_id")
-    }
+    tool_obj = next((t for t in ALL_TOOLS if t.name == tool_name), None)
+    dry, dry_reason = dryrun.in_effect(arguments, tool_obj)
+    # Strip dry_run ONLY when the dispatch owns it, matching server.py. A tool that
+    # implements the flag itself must receive it.
+    _strip_keys = {"confirm", "correlation_id"}
+    if not dryrun.handler_owns(tool_obj):
+        _strip_keys.add(dryrun.ARG)
+    arguments = {k: v for k, v in arguments.items() if k not in _strip_keys}
 
     handler = HANDLERS.get(tool_name)
     if handler is None:
+        _audit_gui(
+            tool_name,
+            arguments,
+            "error",
+            "no handler registered",
+            correlation_id=_correlation,
+        )
         return jsonify({"error": f"No handler for tool: {tool_name}"}), 500
+
+    # The same policy as the MCP dispatch, asked of the same module: after every gate,
+    # before execution, and reads still run. Expressing it here instead would be exactly
+    # the divergence authz.py was created to end.
+    if dry and not (tool_obj is not None and is_read_side(tool_obj)):
+        _audit_gui(
+            tool_name, arguments, "dry_run", dry_reason, correlation_id=_correlation
+        )
+        return jsonify(
+            {
+                "ok": True,
+                **dryrun.preview(tool_name, arguments, reason=dry_reason),
+            }
+        )
 
     started = time.perf_counter()
     try:
-        result = handler.handle(tool_name, arguments)
+        # human_present=False for the same reason it is passed to authz.evaluate
+        # above: a browser request is not a human confirmation. Stating it here as
+        # well is what makes it true for code BELOW the dispatch -- the composite
+        # Capella ceiling guard asks authz.human_is_present() directly, and without
+        # this context it read the MCP transport's answer and let
+        # capella_env_teardown delete a cluster this very request would have refused
+        # to delete directly.
+        with authz.caller_context(human_present=False):
+            result = handler.handle(tool_name, arguments)
         elapsed = (time.perf_counter() - started) * 1000
         text = result[0].text if result else "{}"
         parsed = json.loads(text)
-        decision = (
-            "denied_handler"
-            if isinstance(parsed, dict) and parsed.get(shared.ERROR_MARKER) is True
-            else "allowed"
+        # The SHARED classifier, so the console produces the same closed vocabulary as
+        # the transport. This collapsed every refusal to `denied_handler`, so a
+        # blocked exfiltration (denied_egress) or a Capella guardrail refusal made
+        # through the console never matched a SIEM rule written against the
+        # documented decisions.
+        decision, _classified_reason = audit.classify_result(
+            result, shared.ERROR_MARKER
         )
         _audit_gui(
             tool_name,
             arguments,
             decision,
-            str(parsed.get("error", ""))[:400] if isinstance(parsed, dict) else "",
+            _classified_reason,
             elapsed,
             correlation_id=_correlation,
         )
-        return jsonify({"ok": True, "result": parsed})
+        # `ok` reports the DECISION, not "the handler returned without raising".
+        #
+        # It was hardcoded True, which is the console's version of the transport's
+        # isError defect and it surfaces in the operator's face: index.html renders
+        # `result.ok ? "SUCCESS" : "ERROR"`, so a refused destructive call -- no
+        # confirmation, read-only mode, spend ceiling, egress allowlist -- painted a
+        # green SUCCESS badge over a payload saying the opposite, and the run went into
+        # the history list as a success too.
+        #
+        # Derived from the SAME classifier that writes the audit record, so the badge
+        # and the log cannot disagree about whether a call was refused. `parsed` is
+        # still returned in full either way: the refusal text is the useful part.
+        return jsonify({"ok": decision == "allowed", "result": parsed})
     except Exception as exc:
         elapsed = (time.perf_counter() - started) * 1000
         _audit_gui(

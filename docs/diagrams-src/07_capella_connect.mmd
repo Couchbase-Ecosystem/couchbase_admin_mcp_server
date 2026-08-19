@@ -1,0 +1,17 @@
+flowchart TB
+  subgraph CONTROL["CONTROL PLANE - capella_* tools"]
+    direction LR
+    C1["Organization<br/>API KEY SECRET"] --> C2["API KEY<br/>IP allowlist"] --> C3["Key ROLES<br/>on the org / project"] --> C4["cloudapi.cloud.couchbase.com<br/>Bearer"]
+  end
+  subgraph DATA["DATA PLANE - cb_* tools and fixtures"]
+    direction LR
+    D1["Cluster ACCESS<br/>credential"] --> D2["CLUSTER Allowed<br/>IP Addresses"] --> D3["Data API<br/>if using fixtures"] --> D4["cb.xxxxx.cloud.couchbase.com<br/>couchbases:// TLS"]
+  end
+  N["admin_* tools are NOT available on Capella - unloaded when CB_DEPLOYMENT resolves to capella"]
+  C4 ~~~ D1
+  DATA --> N
+  style CONTROL fill:#eef4fb,stroke:#2c6fb5
+  style DATA fill:#e8f5e9,stroke:#2e7d32
+  style N fill:#fdecea,stroke:#c62828
+  style C2 fill:#fff8e1,stroke:#f9a825
+  style D2 fill:#fff8e1,stroke:#f9a825

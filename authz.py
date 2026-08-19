@@ -48,11 +48,88 @@ WHAT THE POLICY IS
 
 from __future__ import annotations
 
+import contextlib
 import os
+import threading
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import profile_config
+
+# ── Per-call caller evidence ─────────────────────────────────────────────────
+#
+# human_is_present() below answers a PROCESS-GLOBAL question: what does
+# CB_ADMIN_TRANSPORT say. That is the right answer for the MCP dispatch and the wrong
+# answer for the console, which is a different entry point in the same process. The
+# console knew this and passed human_present=False into evaluate() explicitly — but
+# any code reached FURTHER DOWN that asked human_is_present() directly got the
+# transport's answer instead of the caller's, and the two disagreed.
+#
+# The live consequence: the composite-to-primitive ceiling guard in
+# handlers/capella/environment.py asks this module directly. In a console process on
+# a workstation profile it read True, so capella_env_teardown deleted a cluster named
+# in CB_ADMIN_ALWAYS_CONFIRM that capella_cluster_delete was refusing on the same
+# request. Verified against live Capella with a real DELETE.
+#
+# So the caller's evidence is established once, around the handler invocation, and
+# anything downstream that asks gets the answer for THIS call.
+#
+# WHERE the flag is stored matters, and the first attempt got it wrong. A
+# module-level threading.local() looked right and failed a test: this suite reloads
+# and re-imports authz, and `handlers.capella.environment.authz` was observed to be a
+# DIFFERENT module object from `sys.modules["authz"]`. Two copies of this module means
+# two threading.locals, so the console set the flag on one and the composite guard
+# read None from the other — the control silently reverted to the process-global
+# answer it exists to override. Conditional enforcement that depends on import
+# bookkeeping is the same shape of defect as SEC-1 itself.
+#
+# The thread OBJECT is a genuine per-thread singleton: every copy of this module
+# reaches the same object through threading.current_thread(), so duplicate imports
+# cannot split the state. Not a ContextVar, because the MCP dispatch runs handlers in
+# an executor thread and run_in_executor does not propagate context — the value is set
+# inside the thread that will run the handler.
+_EVIDENCE_ATTR = "_cb_admin_human_present"
+
+
+def caller_evidence() -> bool | None:
+    """The current call's own human_present, or None outside a caller context."""
+    return getattr(threading.current_thread(), _EVIDENCE_ATTR, None)
+
+
+@contextlib.contextmanager
+def caller_context(*, human_present: bool) -> Iterator[None]:
+    """Establish this call's evidence for anything downstream that asks.
+
+    Both dispatch paths wrap the handler invocation in this. Nesting NARROWS only: an
+    inner context may say "no human" inside an outer "human present", but not the
+    reverse, so a composite tool that re-enters the dispatch cannot promote itself past
+    the hard ceiling. The previous value is restored on exit.
+
+    The attribute is REMOVED rather than set to None on the outermost exit, because
+    executor threads are pooled and reused: leaving a stale value behind would let one
+    call's evidence answer for the next task to land on that worker.
+    """
+    thread = threading.current_thread()
+    previous = getattr(thread, _EVIDENCE_ATTR, None)
+    # CLAMP: nesting may narrow the evidence, never widen it.
+    #
+    # Without this, an inner context could declare human_present=True inside an outer
+    # False -- so a composite tool that re-entered the dispatch could promote itself
+    # past the hard ceiling, which is exactly the bypass SEC-1 was. No composite
+    # currently re-enters the dispatch, so this is not a live hole; it is the
+    # difference between a property that holds by accident and one that holds by
+    # construction. The docstring and the test both claimed it already.
+    effective = human_present if previous is not False else False
+    setattr(thread, _EVIDENCE_ATTR, effective)
+    try:
+        yield
+    finally:
+        if previous is None:
+            with contextlib.suppress(AttributeError):
+                delattr(thread, _EVIDENCE_ATTR)
+        else:
+            setattr(thread, _EVIDENCE_ATTR, previous)
 
 
 @dataclass(frozen=True)
@@ -105,7 +182,16 @@ def human_is_present() -> bool:
     That makes the workstation console (loopback HTTP, peer-checked) subject to the
     ceiling too, which is correct: a browser request is not a human confirmation, and
     the CSRF finding showed exactly how a page could supply one.
+
+    Inside a ``caller_context`` the caller's own evidence wins, because the transport
+    variable describes the MCP server and says nothing about whichever entry point is
+    actually running. Outside one the transport test applies, so a direct caller that
+    has not stated its evidence gets the conservative process-wide answer rather than
+    silently defaulting to True.
     """
+    stated = caller_evidence()
+    if stated is not None:
+        return stated
     if profile_config.PROFILE_NAME != profile_config.WORKSTATION:
         return False
     transport = (os.environ.get("CB_ADMIN_TRANSPORT") or "stdio").strip().lower()

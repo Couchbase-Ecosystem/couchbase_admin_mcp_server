@@ -36,6 +36,7 @@ ENV VARS
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import ssl
@@ -109,10 +110,85 @@ def _retryable(status: int, method: str) -> bool:
 class CapellaError(RuntimeError):
     """A v4 call that failed permanently. Carries an actionable hint."""
 
-    def __init__(self, message: str, *, status: int | None = None, hint: str = ""):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        hint: str = "",
+        code: int | None = None,
+    ):
         super().__init__(message)
         self.status = status
         self.hint = hint
+        #: The Capella DOMAIN code (7011 "already off", 5026 "source must match"), as
+        #: distinct from the HTTP status. Carried as an attribute because recovering it
+        #: from the message text proved unreliable -- see capella_error_code.
+        self.code = code
+
+
+def _domain_code_of(detail: Any) -> int | None:
+    """The Capella domain ``code`` from a PARSED error body."""
+    if not isinstance(detail, dict):
+        return None
+    code = detail.get("code")
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        return code
+    if isinstance(code, str) and code.strip().isdigit():
+        return int(code.strip())
+    return None
+
+
+def capella_error_code(exc: BaseException) -> int | None:
+    """The Capella domain ``code`` from an error, or None.
+
+    Callers need to recognise specific outcomes -- 7011 "cluster already off", 7010
+    "already on", 5026 "source cluster must match" -- and the obvious way to do that
+    was `if "7011" in str(exc)`. That is wrong in a way that costs money. The
+    rendered message is ``HTTP <status> on <METHOD> <path>: <body>``, so the digits
+    are matched against the STATUS, the PATH (which contains cluster and project
+    UUIDs) and the request id, not just the code. A cluster whose UUID happens to
+    contain 7011 turned every failed turn-off -- including a 500 and a 503 -- into
+    ``{"state": "already_off", "billing": "stopped"}`` while the cluster kept
+    running and billing.
+
+    So the code is parsed out of the JSON body proper. Returns None when there is no
+    parseable code, and every caller must treat None as "not the outcome I was
+    hoping for" and re-raise.
+    """
+    # The ATTRIBUTE first. Parsing it back out of the rendered message was fragile in
+    # exactly the way that matters: the message carried a Python repr rather than JSON,
+    # so the string path never matched and the callers silently took the re-raise
+    # branch. The attribute is set where the body is parsed, so no round-trip is needed.
+    # Typed, because `.code` means something DIFFERENT on urllib.error.HTTPError: there
+    # it is the HTTP status. Reading it off an arbitrary exception would report a 404 as
+    # Capella domain code 404. Not currently reachable -- both call sites catch only
+    # CapellaError -- but the next caller that passes an HTTPError would be wrong in a
+    # way that silently changes a park/resume decision.
+    if isinstance(exc, CapellaError):
+        attached = getattr(exc, "code", None)
+        if isinstance(attached, int) and not isinstance(attached, bool):
+            return attached
+    text = str(exc)
+    start = text.find("{")
+    while start != -1:
+        try:
+            body = json.loads(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(body, dict):
+            code = body.get("code")
+            if isinstance(code, bool):
+                return None
+            if isinstance(code, int):
+                return code
+            if isinstance(code, str) and code.strip().isdigit():
+                return int(code.strip())
+        return None
+    return None
 
 
 def _hint_for_status(status: int) -> str:
@@ -288,11 +364,22 @@ def capella_request(
                     "capella_env_ensure, simply call it again — it adopts anything "
                     "that did get created."
                 ) + (f" {hint}" if hint else "")
+            # json.dumps the detail, and carry the domain code on the exception.
+            #
+            # `f"...: {detail}"` interpolated the already-parsed DICT, so the message
+            # held a single-quoted Python repr -- {'code': 7011} -- which is not JSON.
+            # capella_error_code therefore never matched, and the park/resume
+            # "already off"/"already on" recognition it was written for silently never
+            # fired. Carrying the code as an ATTRIBUTE removes the string round-trip
+            # from the decision entirely; the JSON body stays in the message for humans.
+            domain_code = _domain_code_of(detail)
             last = CapellaError(
-                f"HTTP {exc.code} on {method} {path}: {detail}",
+                f"HTTP {exc.code} on {method} {path}: "
+                f"{json.dumps(detail, default=str) if isinstance(detail, (dict, list)) else detail}",
                 status=exc.code,
                 hint=hint,
             )
+            last.code = domain_code
             if _retryable(exc.code, method) and attempt < max_attempts:
                 _log.debug(
                     "capella %s %s -> %s, retry %d/%d",
@@ -305,7 +392,17 @@ def capella_request(
                 time.sleep(backoff * (2 ** (attempt - 1)))
                 continue
             raise last from exc
-        except urllib.error.URLError as exc:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ssl.SSLError,
+            http.client.HTTPException,
+        ) as exc:
+            # TimeoutError, ssl.SSLError and HTTPException alongside URLError. A read
+            # timeout raises bare TimeoutError -- an OSError, NOT a URLError subclass --
+            # so the only timeout this client can actually see escaped uncaught: no
+            # retry for an idempotent GET, no CapellaError, and none of the "this
+            # CREATE may have been applied, verify before retrying" guidance below.
             safe_to_repeat = method.upper() in _IDEMPOTENT_METHODS
             network_hint = (
                 "Could not reach the Capella control plane. Check outbound HTTPS "
@@ -323,8 +420,15 @@ def capella_request(
                     "applied before the reply was lost. Verify current state "
                     "before retrying."
                 )
+            # getattr, because `reason` exists only on URLError. Widening this except
+            # tuple to cover the bare TimeoutError a read timeout actually raises made
+            # `exc.reason` an AttributeError -- so the timeout escaped as
+            # AttributeError instead of CapellaError, and every `except CapellaError`
+            # recovery downstream (env_status' detail_unavailable, _fetch_cluster_by_id's
+            # 404 -> None, the contextlib.suppress(CapellaError) sites) was bypassed.
+            reason = getattr(exc, "reason", None) or exc
             last = CapellaError(
-                f"Network error on {method} {path}: {exc.reason}",
+                f"Network error on {method} {path}: {reason}",
                 hint=network_hint,
             )
             if safe_to_repeat and attempt < max_attempts:
@@ -377,7 +481,22 @@ def capella_list(
     """
     per_page = page_size or get_env_int("CAPELLA_PAGE_SIZE", _MAX_PER_PAGE)
     per_page = max(1, min(per_page, _MAX_PER_PAGE))
-    cap = max_items or get_env_int("CAPELLA_MAX_ITEMS", 1000)
+    # `is not None`, not `or`: max_items=0 fell through to the default instead of
+    # reaching the non-positive refusal below, so the one value most likely to be
+    # passed by mistake was silently ignored.
+    cap = max_items if max_items is not None else get_env_int("CAPELLA_MAX_ITEMS", 1000)
+    # A non-positive cap silently dropped records off the end -- max_items=-1 returned
+    # 99 of 100 -- so an internal lookup could answer "this resource does not exist"
+    # for one that does, which is how a duplicate cluster gets created.
+    if cap <= 0:
+        raise CapellaError(
+            f"max_items={cap} is not a positive integer.",
+            hint=(
+                "A non-positive cap would silently truncate the list, and these "
+                "listings decide whether a resource already exists. Omit it or pass a "
+                "positive value."
+            ),
+        )
 
     collected: list[Any] = []
     page = 1
@@ -414,11 +533,27 @@ def capella_list(
 
         if len(collected) >= cap:
             collected = collected[:cap]
-            truncated = True
+            # Only TRUNCATED if records actually remain. `>= cap` fired on an
+            # exactly-full but COMPLETE list, so a 100-item result under
+            # CAPELLA_MAX_ITEMS=100 reported truncated:true and told the agent to
+            # narrow a query that had already returned everything.
+            if total_items is None or total_items > len(collected):
+                truncated = True
             break
 
         last_page = meta.get("last")
-        if not isinstance(last_page, int) or page >= last_page or not chunk:
+        # Keep paging while totalItems says records remain, even when `last` is
+        # absent or non-int. Stopping after page 1 on a missing `last` reported
+        # truncated:false while leaving records behind -- count_managed_environments
+        # saw 100 of 431 clusters, which under-reads the spend ceiling and can make
+        # the reconciler create a duplicate instead of adopting the real one.
+        more_by_total = (
+            isinstance(total_items, int) and len(collected) < total_items and chunk
+        )
+        if isinstance(last_page, int):
+            if page >= last_page or not chunk:
+                break
+        elif not more_by_total:
             break
         page += 1
 

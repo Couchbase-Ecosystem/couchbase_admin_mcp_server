@@ -23,6 +23,36 @@ import pytest
 import audit
 import profile_config
 
+
+@pytest.fixture(autouse=True)
+def _audit_records_reach_caplog():
+    """Let caplog see audit records regardless of what configured logging earlier.
+
+    logging_config.configure_logging sets `propagate = False` on the `couchbase-admin`
+    logger -- correct in production, since the tree has its own handlers and
+    propagation would duplicate every line onto the root. But caplog captures by
+    attaching to the ROOT logger, so once ANY earlier test in the session has
+    configured logging, these assertions saw an empty caplog and failed for a reason
+    that has nothing to do with the audit fallbacks they exist to test.
+
+    Restoring propagation for the duration of each test in this file makes them
+    independent of collection order, which is the property that was missing.
+    """
+    import logging
+
+    tree = logging.getLogger("couchbase-admin")
+    previous = tree.propagate
+    previous_level = tree.level
+    tree.propagate = True
+    if tree.level > logging.INFO:
+        tree.setLevel(logging.INFO)
+    try:
+        yield
+    finally:
+        tree.propagate = previous
+        tree.setLevel(previous_level)
+
+
 # ── The audit sink degrades rather than losing the record ─────────────────────
 
 

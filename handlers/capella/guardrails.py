@@ -292,8 +292,14 @@ def assert_managed(
     # Match on id OR name. Operators overwhelmingly know clusters by name, so a
     # protected-list that only matched UUIDs would silently protect nothing —
     # worse than no protection at all, because it reads as configured.
-    protected = policy.protected_clusters
-    if (rid and rid in protected) or (name and name in protected):
+    # Case-INSENSITIVE, matching every other spelling-tolerant comparison in this
+    # file. An exact match failed OPEN: CAPELLA_PROTECTED_CLUSTERS=MCPTEST-KeepMe
+    # against cluster mcptest-keepme was reported as protected by
+    # capella_guardrails_status and deleted anyway. A protection that reads as
+    # configured but does not hold is worse than none, which is the same argument
+    # the name-match comment above makes.
+    protected = {p.strip().casefold() for p in policy.protected_clusters if p.strip()}
+    if (rid and rid.casefold() in protected) or (name and name.casefold() in protected):
         raise GuardrailError(
             f"{kind} {name or rid!r} appears in CAPELLA_PROTECTED_CLUSTERS.",
             hint="Explicitly protected by server configuration. No override exists.",
@@ -380,7 +386,27 @@ def count_managed_environments(
     total = 0
     for project in projects:
         for cluster in list_clusters_for_project(project):
-            if isinstance(cluster, dict) and parse_marker(cluster.get("description")):
+            if not isinstance(cluster, dict):
+                continue
+            # Count by marker OR by managed name. Marker-only meant the ceiling could
+            # not see anything created through capella_cluster_create, because the
+            # primitive forwards the caller's body verbatim and never wrote a marker
+            # -- so the guard bounding spend was blind to the cheapest way to spend.
+            # Demonstrated with CAPELLA_MAX_ENVIRONMENTS=2: six clusters created,
+            # count observed as 0, ceiling never tripped. The name-prefix guard DOES
+            # fire on that path, which is what makes the name a sound second signal:
+            # anything created through this server carries the prefix.
+            #
+            # Gated on a prefix BEING configured. is_managed_name returns True for
+            # every name when there is no prefix, which would make the ceiling count
+            # every pre-existing cluster in an allowlisted project and refuse creates
+            # in an org that was previously working. So with no prefix the behaviour
+            # is unchanged and marker-only -- one more reason the prefix is not
+            # optional in practice.
+            if parse_marker(cluster.get("description")) or (
+                policy.name_prefix
+                and is_managed_name(str(cluster.get("name") or ""), policy)
+            ):
                 total += 1
     return total
 
@@ -494,6 +520,41 @@ def build_marker(
     now: datetime | None = None,
 ) -> str:
     """Build the ``mcp-env:{...}`` description line for a created resource."""
+    # Checked at WRITE time as well as parse time. The greedy anchored parse now
+    # survives a `}` in owner, but refusing it here means a marker never becomes
+    # ambiguous in the first place, and the caller finds out at the call that named
+    # the value rather than at a reap weeks later that quietly collected nothing.
+    assert_marker_text_safe("env_name", env_name)
+    assert_marker_text_safe("owner", owner)
+    # Coerce and clamp the TTL at WRITE time. The schema declares an integer and
+    # nothing enforced it, so `ttl_hours="4"` was written through verbatim and then
+    # read back as non-numeric, which marker_expiry treated as "never expires" -- the
+    # caller asked for four hours and got forever. An absurd value is refused rather
+    # than clamped silently, because a caller who asked for a billion hours has made
+    # a mistake worth hearing about.
+    if ttl_hours is not None:
+        try:
+            ttl_hours = int(float(str(ttl_hours).strip()))
+        except (TypeError, ValueError, OverflowError):
+            raise GuardrailError(
+                f"ttl_hours={ttl_hours!r} is not a number.",
+                hint=(
+                    "TTL drives whether capella_env_reap ever collects this "
+                    "environment. A value it cannot read means 'never', so it is "
+                    "refused here rather than quietly pinning a billable resource."
+                ),
+            ) from None
+        if ttl_hours > _MAX_TTL_HOURS:
+            raise GuardrailError(
+                f"ttl_hours={ttl_hours} exceeds the maximum of {_MAX_TTL_HOURS} "
+                f"({_MAX_TTL_HOURS // 24} days).",
+                hint=(
+                    "A TTL beyond this is indistinguishable from 'never expires' and "
+                    "overflowed the expiry arithmetic, which broke every listing and "
+                    "reap for the whole sandbox. Use ttl_hours=0 to pin an "
+                    "environment deliberately."
+                ),
+            )
     policy = load_policy()
     created = (now or datetime.now(timezone.utc)).strftime(_ISO)
     payload: dict[str, Any] = {
@@ -510,7 +571,90 @@ def build_marker(
     )
 
 
-_MARKER_RE = re.compile(re.escape(ENV_MARKER_PREFIX) + r"(\{.*?\})", re.DOTALL)
+_MARKER_RE = re.compile(re.escape(ENV_MARKER_PREFIX) + r"\s*(?=\{)")
+
+
+def _extract_marker_json(description: str) -> str | None:
+    """Return the marker's JSON object text, or None.
+
+    Brace-COUNTING rather than a regex, because both regex forms tried here were
+    wrong in opposite directions and each failed open -- an unparsed marker means
+    "not ours", so the ceiling stops counting the cluster and the reaper stops
+    collecting it, and it bills until a human notices.
+
+      * `\\{.*?\\}` (non-greedy) stopped at the first `}`, including one inside a
+        JSON string value. `owner="ci pipeline }run-42"` truncated the marker to
+        invalid JSON. A plausible CI value, no adversary needed.
+      * `\\{.*\\}\\s*$` (greedy, anchored) fixed that but required the closing brace
+        to be the last thing on the line, so `mcp-env:{...} keep until Friday`
+        stopped parsing -- and this module's own caller promises a human may write a
+        note next to the marker.
+
+    Counting braces while tracking JSON string state satisfies both: it survives a
+    brace inside a value AND ignores anything after the object ends.
+    """
+    match = _MARKER_RE.search(description)
+    if not match:
+        return None
+    text = description[match.end() :]
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[: index + 1]
+        elif char in "\n\r" and depth == 0:
+            return None
+    return None  # unbalanced: no closing brace for the object we opened
+
+
+#: Characters refused in caller-supplied marker text. Defence in depth alongside the
+#: greedy parse: the parse now survives them, and refusing them keeps a description a
+#: human can read and re-parse by eye.
+#: Upper bound on a marker TTL. 365 days: long enough for any legitimate
+#: long-lived sandbox, short enough that the expiry arithmetic cannot overflow.
+_MAX_TTL_HOURS = 24 * 365
+
+_MARKER_UNSAFE_CHARS = ('"', "{", "}", "\\", "\n", "\r")
+
+
+def assert_marker_text_safe(field: str, value: str | None) -> None:
+    """Refuse marker text that could corrupt the ownership record.
+
+    Raised rather than sanitised: silently rewriting an operator's `owner` would make
+    the audit trail disagree with what they typed, and the value is free text they can
+    trivially adjust.
+    """
+    if not value:
+        return
+    found = [c for c in _MARKER_UNSAFE_CHARS if c in value]
+    if found:
+        raise GuardrailError(
+            f"{field}={value!r} contains {', '.join(repr(c) for c in found)}, which "
+            f"cannot appear in the ownership marker this server writes into the "
+            f"resource description.",
+            hint=(
+                "The marker is one line of JSON in a field humans also edit. Quotes, "
+                "braces, backslashes and newlines make it ambiguous to re-parse, and "
+                "a marker that fails to parse is treated as 'not ours' — which means "
+                "the environment ceiling stops counting it and the reaper stops "
+                "collecting it, so it bills until someone notices. Use plain text."
+            ),
+        )
 
 
 def parse_marker(description: str | None) -> dict | None:
@@ -523,11 +667,11 @@ def parse_marker(description: str | None) -> dict | None:
     """
     if not description:
         return None
-    match = _MARKER_RE.search(description)
-    if not match:
+    raw = _extract_marker_json(description)
+    if raw is None:
         return None
     try:
-        data = json.loads(match.group(1))
+        data = json.loads(raw)
     except json.JSONDecodeError:
         _log.debug("malformed mcp-env marker ignored: %r", description[:120])
         return None
@@ -542,13 +686,42 @@ def marker_expiry(marker: dict) -> datetime | None:
     """
     created_raw = marker.get("created")
     ttl = marker.get("ttl_h")
-    if not created_raw or not isinstance(ttl, (int, float)) or ttl <= 0:
+    # A str/bool ttl_h used to fall through this isinstance check and mean "never
+    # expires", so `ttl_hours="4"` -- which nothing validated, despite the schema
+    # declaring an integer -- silently pinned the environment forever. Coerce
+    # numeric strings instead, and treat an uncoercible value as pinned only after
+    # saying so, because "never reaped" is the expensive direction.
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        try:
+            ttl = float(str(ttl).strip())
+        except (TypeError, ValueError):
+            _log.warning(
+                "mcp-env marker has a non-numeric ttl_h=%r; treating as pinned "
+                "(it will never be auto-reaped). Fix the marker or the caller.",
+                marker.get("ttl_h"),
+            )
+            return None
+    if not created_raw or ttl <= 0:
         return None
     try:
         created = datetime.strptime(str(created_raw), _ISO).replace(tzinfo=timezone.utc)
     except ValueError:
         return None
-    return created + timedelta(hours=float(ttl))
+    # OverflowError/OSError, not just ValueError. A large ttl_h or a far-future
+    # `created` made this arithmetic raise, and because every caller reaches it
+    # through a list, that ONE poisoned description broke capella_env_list,
+    # capella_env_status and BOTH reap modes for the entire sandbox -- so no
+    # genuinely expired environment anywhere got collected until a human found it.
+    # One bad marker must degrade to "not recognizably ours", never to an outage.
+    try:
+        return created + timedelta(hours=float(ttl))
+    except (OverflowError, OSError, ValueError):
+        _log.warning(
+            "mcp-env marker ttl_h=%r overflows a representable date; treating as "
+            "pinned rather than failing the whole listing.",
+            ttl,
+        )
+        return None
 
 
 def is_expired(marker: dict, *, now: datetime | None = None) -> bool:

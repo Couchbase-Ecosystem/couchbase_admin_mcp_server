@@ -375,6 +375,41 @@ def test_a_token_with_no_issuer_is_rejected(oidc, keypair):
         oidc.validate_token(_token(keypair, iss=None))
 
 
+def test_a_present_but_EMPTY_subject_is_rejected(oidc, keypair):
+    """PyJWT's `require` checks PRESENCE only, so `sub: ""` satisfied it.
+
+    The consequence was concrete: scope_gate.principal_of() does
+    `claims.get("sub") or ...`, which reads "" as absent, and returned principal None
+    with automation True -- so the audit record carried `"principal": null` for an
+    unattended privileged write, with no os_user fallback on the OAuth path. The
+    missing-claim tests above do not cover this.
+
+    Only `sub` is asserted here, deliberately. This was parametrised over ("sub", "iss")
+    and the `iss` case was passing on PyJWT's own "Invalid issuer" comparison -- which
+    the assertion accepted because "iss" is a substring of "issuer" -- so it still
+    passed with the empty-claim check stubbed out. Half a test is worse than none: it
+    reads as coverage. The empty-issuer case is covered separately below, against
+    whichever layer actually refuses it.
+    """
+    with pytest.raises(jwt.PyJWTError) as excinfo:
+        oidc.validate_token(_token(keypair, sub=""))
+    assert "present but empty" in str(excinfo.value), (
+        f"an empty sub was rejected, but not by the empty-claim check -- so that check "
+        f"is not what this test is exercising. Got: {excinfo.value}"
+    )
+
+
+def test_a_present_but_EMPTY_issuer_is_rejected(oidc, keypair):
+    """An empty `iss` must be refused; PyJWT's issuer comparison gets there first.
+
+    Recorded as its own test so the LAYER is explicit. The empty-claim check in
+    validate_token never sees this one, which is fine -- it is defence in depth behind
+    PyJWT -- but a test that claimed to exercise it here would be lying.
+    """
+    with pytest.raises(jwt.PyJWTError):
+        oidc.validate_token(_token(keypair, iss=""))
+
+
 def test_a_token_from_a_different_issuer_is_rejected(oidc, keypair):
     """Correctly signed by our key but claiming another issuer."""
     with pytest.raises(jwt.InvalidIssuerError):

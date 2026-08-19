@@ -1,0 +1,37 @@
+flowchart LR
+  subgraph U["UNTRUSTED"]
+    direction TB
+    U1["Tool arguments<br/>from the model"]
+    U2["JWT on an<br/>HTTP call"]
+    U3["Browser requests<br/>to the console"]
+  end
+  subgraph M["SEMI-TRUSTED"]
+    direction TB
+    T1["Cluster responses"]
+    T2["completed_requests<br/>statement text"]
+    T3["Capella description<br/>mcp-env marker"]
+  end
+  subgraph O["OPERATOR ONLY"]
+    direction TB
+    O1["Profile, deployment<br/>mode, read-only"]
+    O2["Ceiling, allowlists,<br/>name prefix, env ceiling"]
+    O3["Credentials,<br/>TLS material"]
+  end
+  U1 --> V1["Allow-list filter<br/>identifier quoting<br/>statement guards"]
+  U2 --> V2["Signature, iss, aud,<br/>exp, sub, kid<br/>then scope check"]
+  U3 --> V3["Origin allow-list<br/>JSON content-type<br/>signed cookie"]
+  T1 --> V4["Redact on output<br/>fail closed on<br/>unusable shape"]
+  T2 --> V4
+  T3 --> V4
+  O1 --> P["POLICY<br/>not readable or writable<br/>from any tool argument"]
+  O2 --> P
+  O3 --> P
+  V1 --> H["Handler"]
+  V2 --> H
+  V3 --> H
+  V4 --> H
+  P --> H
+  style P fill:#e8f5e9,stroke:#2e7d32
+  style U fill:#fdecea,stroke:#c62828
+  style M fill:#fff8e1,stroke:#f9a825
+  style O fill:#e8f5e9,stroke:#2e7d32

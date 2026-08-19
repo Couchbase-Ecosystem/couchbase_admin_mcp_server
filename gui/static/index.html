@@ -772,7 +772,12 @@ function App() {
       const ms   = Date.now() - t0;
       setElapsed(ms);
       setResult(data);
-      setConnStatus(data.ok ? "ok" : "err");
+      // The CONNECTION indicator, which is a different question from whether the call
+      // was allowed. `ok` is now false for a policy refusal (it used to be hardcoded
+      // true), and a refusal proves the server is reachable rather than the opposite —
+      // reading `ok` here would light the connection light red on a working cluster.
+      // Any structured reply, refusal included, means we got through.
+      setConnStatus(data.ok || data.result ? "ok" : "err");
       setHistory(prev => [{ tool: selected, ok: data.ok, ms }, ...prev.slice(0, 9)]);
     } catch (e) {
       setResult({ ok: false, error: String(e) });

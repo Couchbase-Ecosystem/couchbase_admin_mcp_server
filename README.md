@@ -122,6 +122,25 @@ mutating tool is **unloaded entirely** — not merely gated, but absent from the
 tool list, so it cannot be called at all. This is the outermost guard. Turn it
 off only when you actually need writes.
 
+### Layer 1a — dry run (preview a write without performing it)
+
+Every write tool accepts `dry_run: true`, and `CB_ADMIN_DRY_RUN=true` forces it
+for every call. The call is authorized and audited normally and then **not
+performed**; the response says which tool would have run, against which target,
+with which arguments. Reads still execute, because a read changes nothing and a
+plan cannot be checked without one.
+
+The environment variable wins over the argument: `dry_run: false` cannot escape a
+server-wide preview mode. Audit records these as `dry_run` rather than `allowed`,
+so a preview never counts as a privileged write.
+
+Use it for the first unattended run against a new organization, and keep the
+output as the artifact attached to the change request. Note that a dry run is not
+authorization and not validation — the gates all run first, and the payload is
+never sent, so it tells you what the agent decided to do, not whether the cluster
+would accept it. `capella_env_reap` keeps its own `dry_run`, which defaults to
+**true** and really does list what it would reap.
+
 ### Layer 2 — confirmation, and the two ways to satisfy it
 
 When writes are enabled, **every write tool is gated by default.** There are two
@@ -497,7 +516,7 @@ asserting that it is fine. Ask the running server what its posture is with
 We truly appreciate your interest in this project!  
 This project is **community-maintained**, which means it's **not officially supported** by our support team.
 
-If you need help, have found a bug, or want to contribute improvements, the best place to do that is right here — by [opening a GitHub issue](https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server/issues).  
+If you need help, have found a bug, or want to contribute improvements, the best place to do that is right here — by [opening a GitHub issue](https://github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server/issues).  
 Our support portal is unable to assist with requests related to this project, so we kindly ask that all inquiries stay within GitHub.
 
 Your collaboration helps us all move forward together — thank you!

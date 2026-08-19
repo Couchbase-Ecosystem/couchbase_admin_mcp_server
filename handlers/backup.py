@@ -13,7 +13,7 @@ from __future__ import annotations
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .egress import guard_nested_host_fields
-from .shared import admin_request, err, ok, quote_path
+from .shared import admin_request, arg_truthy, err, ok, quote_path
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -135,8 +135,11 @@ def handle(name: str, args: dict) -> list[TextContent]:
         if name == "admin_backup_run":
             rid = quote_path(args["repository_id"])
             payload: dict = {}
-            if args.get("full_backup"):
-                payload["full_backup"] = True
+            # arg_truthy: "false" is a non-empty string, so raw truthiness ran a
+            # FULL backup -- hours of I/O and repository growth -- when the caller
+            # explicitly asked for an incremental one.
+            if args.get("full_backup") is not None:
+                payload["full_backup"] = arg_truthy(args["full_backup"])
             return ok(
                 admin_request(
                     "POST",

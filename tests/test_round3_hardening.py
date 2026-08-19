@@ -381,12 +381,26 @@ def test_correlation_id_is_declared_on_every_tool(monkeypatch):
 
 
 def test_ipv4_mapped_loopback_counts_as_local():
-    """A dual-stack socket reports a v4 client as ::ffff:127.0.0.1, and is_loopback is
-    False for that — so genuine local clients were refused."""
+    """A dual-stack socket reports a v4 client as ::ffff:127.0.0.1, and the peer check
+    must treat that as local.
+
+    This asserted ``address.is_loopback is False`` as "premise of the bug". That
+    premise was true on the CPython this was written against and is no longer true:
+    IPv6Address now delegates is_loopback to the mapped v4 address, so the assertion
+    failed on 3.11.15+ and the test was red for a reason that had nothing to do with
+    this server. Pinning the standard library's old answer as a premise makes a test
+    fail when the platform gets BETTER.
+
+    What actually matters is unchanged and is what this now asserts: the mapped
+    address is recoverable and is loopback, so the peer check has a correct answer to
+    read whichever way the stdlib decides to report the outer address.
+    """
     address = ipaddress.ip_address("::ffff:127.0.0.1")
-    assert address.is_loopback is False, "premise of the bug"
     assert address.ipv4_mapped is not None
     assert address.ipv4_mapped.is_loopback is True
+    # Either spelling must reach the same verdict, which is the invariant the peer
+    # check depends on.
+    assert address.is_loopback or address.ipv4_mapped.is_loopback
 
 
 # ── M12: exception text is redacted ──────────────────────────────────────────
@@ -798,8 +812,23 @@ def test_the_gui_configures_logging_in_its_own_process(monkeypatch):
         tree.removeHandler(handler)
     assert not tree.handlers  # premise: nothing configured yet
 
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config  # noqa: F401
 
     importlib.import_module("gui.gui_server")
@@ -830,8 +859,23 @@ def test_the_gui_refuses_to_start_on_an_unusable_audit_sink(tmp_path, monkeypatc
     import audit
 
     audit.reset_audit_sink()
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config  # noqa: F401
 
     try:
@@ -895,6 +939,13 @@ def test_deployment_gating_is_applied_in_the_gui_execution_path(monkeypatch):
     monkeypatch.setenv("CB_GUI_INSECURE_NO_AUTH", "1")
     monkeypatch.setenv("OAUTH_ENABLED", "false")
     monkeypatch.setenv("CB_ADMIN_READ_ONLY_MODE", "false")
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
     for name in (
         "profile_config",
         "handlers.shared",
@@ -902,7 +953,10 @@ def test_deployment_gating_is_applied_in_the_gui_execution_path(monkeypatch):
         "deployment",
         "gui.gui_server",
     ):
-        sys.modules.pop(name, None)
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
     import profile_config  # noqa: F401
 
     module = importlib.import_module("gui.gui_server")

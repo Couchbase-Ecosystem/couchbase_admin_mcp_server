@@ -13,6 +13,7 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 from .egress import assert_egress_allowed
 from .shared import (
     admin_request,
+    arg_truthy,
     err,
     form_data,
     form_data_declared,
@@ -35,6 +36,7 @@ _ALERTS_KEYS: frozenset[str] = frozenset(
         "emailPort",
         "emailEncrypt",
         "alerts",
+        "pop_up_alerts",
     }
 )
 
@@ -266,7 +268,13 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="admin_autofailover_set",
-        description="Configure auto-failover (enabled, timeout, maxCount, failoverOnDataDiskIssues).",
+        description=(
+            "Configure auto-failover. `failoverOnDataDiskIssues` and "
+            "`canAbortRebalance` are now declared and forwarded -- the description "
+            "advertised them while the handler silently dropped them and reported "
+            "success, so an operator was told disk-issue failover was configured when "
+            "it was not."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -276,6 +284,18 @@ TOOLS: list[Tool] = [
                     "description": "Seconds before failover",
                 },
                 "maxCount": {"type": "integer"},
+                "failoverOnDataDiskIssues[enabled]": {
+                    "type": "boolean",
+                    "description": "Fail a node over when its data disk reports errors.",
+                },
+                "failoverOnDataDiskIssues[timePeriod]": {
+                    "type": "integer",
+                    "description": "Seconds of sustained disk errors before failover (5-3600).",
+                },
+                "canAbortRebalance": {
+                    "type": "boolean",
+                    "description": "Allow auto-failover to abort a running rebalance.",
+                },
             },
             "required": ["enabled"],
         },
@@ -396,8 +416,23 @@ TOOLS: list[Tool] = [
             "properties": {
                 "databaseFragmentationThreshold[percentage]": {"type": "integer"},
                 "databaseFragmentationThreshold[size]": {"type": "integer"},
+                # Declared, because the description advertises them and
+                # refuse_undeclared was rejecting them -- so the documented view
+                # compaction and time-window settings were unreachable through the
+                # tool that documents them.
+                "viewFragmentationThreshold[percentage]": {"type": "integer"},
+                "viewFragmentationThreshold[size]": {"type": "integer"},
+                "allowedTimePeriod[fromHour]": {"type": "integer"},
+                "allowedTimePeriod[fromMinute]": {"type": "integer"},
+                "allowedTimePeriod[toHour]": {"type": "integer"},
+                "allowedTimePeriod[toMinute]": {"type": "integer"},
+                "allowedTimePeriod[abortOutside]": {"type": "boolean"},
                 "parallelDBAndViewCompaction": {"type": "boolean"},
             },
+            # /controller/setAutoCompaction REQUIRES this one, so a minimal call
+            # without it 400s. Declaring it required makes that a schema error the
+            # model can see rather than a cluster round-trip.
+            "required": ["parallelDBAndViewCompaction"],
         },
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=False, idempotentHint=True
@@ -414,7 +449,13 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="admin_alerts_set",
-        description="Configure email alerts (enabled, emailServer, recipients, alerts list, etc.).",
+        description=(
+            "Configure email alerts. NOTE: /settings/alerts is a full REPLACE, so any "
+            "key omitted reverts to the endpoint's default. This tool reads the "
+            "current settings first and merges, so a partial call changes only what "
+            "you name. `alerts` is the list of alert TYPES that fire — omitting it "
+            "used to disable all of them while reporting success."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -424,11 +465,29 @@ TOOLS: list[Tool] = [
                     "type": "string",
                     "description": "Comma-separated emails",
                 },
+                # `emailHost`, not `emailServer`: the description advertised the
+                # latter, which is the sub-document name in the GET response, and it
+                # was silently dropped on the way in.
                 "emailHost": {"type": "string"},
                 "emailPort": {"type": "integer"},
                 "emailEncrypt": {"type": "boolean"},
                 "emailUser": {"type": "string"},
                 "emailPass": {"type": "string"},
+                "alerts": {
+                    "type": "string",
+                    "description": (
+                        "Comma-separated alert types to enable, e.g. "
+                        "auto_failover_node,disk_usage_analyzer_failed,ip_address_changed. "
+                        "Omit to preserve the cluster's current list."
+                    ),
+                },
+                "pop_up_alerts": {
+                    "type": "string",
+                    "description": (
+                        "Comma-separated alert types shown in the UI. Omit to "
+                        "preserve the current list."
+                    ),
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -472,6 +531,13 @@ def handle(name: str, args: dict) -> list[TextContent]:
             if refusal is not None:
                 return refusal
             data = form_data_declared(args, name, TOOLS)
+            # ns_server's POST /pools/default names the DATA service quota
+            # `memoryQuota`; there is no `dataMemoryQuota` parameter, so the quota was
+            # silently never applied (or 400d, depending on build). The friendly name
+            # stays in the schema -- it reads unambiguously next to indexMemoryQuota
+            # and ftsMemoryQuota -- but it must be translated on the way out.
+            if "dataMemoryQuota" in data:
+                data["memoryQuota"] = data.pop("dataMemoryQuota")
             return ok(admin_request("POST", "/pools/default", data=data))
 
         if name == "admin_node_list":
@@ -547,10 +613,30 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/autoFailover"))
 
         if name == "admin_autofailover_set":
-            data = {"enabled": "true" if args["enabled"] else "false"}
-            if args.get("timeout"):
+            # arg_truthy, not raw truthiness. The schema declares enabled as a
+            # boolean and nothing enforced that, so the string "false" -- non-empty,
+            # therefore truthy -- ENABLED auto-failover on a destructiveHint tool.
+            #
+            # `is not None`, not truthiness, on the two numerics: `if
+            # args.get("timeout")` silently dropped timeout=0 and maxCount=0 while
+            # still returning success, so the caller was told a value had been set
+            # that was never sent. 0 is out of ns_server's accepted range and it will
+            # say so -- an explicit rejection the caller can act on, which is better
+            # than a false success.
+            data = {"enabled": "true" if arg_truthy(args["enabled"]) else "false"}
+            # The disk-issue and abort-rebalance parameters, which the description has
+            # always advertised. They were neither declared nor forwarded, and with no
+            # refuse_undeclared they were dropped in silence.
+            for flag in ("failoverOnDataDiskIssues[enabled]", "canAbortRebalance"):
+                if args.get(flag) is not None:
+                    data[flag] = "true" if arg_truthy(args[flag]) else "false"
+            if args.get("failoverOnDataDiskIssues[timePeriod]") is not None:
+                data["failoverOnDataDiskIssues[timePeriod]"] = str(
+                    args["failoverOnDataDiskIssues[timePeriod]"]
+                )
+            if args.get("timeout") is not None:
                 data["timeout"] = str(args["timeout"])
-            if args.get("maxCount"):
+            if args.get("maxCount") is not None:
                 data["maxCount"] = str(args["maxCount"])
             return ok(admin_request("POST", "/settings/autoFailover", data=data))
 
@@ -618,10 +704,74 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # Per-tool key allow-list. This used to forward EVERY caller-supplied
             # key to /settings/alerts, so a model could invent fields and have
             # them applied to a settings endpoint verbatim.
-            data = form_data(
-                {k: v for k, v in args.items() if k in _ALERTS_KEYS},
-                exclude=("confirm",),
-            )
+            unknown = refuse_undeclared(args, name, TOOLS)
+            if unknown:
+                return err(unknown, tool=name)
+            # READ-MODIFY-WRITE. POST /settings/alerts is a full replace, so a call
+            # that named only `recipients` reset everything else -- most damagingly
+            # `alerts`, the list of TYPES that fire, which the schema did not even
+            # declare. The result was `"alerts": []`: the tool reported alerting
+            # "enabled" and the cluster silently stopped emailing on auto-failover,
+            # disk-full and OOM. Merging means a partial call changes only what it
+            # names.
+            supplied = {k: v for k, v in args.items() if k in _ALERTS_KEYS}
+            merged: dict = {}
+            current = admin_request("GET", "/settings/alerts")
+            # REFUSE on an unexpected shape rather than merging against nothing.
+            #
+            # `if isinstance(current, dict)` alone let an empty body ({"status":"ok"}),
+            # a text/plain body, or a list skip the merge entirely -- and because this
+            # endpoint is a full replace, proceeding with an empty base wiped enabled,
+            # sender, alerts and emailServer and reported success. That is precisely
+            # the defect the merge was added to prevent, reachable whenever the GET
+            # answers with something unexpected.
+            if not isinstance(current, dict) or not (
+                set(current) & (_ALERTS_KEYS | {"emailServer", "pop_up_alerts"})
+            ):
+                return err(
+                    "Could not read the current alert settings, so the change was not "
+                    "attempted.",
+                    tool=name,
+                    hint=(
+                        "POST /settings/alerts REPLACES the whole document, so a "
+                        "partial update must be merged onto the current values. "
+                        "Without a readable GET this call would silently clear every "
+                        "alert type. Check the cluster with admin_alerts_get."
+                    ),
+                )
+            if isinstance(current, dict):
+                for key in _ALERTS_KEYS:
+                    if key in supplied:
+                        continue
+                    if key in current and current[key] not in (None, ""):
+                        merged[key] = current[key]
+                    elif key in ("alerts", "pop_up_alerts") and isinstance(
+                        current.get(key), list
+                    ):
+                        merged[key] = ",".join(str(a) for a in current[key])
+                # The SMTP host/port/user live in an `emailServer` sub-document on the
+                # way out but are flat parameters on the way in.
+                server = current.get("emailServer")
+                if isinstance(server, dict):
+                    for out_key, in_key in (
+                        ("host", "emailHost"),
+                        ("port", "emailPort"),
+                        ("encrypt", "emailEncrypt"),
+                        ("user", "emailUser"),
+                    ):
+                        if in_key not in supplied and server.get(out_key) not in (
+                            None,
+                            "",
+                        ):
+                            merged[in_key] = server[out_key]
+            merged.update(supplied)
+            # Comma-separated, not JSON. form_value JSON-encodes a list, and
+            # /settings/alerts parses these two as comma-separated tokens -- a JSON
+            # array is unparseable, which on this endpoint means "no alert types".
+            for key in ("alerts", "pop_up_alerts"):
+                if isinstance(merged.get(key), (list, tuple)):
+                    merged[key] = ",".join(str(a) for a in merged[key])
+            data = form_data(merged, exclude=("confirm",))
             return ok(admin_request("POST", "/settings/alerts", data=data))
 
         if name == "admin_alerts_test_email":

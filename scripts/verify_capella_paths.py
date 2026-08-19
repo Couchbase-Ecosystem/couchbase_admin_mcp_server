@@ -134,7 +134,22 @@ TIMEOUT = 30
 #: Statuses that prove the route was MATCHED. 401/403 mean authentication or
 #: authorization rejected the call, which can only happen after routing. 405 means the
 #: path exists but not for that method — exactly what the OPTIONS probe looks for.
-_PATH_EXISTS = {200, 201, 202, 204, 400, 401, 403, 405, 409, 422, 429}
+#: 429 is deliberately ABSENT. It proves the request was rejected before routing was
+#: relevant, so counting it as proof of existence meant a rate-limited run reported
+#: every path VERIFIED and exited 0 -- and adding 500/502/503 to this set survived the
+#: whole suite, so nothing pinned its upper bound either.
+_PATH_EXISTS = {200, 201, 202, 204, 400, 403, 405, 409, 422}
+
+#: 401 is deliberately ABSENT, and this was established live rather than assumed:
+#: Capella answers 401 for a bad secret AND for an IP-allowlist rejection, on any path,
+#: BEFORE routing. So 401 is not evidence a route exists -- it is evidence the
+#: credential did not work. Counting it meant a run with a dead key reported every
+#: reachable path as VERIFIED and exited 0, having verified nothing at all. 403 stays:
+#: that one requires authentication to have succeeded first, which requires routing.
+_CREDENTIAL_REJECTED = {401}
+
+#: Statuses that mean "retry, then treat as ERROR" -- never as a verdict about routing.
+_RATE_LIMITED = {429}
 
 #: Phrases in a 404 body that indicate the ROUTE matched and the OBJECT was absent.
 #: Without this, verifying a path that needs an id we could not discover would report a
@@ -1009,6 +1024,25 @@ def probe(
             return Result(op, "VERIFIED", status, "route matched; object absent")
         return Result(op, "MISSING", status, body[:160].replace("\n", " "))
 
+    if status in _CREDENTIAL_REJECTED:
+        return Result(
+            op,
+            "ERROR",
+            status,
+            "401: the credential was rejected before routing, so this says nothing "
+            "about whether the path exists. Check CAPELLA_API_KEY_SECRET (the SECRET, "
+            "not the key id) and the key's allowed-IP list.",
+        )
+    if status in _RATE_LIMITED:
+        # Rate limiting says nothing about whether the route exists -- the request was
+        # rejected before routing mattered. Counting it as VERIFIED meant a
+        # rate-limited run reported the entire surface as confirmed and exited 0.
+        return Result(
+            op,
+            "ERROR",
+            status,
+            "rate limited (429); no conclusion about this path. Re-run more slowly.",
+        )
     if status in _PATH_EXISTS:
         return Result(op, "VERIFIED", status)
     return Result(op, "ERROR", status, body[:160].replace("\n", " "))
@@ -1187,6 +1221,50 @@ def load_ops() -> list:
             file=sys.stderr,
         )
         return ops
+
+
+def _exit_code(counts: dict) -> int:
+    """Exit non-zero unless the run actually verified something.
+
+    `return 1 if counts.get("MISSING") else 0` treated ERROR and SKIPPED as success, so
+    the two states that mean "nothing was checked" were indistinguishable from a clean
+    pass:
+
+      * a dead endpoint gave {'SKIPPED': 56, 'ERROR': 5} and exit 0;
+      * a key with no project access gave {'SKIPPED': 56, 'VERIFIED': 5} and exit 0 --
+        and those five were "verified" by a 401.
+
+    A green CI check that verified nothing is worse than a red one, because it is
+    evidence people act on. Both branches (text and --json) now use this.
+    """
+    verified = counts.get("VERIFIED", 0)
+    errors = counts.get("ERROR", 0)
+    skipped = counts.get("SKIPPED", 0)
+    if counts.get("MISSING"):
+        return 1
+    if errors:
+        print(
+            f"\n  FAILING: {errors} path(s) ended in ERROR (credentials or network). "
+            "Nothing can be concluded about those paths, so this run does not pass.",
+            file=sys.stderr,
+        )
+        return 1
+    if not verified:
+        print(
+            "\n  FAILING: 0 paths were VERIFIED. Either the credential cannot reach "
+            "the organization or every path was skipped; either way this run is not "
+            "evidence that any path exists.",
+            file=sys.stderr,
+        )
+        return 1
+    if skipped and verified < skipped:
+        print(
+            f"\n  WARNING: {verified} verified but {skipped} skipped. Most of the "
+            "surface was not checked -- supply the ids needed to fill those paths "
+            "before treating this as a full verification.",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def main() -> int:
@@ -1574,7 +1652,7 @@ def _run_probes(ops, ids, token, mode, args, overrides=None) -> int:
                 indent=2,
             )
         )
-        return 1 if counts.get("MISSING") else 0
+        return _exit_code(counts)
 
     print()
     print("  " + "  ".join(f"{k}={v}" for k, v in sorted(counts.items())))
@@ -1621,7 +1699,7 @@ def _run_probes(ops, ids, token, mode, args, overrides=None) -> int:
         for r in errors:
             print(f"    {r.op.name}: {r.status} {r.detail}")
 
-    return 1 if counts.get("MISSING") else 0
+    return _exit_code(counts)
 
 
 if __name__ == "__main__":

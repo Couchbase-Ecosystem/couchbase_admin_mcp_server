@@ -23,13 +23,13 @@ action. That shapes every convention below.
 ### Clone and install
 
 ```bash
-git clone https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server.git
+git clone https://github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server.git
 cd couchbase-admin-mcp-server
 uv sync --extra dev
 ```
 
 External contributors do not have commit access. [Fork the
-repository](https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server/fork) and
+repository](https://github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server/fork) and
 clone your fork.
 
 The `dev` extra deliberately includes Flask and uvicorn even though they are optional at
@@ -319,10 +319,13 @@ best guide to the house style.
 - [Ruff](https://docs.astral.sh/ruff/)
 - `RUNBOOK.md` — the operator guide: both deployment shapes, the environment lifecycle,
   a worked CI pipeline, troubleshooting
-- `CAPELLA_HANDOFF.md` — the full record of the security review, including the findings
-  that produced the conventions above
+- `docs/ARCHITECTURE.md` and `docs/CB_Admin_MCP_Architecture.docx` — the control design and
+  the verification state that produced the conventions above. Section 9 of the document
+  records what has been measured and on what date
+- `handlers/capella/spec_pending.py` — Capella v4 operations written but deliberately NOT
+  shipped, each with the reason inline. Read this before adding a v4 path
 
 ## 🆘 Getting help
 
-[Open an issue](https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server/issues).
+[Open an issue](https://github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server/issues).
 For a suspected security issue, please report it privately rather than in a public issue.

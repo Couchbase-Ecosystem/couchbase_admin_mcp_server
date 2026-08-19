@@ -81,7 +81,7 @@ import time
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import CallToolRequest, TextContent, Tool
 
 # NOTE: profile_config applies the deployment profile's env defaults AT IMPORT
 # TIME, and handlers.shared snapshots CB_ADMIN_READ_ONLY_MODE at its own import
@@ -90,6 +90,7 @@ from mcp.types import TextContent, Tool
 import audit
 import authz
 import deployment
+import dryrun
 import mcp_compat
 import profile_config
 import tls_config
@@ -102,6 +103,9 @@ from auth.scope_gate import (
 )
 from auth.scope_gate import (
     configure as configure_scope_gate,
+)
+from auth.scope_gate import (
+    is_read_side as scope_gate_is_read_side,
 )
 from handlers import (
     backup,
@@ -217,41 +221,22 @@ def _filter_tools(raw_tools: list[Tool]) -> list[Tool]:
         if READ_ONLY_MODE:
             if not _is_read_only(t) and t.name not in _ALWAYS_LOADED_IN_READ_ONLY:
                 continue
-        filtered.append(_with_correlation_id(t))
+        filtered.append(_with_control_fields(t))
     return filtered
 
 
-def _with_correlation_id(tool: Tool) -> Tool:
-    """Declare `correlation_id` on every tool's schema.
+def _with_control_fields(tool: Tool) -> Tool:
+    """Delegates to mcp_compat so the console advertises the identical surface.
 
-    .env.example tells operators "a caller may pass correlation_id with any tool's
-    arguments", audit.build_record reads it, and server.call_tool strips it — but it
-    appeared in ZERO of the tool schemas. So the field the entire enterprise
-    accountability story hangs on was invisible to the models that are supposed to send
-    it, and a strict MCP client validating against the schema would reject it outright.
-
-    Advertised here rather than in ~204 hand-written schemas so it cannot drift, and so
-    a tool added tomorrow gets it for free.
+    This lived here only, which is how the console came to serve raw schemas with
+    neither dry_run nor correlation_id on them.
     """
-    schema = dict(mcp_compat.input_schema(tool))
-    properties = dict(schema.get("properties") or {})
-    if "correlation_id" in properties:
-        return tool
-    properties["correlation_id"] = {
-        "type": "string",
-        "description": (
-            "Optional provenance for the audit record: a git SHA, a workflow run id "
-            "or URL — whatever ties this call back to the human action that started "
-            "it. Recorded in the audit log and NEVER used for authorization. Pass the "
-            "same value on every call in one workflow run so the whole fan-out can be "
-            "correlated afterwards."
-        ),
-    }
-    schema["properties"] = properties
-    return tool.model_copy(update={"inputSchema": schema})
-
-
-_TOOLS: list[Tool] = _filter_tools(_RAW_TOOLS)
+    return mcp_compat.with_control_fields(
+        tool,
+        read_only=_is_read_only(tool),
+        always_loaded=_ALWAYS_LOADED_IN_READ_ONLY,
+        needs_confirm=tool.name in _CONFIRMATION_REQUIRED,
+    )
 
 
 def _is_write_tool(t: Tool) -> bool:
@@ -269,8 +254,18 @@ def _is_write_tool(t: Tool) -> bool:
 # enabled (CB_ADMIN_READ_ONLY_MODE=false). An operator loosens this per-tool via
 # CB_ADMIN_CONFIRMATION_REQUIRED_TOOLS or, for automation, by issuing an
 # automation-scoped token (see the ceiling below).
+#
+# Defined BEFORE _filter_tools runs, because the schema injector now advertises
+# `confirm` on exactly these tools.
 _DEFAULT_CONFIRMATION = {t.name for t in _RAW_TOOLS if _is_write_tool(t)}
 _CONFIRMATION_REQUIRED: set[str] = get_confirmation_required(_DEFAULT_CONFIRMATION)
+
+# Before filtering, and therefore before any schema is rewritten: this records which tools
+# implement dry_run themselves, which is a question the raw schemas can answer and the
+# injected ones cannot.
+dryrun.register_handler_owned(_RAW_TOOLS)
+
+_TOOLS: list[Tool] = _filter_tools(_RAW_TOOLS)
 
 
 def _parse_tool_set(env_var: str) -> set[str]:
@@ -303,7 +298,33 @@ _CEILING_UNKNOWN: set[str] = _AUTOMATION_HARD_CEILING - {t.name for t in _RAW_TO
 
 # ── MCP server ───────────────────────────────────────────────────────────────
 
-app = Server("couchbase-admin-mcp")
+#: This server's version, mirrored from pyproject.toml. tests/test_packaging.py asserts
+#: the two agree, so the mirror cannot drift silently.
+__version__ = "0.1.0"
+
+
+def _server_version() -> str:
+    """What `initialize` reports as serverInfo.version.
+
+    Passed EXPLICITLY because the mcp SDK's fallback is `version("mcp")` -- the version of
+    the LIBRARY. So every client's connection panel showed this server as "1.27.0" or
+    "1.29.0" depending on which mcp happened to be resolved, and a support question that
+    starts "which build are you running?" was unanswerable from the protocol. Verified over
+    real stdio before the fix: serverInfo said 1.27.0 while pyproject said 0.1.0.
+
+    Prefers the INSTALLED distribution's metadata so a wheel or image reports what was
+    actually deployed, and falls back to the mirrored constant when running from a source
+    tree with nothing installed.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("couchbase-admin-mcp-server")
+    except Exception:
+        return __version__
+
+
+app = Server("couchbase-admin-mcp", version=_server_version())
 
 
 @app.list_tools()
@@ -342,33 +363,11 @@ def _auth_required_for_listing() -> bool:
 
 
 def _classify_result(result: object) -> tuple[str, str]:
-    """Decide whether a handler's return value represents success or a refusal.
+    """Delegates to audit.classify_result so both dispatch paths share one policy.
 
-    Keyed on the marker err() stamps, NOT on the presence of an "error" key. The
-    key-presence version misclassified successes: capella_env_ensure's phase results
-    and capella_env_reap's per-item failures both return a top-level "error" inside
-    an otherwise successful response, so ordinary provisioning progress was being
-    written to the audit log as ``denied_handler``. An audit trail that cries wolf on
-    every poll is one an operator learns to ignore.
+    This logic lived here only, which is why the console's refusal vocabulary drifted.
     """
-    try:
-        first = result[0] if isinstance(result, list) and result else None
-        text = getattr(first, "text", None)
-        if not isinstance(text, str):
-            return "allowed", ""
-        payload = json.loads(text)
-        if isinstance(payload, dict) and payload.get(shared.ERROR_MARKER) is True:
-            reason = str(payload.get("error"))[:400]
-            if payload.get("guardrail"):
-                return "denied_guardrail", reason
-            if "EgressDenied" in reason or "EGRESS_ALLOWED_HOSTS" in reason:
-                return "denied_egress", reason
-            return "denied_handler", reason
-    except Exception:
-        # Not JSON, or an unexpected shape. Treat as success rather than inventing a
-        # denial; the handler returned normally.
-        return "allowed", ""
-    return "allowed", ""
+    return audit.classify_result(result, shared.ERROR_MARKER)
 
 
 @app.call_tool()
@@ -504,10 +503,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # principal holding write but NOT automation skipped the ceiling entirely, so
     # dropping a scope from the token GRANTED capability and the most privileged
     # principal was the only one refused.
+    # Resolved ONCE and passed explicitly, then re-used below to establish the
+    # caller context around the handler. Previously evaluate() derived it internally
+    # and nothing downstream could see what had been decided, which is how the
+    # composite ceiling guard came to answer the same question differently.
+    human_present = authz.human_is_present()
     ceiling, in_confirm_set = authz.evaluate(
         name,
         in_confirm_set=in_confirm_set,
         has_automation_scope=session_has_automation_scope(),
+        human_present=human_present,
     )
     if not ceiling.allowed:
         _log.warning("hard ceiling refused %s (no human present)", name)
@@ -526,10 +531,53 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     arguments.pop("confirm", None)
     arguments.pop(audit.CORRELATION_ARG, None)
 
+    # ── Dry run ──────────────────────────────────────────────────────────────
+    #
+    # AFTER every gate, deliberately. A dry run is not a way to find out what a tool you
+    # are not allowed to call would do, so the scope gate, the ceiling and the
+    # confirmation gate all have their say first. And BEFORE execution, obviously.
+    #
+    # Reads still run: refusing them would remove the information the plan is checked
+    # against. Only a write is withheld.
+    dry, dry_reason = dryrun.in_effect(arguments, tool_obj)
+    read_side = bool(tool_obj is not None and scope_gate_is_read_side(tool_obj))
+    # Only strip the flag the DISPATCH owns. This was unconditional, so a tool that
+    # implements dry_run itself never received it: in_effect() correctly returns
+    # False for a handler-owned tool, and then the argument was removed anyway, so
+    # the handler fell back to its own default. capella_env_reap defaults dry_run to
+    # TRUE by design, which made every reap a preview and left expired environments
+    # billing forever -- the tool could not perform its only job. The strip still
+    # matters for every other tool, where the flag must not reach a REST body.
+    if not dryrun.handler_owns(tool_obj):
+        dryrun.strip(arguments)
+    if dry and not read_side:
+        _log.info("dry run: %s withheld (%s)", name, dry_reason)
+        _audit("dry_run", reason=dry_reason)
+        # ok() so it is a SUCCESS payload in the transport's shape, not a dict. The
+        # dispatch contract is list[TextContent]; returning a bare dict here type-checked
+        # fine and broke every client, which is what the tests caught.
+        return shared.ok(
+            dryrun.preview(
+                name,
+                arguments,
+                reason=dry_reason,
+                deployment_mode=_DEPLOYMENT_MODE,
+                read_side=False,
+            )
+        )
+
     loop = asyncio.get_event_loop()
     start = time.perf_counter()
     try:
-        result = await loop.run_in_executor(None, handler.handle, name, arguments)
+        # Wrapped so anything below the dispatch that asks authz.human_is_present()
+        # gets THIS call's evidence rather than re-deriving it from a process-wide
+        # variable. Established inside the executor thread, because the context is
+        # thread-local and run_in_executor does not propagate it across the hop.
+        def _run_handler() -> list[TextContent]:
+            with authz.caller_context(human_present=human_present):
+                return handler.handle(name, arguments)
+
+        result = await loop.run_in_executor(None, _run_handler)
         elapsed = (time.perf_counter() - start) * 1000
 
         # A handler that refuses (egress allowlist, Capella guardrail, a validation
@@ -548,6 +596,100 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _audit("error", reason=f"{type(exc).__name__}", duration_ms=elapsed)
         _log.error("tool error: %s: %s (%.1f ms)", name, exc, elapsed, exc_info=True)
         return err(f"{type(exc).__name__}: {exc}", tool=name, args=arguments)
+
+
+# ── The protocol-level isError flag ──────────────────────────────────────────
+#
+# Every refusal this server makes -- unknown tool, scope denial, read-only mode,
+# missing confirmation, spend ceiling, egress allowlist -- was reported to the client
+# as `isError: false`, i.e. as a SUCCESSFUL tool call whose text happened to describe a
+# failure. Verified over real stdio: `tools/call` for a tool that does not exist came
+# back `{"content": [...], "isError": false}`.
+#
+# The cause is structural rather than an oversight in any one handler. The mcp lowlevel
+# server sets isError=False on every result whose handler returned content, and reserves
+# True for a raised exception. This server's whole design is the opposite: a refusal is a
+# normal, structured, audited return value, never an exception -- which is what keeps the
+# reason machine-readable and the audit record accurate. So the flag could never become
+# True on its own.
+#
+# It matters for the non-conversational caller. An agent reads the text and understands
+# it; a script, a workflow step, or a UI that branches on isError -- the field the
+# protocol defines for exactly that -- saw success for a destructive operation that was
+# denied. That is the wrong direction for a control to fail in.
+#
+# Done HERE, at the wire boundary, on purpose:
+#   * call_tool above keeps returning list[TextContent], so the operator console, the
+#     tests and every internal caller are untouched. Only the JSON-RPC reply changes.
+#   * No branch on the mcp version. Wrapping the registered request handler and adjusting
+#     the CallToolResult it produced works the same on 1.10 and on 2.x, whereas RETURNING
+#     a CallToolResult from the handler is only recognised by newer 1.x -- on the declared
+#     floor it would be treated as an iterable of pydantic field pairs and produce
+#     nonsense. Same reasoning as mcp_compat.py: ask what the object has, don't decide
+#     from a version number.
+#   * The marker is the one audit.classify_result already uses, so the flag and the audit
+#     record cannot disagree about whether a call was refused.
+
+
+def _registered_call_tool_handler(registry: dict):
+    """The handler the mcp decorator just registered, or a message that says what broke.
+
+    A bare `registry[CallToolRequest]` would raise KeyError at import time on an mcp
+    release that reorganises the registry, and "KeyError: CallToolRequest" three frames
+    into a module body is a poor way to learn that the server cannot start. Since a
+    missing key means this wrapper cannot be installed and the isError flag would go back
+    to reporting every refusal as a success, it fails loudly rather than skipping itself.
+    """
+    handler = registry.get(CallToolRequest)
+    if handler is None:
+        raise RuntimeError(
+            "the installed mcp did not register a CallToolRequest handler, so the "
+            "protocol-level isError flag cannot be set. Check the mcp version against "
+            "the pin in pyproject.toml (>=1.10,<2.0)."
+        )
+    return handler
+
+
+_sdk_call_tool_handler = _registered_call_tool_handler(app.request_handlers)
+
+
+def _carries_error_marker(content: object) -> bool:
+    """True when a result block is an err() payload.
+
+    Reads shared.ERROR_MARKER, the same discriminator the audit classifier uses, and only
+    that: several handlers return a SUCCESS payload containing a top-level "error" that
+    describes a sub-resource problem, and treating those as failures would mislabel a
+    partially-successful batch as a denial.
+    """
+    for block in content or []:
+        text = getattr(block, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            payload = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(payload, dict) and payload.get(shared.ERROR_MARKER) is True:
+            return True
+    return False
+
+
+async def _call_tool_with_is_error(req: CallToolRequest):
+    """Set isError on the protocol result to match what the handler actually decided."""
+    server_result = await _sdk_call_tool_handler(req)
+    result = getattr(server_result, "root", None)
+    if result is None or getattr(result, "isError", None) is not False:
+        # Already an error (input validation, an unexpected exception) or a shape this
+        # wrapper does not recognise. Left exactly as the SDK produced it.
+        return server_result
+    if not _carries_error_marker(getattr(result, "content", None)):
+        return server_result
+    # model_copy rather than assignment: pydantic models in this position are validated
+    # on assignment in some versions, and a copy cannot half-apply.
+    return type(server_result)(result.model_copy(update={"isError": True}))
+
+
+app.request_handlers[CallToolRequest] = _call_tool_with_is_error
 
 
 # ── Startup banner ───────────────────────────────────────────────────────────

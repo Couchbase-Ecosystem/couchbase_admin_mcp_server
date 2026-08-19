@@ -1,0 +1,17 @@
+graph LR
+  subgraph Shipped["SHIPPED - handlers/capella/"]
+    P["spec.py<br/>61 primitives"]
+    E["environment.py<br/>8 orchestration tools"]
+    F["fixture.py<br/>4 tools, handlers refuse"]
+    GR["guardrails.py<br/>org pin, project allowlist,<br/>name prefix, env ceiling"]
+  end
+  subgraph Q["NOT SHIPPED"]
+    PN["spec_pending.py<br/>22 ops tagged DOC<br/>outside OPS"]
+  end
+  E --> P
+  F --> P
+  P --> GR
+  E --> GR
+  PN -.->|"promote after method-probe<br/>+ LIVE_VERIFIED entry"| P
+  style Q fill:#fff8e1,stroke:#f9a825
+  style Shipped fill:#eef4fb,stroke:#2c6fb5

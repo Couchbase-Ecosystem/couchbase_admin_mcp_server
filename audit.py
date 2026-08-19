@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import time
 from typing import Any
@@ -56,6 +57,22 @@ from typing import Any
 from logging_config import get_logger
 
 _log = get_logger("audit")
+
+# The audit trail must not be subject to the operator's verbosity knob.
+#
+# Records were emitted at INFO on a logger whose effective level is inherited from
+# the `couchbase-admin` tree, which configure_logging sets from CB_ADMIN_LOG_LEVEL.
+# So CB_ADMIN_LOG_LEVEL=WARNING (or ERROR) silently discarded EVERY audit record --
+# and profile_config.validate() explicitly blesses `CB_ADMIN_LOG_SINKS=stderr,file`
+# with no CB_ADMIN_AUDIT_FILE as a durable sink, so the enterprise profile could pass
+# validation and then keep no accountability at all. In an unattended deployment the
+# audit trail is the only record that an action happened.
+#
+# Pinning the level here is deliberate and one-directional: a operator may make the
+# rest of the server quieter, and the audit trail stays. The dedicated file sink was
+# already pinned to INFO with propagate=False, which is why the defect only showed on
+# the shared-tree path.
+_log.setLevel(logging.INFO)
 
 
 # ── The dedicated audit sink ─────────────────────────────────────────────────
@@ -239,7 +256,12 @@ def build_record(
 
     ``decision`` is one of: allowed, denied_scope, denied_read_only,
     denied_confirmation, denied_hard_ceiling, denied_guardrail, denied_egress,
-    error. The vocabulary is closed so a SIEM rule can match on it.
+    dry_run, error. The vocabulary is closed so a SIEM rule can match on it.
+
+    ``dry_run`` is not a refusal and not an execution: the call was authorized and then
+    deliberately not performed. It has its own value rather than being folded into
+    ``allowed`` because a SIEM rule counting privileged writes must not count previews,
+    and an operator asking "did that actually happen?" needs the record to answer.
     """
     args = dict(arguments or {})
     # Accept it explicitly as well as from the arguments. server.py strips
@@ -377,6 +399,41 @@ def emit_tool_call(
             correlation_id=correlation_id,
         )
     )
+
+
+def classify_result(result: object, error_marker: str) -> tuple[str, str]:
+    """Decide whether a handler's return value is a success or a refusal, and which.
+
+    Lives here rather than in server.py because BOTH dispatchers need it and only one
+    had it: the console collapsed every refusal to ``denied_handler``, so a blocked
+    log-bundle exfiltration (``denied_egress``) or a Capella guardrail refusal
+    performed through the console was recorded under the wrong label and a SIEM rule
+    matching the documented vocabulary never fired for console-originated attacks.
+
+    Keyed on the marker ``err()`` stamps, NOT on the presence of an "error" key.
+    Key-presence misclassified successes: capella_env_ensure's phase results and
+    capella_env_reap's per-item failures both carry a top-level "error" inside an
+    otherwise successful response, so ordinary provisioning progress was audited as a
+    denial. An audit trail that cries wolf on every poll is one an operator ignores.
+    """
+    try:
+        first = result[0] if isinstance(result, list) and result else None
+        text = getattr(first, "text", None)
+        if not isinstance(text, str):
+            return "allowed", ""
+        payload = json.loads(text)
+        if isinstance(payload, dict) and payload.get(error_marker) is True:
+            reason = str(payload.get("error"))[:400]
+            if payload.get("guardrail"):
+                return "denied_guardrail", reason
+            if "EgressDenied" in reason or "EGRESS_ALLOWED_HOSTS" in reason:
+                return "denied_egress", reason
+            return "denied_handler", reason
+    except Exception:
+        # Not JSON, or an unexpected shape. Treat as success rather than inventing a
+        # denial; the handler returned normally.
+        return "allowed", ""
+    return "allowed", ""
 
 
 def emit_auth_failure(*, reason: str, source: str = "") -> None:

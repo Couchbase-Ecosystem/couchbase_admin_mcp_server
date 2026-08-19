@@ -28,9 +28,23 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 #: The single stated home for this project.
+#:
+#: REPO and PACKAGE are DIFFERENT IDENTIFIERS and pinned separately on purpose. The GitHub
+#: repository is spelled with underscores; the PyPI distribution is spelled with hyphens,
+#: which is the packaging convention. They normalise to the same name under PEP 503, which
+#: is exactly why conflating them is easy: every URL in this repository pointed at
+#: `couchbase-admin-mcp-server` — a repository that does not exist — while the real
+#: destination was `couchbase_admin_mcp_server`. Nothing caught it, because the test below
+#: asserted the two were equal rather than equivalent.
 ORG = "Couchbase-Ecosystem"
-REPO = "couchbase-admin-mcp-server"
+REPO = "couchbase_admin_mcp_server"
+PACKAGE = "couchbase-admin-mcp-server"
 REPO_URL = f"https://github.com/{ORG}/{REPO}"
+
+
+def _normalise(name: str) -> str:
+    """PEP 503 name normalisation: runs of -, _ and . collapse to a single hyphen."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _pyproject() -> dict:
@@ -48,9 +62,21 @@ def test_the_declared_urls_point_at_the_chosen_org():
     assert urls["Issues"] == f"{REPO_URL}/issues", urls["Issues"]
 
 
-def test_the_package_name_matches_the_repository_name():
-    """A mismatch here is the kind of thing that only surfaces at publish time."""
-    assert _pyproject()["project"]["name"] == REPO
+def test_the_package_name_and_the_repository_name_are_the_same_identifier():
+    """Equivalent under PEP 503, not byte-equal — and the difference is not academic.
+
+    This test used to assert equality, which forced one spelling on both and made the
+    hyphenated repository URL look correct for as long as nobody tried to clone it. The
+    useful guard is that the two names still describe the same project: a half-finished
+    rename changes one and not the other, and normalisation catches that while allowing
+    the repository and the distribution to keep their own conventions.
+    """
+    declared = _pyproject()["project"]["name"]
+    assert declared == PACKAGE, declared
+    assert _normalise(declared) == _normalise(REPO), (
+        f"the distribution {declared!r} and the repository {REPO!r} are no longer the "
+        "same project under PEP 503 normalisation"
+    )
 
 
 def test_the_readme_sends_bug_reports_to_the_right_place():

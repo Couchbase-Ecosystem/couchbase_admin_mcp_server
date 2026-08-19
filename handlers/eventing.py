@@ -40,6 +40,8 @@ from __future__ import annotations
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .egress import guard_nested_host_fields
+import re
+
 from .shared import admin_request, admin_request_json, err, ok, quote_path
 
 # Cluster-manager proxy prefix for the Eventing REST API. See module
@@ -326,7 +328,11 @@ def handle(name: str, args: dict) -> list[TextContent]:
         # most likely cause if the cluster's Eventing proxy is somewhere else.
         msg = str(exc)
         hint = None
-        if "404" in msg:
+        # Match the STATUS, not the digits anywhere in the message. admin_request
+        # folds the response body and the path into that string, so an Eventing 500
+        # whose body carries a request id like "...b404f..." produced the
+        # "your REST proxy path is different" hint for an unrelated failure.
+        if re.search(r"\bHTTP 404\b", msg) or msg.lstrip().startswith("404"):
             hint = (
                 "404 from the Eventing endpoint may indicate the REST proxy "
                 "path is different on this cluster. See handlers/eventing.py "

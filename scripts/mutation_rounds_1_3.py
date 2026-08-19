@@ -12,6 +12,11 @@ import subprocess
 import sys
 import tempfile
 
+
+class MutationTimeoutError(RuntimeError):
+    """A mutation run that neither passed nor failed. Never counted as caught."""
+
+
 # The repository root, derived from this file's location rather than hard-coded, so the
 # harness works from a checkout anywhere.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -245,7 +250,17 @@ def run(target: str, cwd: pathlib.Path) -> bool:
             timeout=150,
         )
     except subprocess.TimeoutExpired:
-        return False  # a hang is a failure, which counts as caught
+        # A TIMEOUT IS NOT A KILL. This returned "caught", so any mutation that made the
+        # target slow enough to exceed the timeout was reported as covered by a test --
+        # with no assertion having failed anywhere. That is the harness telling the
+        # comfortable story rather than the true one, in the one tool whose entire job is
+        # to say which controls are untested.
+        print(
+            "    INDETERMINATE: the run timed out, so this mutation is NOT proven "
+            "caught. Re-run with a longer timeout before trusting this result.",
+            file=sys.stderr,
+        )
+        raise MutationTimeoutError("the pytest run timed out") from None
     return result.returncode == 0
 
 

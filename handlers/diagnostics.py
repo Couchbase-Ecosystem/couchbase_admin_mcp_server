@@ -672,9 +672,12 @@ def _perf_primary(cluster, QueryOptions, args: dict) -> list[TextContent]:
             {"lim": limit},
             "cb_perf_using_primary_index",
         )
-    except RuntimeError:
-        # Field may not exist on this version — fall back to scanning EXPLAIN
-        # on recent queries, which is slower but version-portable.
+    except Exception:
+        # `except RuntimeError` here was DEAD: the callee is the Couchbase SDK, whose
+        # errors derive from CouchbaseException, and issubclass(CouchbaseException,
+        # RuntimeError) is False. So on any cluster lacking ~phaseOperators the raw SDK
+        # error propagated instead of taking this version-portable fallback -- and the
+        # test that "covered" it fabricated a RuntimeError the SDK never raises.
         return _perf_primary_via_explain(cluster, QueryOptions, limit)
 
 

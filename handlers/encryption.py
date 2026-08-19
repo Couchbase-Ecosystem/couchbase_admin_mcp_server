@@ -29,7 +29,7 @@ from __future__ import annotations
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .egress import guard_host_like_fields
-from .shared import admin_request, err, ok
+from .shared import admin_request, err, form_value, ok, schema_keys
 
 TOOLS: list[Tool] = [
     Tool(
@@ -148,25 +148,40 @@ def _path_hint(msg: str) -> str | None:
     return None
 
 
-def _build_form_data(args: dict, exclude: set[str]) -> dict:
-    """Flatten explicit fields + additional_fields into a single form-data dict.
-    Convert booleans to 'true'/'false' for form encoding."""
+def _build_form_data(
+    args: dict, exclude: set[str], *, tool_name: str = "", tools: list | None = None
+) -> dict:
+    """Flatten DECLARED fields plus additional_fields into one form-data dict.
+
+    Two defects this replaces.
+
+    Every key in ``args`` used to be forwarded, so these two security endpoints --
+    /settings/security/kmip and /settings/security/encryptionAtRest -- had an
+    allow-list wider than their own schemas and no refuse_undeclared, unlike every
+    other settings tool in this repo. A hallucinated key became a real change to
+    encryption-at-rest configuration and was reported as success. Declared keys are
+    now the allow-list, and ``additional_fields`` is the single explicit escape hatch
+    for a version-specific parameter -- which is what it was added for.
+
+    And ``str(v)`` produced a Python repr for a list or dict: cipherSuites=["TLS_A",
+    "TLS_B"] went on the wire as "['TLS_A', 'TLS_B']", which the cluster cannot parse
+    -- and on cipherSuites an unparseable value means "use defaults", i.e. a silent
+    TLS downgrade reported as success. form_value is the one encoder that gets this
+    right, and it exists precisely for this.
+    """
+    declared = schema_keys(tool_name, tools or []) if tool_name else set()
     data = {}
     for k, v in args.items():
         if k in exclude or v is None:
             continue
-        if isinstance(v, bool):
-            data[k] = "true" if v else "false"
-        else:
-            data[k] = str(v)
+        if declared and k not in declared:
+            continue
+        data[k] = form_value(v)
     extra = args.get("additional_fields") or {}
     for k, v in extra.items():
         if v is None:
             continue
-        if isinstance(v, bool):
-            data[k] = "true" if v else "false"
-        else:
-            data[k] = str(v)
+        data[k] = form_value(v)
     return data
 
 
@@ -176,7 +191,12 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/security/encryptionAtRest"))
 
         if name == "admin_encryption_set":
-            data = _build_form_data(args, exclude={"confirm", "additional_fields"})
+            data = _build_form_data(
+                args,
+                exclude={"confirm", "additional_fields"},
+                tool_name=name,
+                tools=TOOLS,
+            )
             # This tool had NO egress guard, while admin_kmip_set — the same class of
             # operation — had one. /settings/security/encryptionAtRest also accepts
             # key-source configuration, and additional_fields is free-form, so the
@@ -199,7 +219,12 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # ran, and _build_form_data then merged it into the request verbatim.
             # additional_fields is an allow-list escape hatch by construction, so any
             # guard has to run on the merged result, not the declared arguments.
-            data = _build_form_data(args, exclude={"confirm", "additional_fields"})
+            data = _build_form_data(
+                args,
+                exclude={"confirm", "additional_fields"},
+                tool_name=name,
+                tools=TOOLS,
+            )
             # kmipHost decides where the cluster fetches its MASTER ENCRYPTION KEY.
             # Pointed elsewhere, the cluster cannot decrypt its own data after a
             # restart.

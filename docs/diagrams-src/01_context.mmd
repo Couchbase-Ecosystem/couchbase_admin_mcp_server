@@ -1,0 +1,23 @@
+graph LR
+  A["MCP client<br/>Claude Desktop / agent"]
+  B["Operator browser"]
+  subgraph Server["Couchbase Admin MCP Server"]
+    MCP["server.py<br/>stdio | streamable_http"]
+    GUI["gui_server.py<br/>Flask console"]
+    CORE["authz + auth + 208 tools"]
+    MCP --> CORE
+    GUI --> CORE
+  end
+  IDP["OIDC provider<br/>JWKS / discovery"]
+  NS["Self-managed cluster<br/>ns_server REST :18091"]
+  QRY["Query service<br/>via SDK"]
+  CAP["Capella v4 control plane<br/>cloudapi.cloud.couchbase.com"]
+  LOG["Log + audit files"]
+  A -->|"tools/call"| MCP
+  B -->|"HTTPS + session cookie"| GUI
+  CORE -->|"validate JWT"| IDP
+  CORE -->|"admin_*  Basic"| NS
+  CORE -->|"cb_*  SDK"| QRY
+  CORE -->|"capella_*  Bearer"| CAP
+  CORE -->|"one record per decision"| LOG
+  style Server fill:#eef4fb,stroke:#2c6fb5

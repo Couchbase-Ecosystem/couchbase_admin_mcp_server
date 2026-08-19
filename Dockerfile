@@ -116,6 +116,7 @@ COPY --chown=mcp:mcp server.py /app/server.py
 COPY --chown=mcp:mcp audit.py /app/audit.py
 COPY --chown=mcp:mcp authz.py /app/authz.py
 COPY --chown=mcp:mcp deployment.py /app/deployment.py
+COPY --chown=mcp:mcp dryrun.py /app/dryrun.py
 COPY --chown=mcp:mcp logging_config.py /app/logging_config.py
 COPY --chown=mcp:mcp mcp_compat.py /app/mcp_compat.py
 COPY --chown=mcp:mcp profile_config.py /app/profile_config.py

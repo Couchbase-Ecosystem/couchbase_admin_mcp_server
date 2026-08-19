@@ -57,8 +57,25 @@ def _is_set(key: str) -> bool:
     return bool((os.environ.get(key) or "").strip())
 
 
+#: ONE notion of truth, shared with handlers.shared.TRUTHY_VALUES.
+#:
+#: This module had its own narrower set {1,true,yes,on} while the reader that
+#: actually gates the behaviour (handlers.shared.get_env_bool) accepts {…,y,t} too.
+#: So CB_ADMIN_TLS_INSECURE=y was NOT refused by the enterprise profile and WAS
+#: honoured by the TLS context builder: the server started and then sent cluster
+#: administrator credentials with certificate and hostname verification disabled,
+#: while .env.example promises that combination "REFUSES TO START". A single
+#: environment variable that is simultaneously off for enforcement and on for effect
+#: is the worst possible split.
+#:
+#: Imported lazily inside the function: profile_config is imported before
+#: handlers.shared by design (it writes defaults into os.environ at import time and
+#: handlers.shared snapshots them), so a module-level import here would invert that
+#: order.
 def _truthy(value: str) -> bool:
-    return value.strip().lower() in ("1", "true", "yes", "on")
+    from handlers.shared import TRUTHY_VALUES
+
+    return value.strip().lower() in TRUTHY_VALUES
 
 
 @dataclass(frozen=True)
@@ -197,7 +214,12 @@ def _validate_workstation_is_actually_local() -> list[str]:
         # No socket exists; the premise holds by construction.
         return errors
 
-    host = _env("CB_ADMIN_HOST", "127.0.0.1")
+    # Read DIRECTLY. _env substitutes the default for a set-but-empty value, so
+    # CB_ADMIN_HOST= -- which makes Werkzeug/uvicorn bind every interface, per
+    # _is_loopback_host's own docstring -- was read as loopback and the workstation
+    # locality premise went unchecked. The most exposed value read as the least.
+    raw_host = os.environ.get("CB_ADMIN_HOST")
+    host = "127.0.0.1" if raw_host is None else raw_host.strip()
     if _is_loopback_host(host) or _truthy(_env(CONTAINER_BIND_ACK)):
         return errors
 
@@ -268,13 +290,53 @@ def validate(name: str | None) -> list[str]:
 
     # The audit trail is the ONLY accountability in an unattended deployment, and by
     # default it goes to stderr, which a spawned server discards.
-    if not _env("CB_ADMIN_AUDIT_FILE") and "file" not in _env("CB_ADMIN_LOG_SINKS"):
+    # Membership in the PARSED sink set, not a substring of the raw variable.
+    # `"file" not in "stderr,files"` is False -- a plausible typo, and `profile`
+    # matches too -- so the substring form would pass validation while
+    # parse_log_sinks discards the unknown name and attaches no file handler.
+    #
+    # Reachability, stated honestly: this check and the level check below are
+    # DEFENCE IN DEPTH, not live vulnerabilities. _ENTERPRISE_DEFAULTS always
+    # supplies an absolute CB_ADMIN_AUDIT_FILE, and apply_profile treats an
+    # explicitly EMPTY value as unset, so an enterprise deployment always has a
+    # durable audit sink and that sink is a dedicated logger pinned to INFO with
+    # propagate=False. Both checks exist so that removing the default -- an easy
+    # edit that looks harmless -- fails at startup instead of silently costing the
+    # deployment its audit trail.
+    audit_file = _env("CB_ADMIN_AUDIT_FILE")
+    try:
+        from logging_config import parse_log_sinks
+
+        parsed_sinks, _ = parse_log_sinks(os.environ.get("CB_ADMIN_LOG_SINKS", ""))
+        sinks = set(parsed_sinks)
+    except Exception:  # pragma: no cover - defensive; fall back to the raw split
+        sinks = {s.strip().lower() for s in _env("CB_ADMIN_LOG_SINKS").split(",")}
+    if not audit_file and "file" not in sinks:
         errors.append(
             "No durable audit sink in the enterprise profile: set "
             "CB_ADMIN_AUDIT_FILE (recommended) or include 'file' in "
             "CB_ADMIN_LOG_SINKS. Unattended writes would otherwise leave no record "
             "that survives the process."
         )
+
+    # A raised log level would discard the audit trail if that trail ever depended on
+    # the shared logger tree. The per-level file sink attaches a handler for the
+    # configured level and above, so CB_ADMIN_LOG_LEVEL=WARNING or ERROR leaves no
+    # INFO-capable file handler, and audit records are emitted at INFO. Unreachable
+    # today for the reason given above; see audit.py, which additionally pins the
+    # audit logger's own level so a raised verbosity cannot suppress the records on
+    # the stderr path either -- that part DID bite, including in the workstation
+    # profile, which has no audit-file default.
+    if not audit_file:
+        level = _env("CB_ADMIN_LOG_LEVEL", "INFO").upper()
+        if level in ("WARNING", "WARN", "ERROR", "CRITICAL", "OFF", "NONE"):
+            errors.append(
+                f"CB_ADMIN_LOG_LEVEL={level} in the enterprise profile with no "
+                "CB_ADMIN_AUDIT_FILE. Audit records are emitted at INFO, so at this "
+                "level nothing durable is written and the deployment keeps no record "
+                "of unattended writes. Set CB_ADMIN_AUDIT_FILE (recommended, and it "
+                "is unaffected by this level), or raise the verbosity to INFO."
+            )
 
     if _truthy(_env("OAUTH_SKIP_VERIFY")):
         errors.append(
@@ -299,6 +361,46 @@ def validate(name: str | None) -> list[str]:
             "no issuer there is no token to authorize, and no principal to record "
             "in the audit trail."
         )
+
+    # The trust anchor must not be fetchable in cleartext.
+    #
+    # Non-emptiness was checked; the SCHEME was not, and nothing downstream checks it
+    # either. With OAUTH_ISSUER=http://... (or a plaintext OAUTH_JWKS_URI) the JWKS is
+    # fetched over HTTP, so anyone on the path substitutes the key set and mints a
+    # token carrying the automation scope. That is a full unattended administrator,
+    # and it defeats the scope gate, the hard ceiling and the audit principal at once
+    # -- every control in the enterprise model rests on this one fetch being
+    # authentic. Verified: a token signed by an attacker-generated key was ACCEPTED.
+    #
+    # Loopback is exempt: the test IdP runs on http://127.0.0.1, and a plaintext
+    # fetch that never leaves the host has no path to sit on. That exemption is also
+    # why this went unnoticed.
+    for var in ("OAUTH_ISSUER", "OAUTH_JWKS_URI"):
+        value = _env(var)
+        if not value:
+            continue
+        try:
+            from urllib.parse import urlsplit
+
+            parts = urlsplit(value)
+        except Exception:  # pragma: no cover - defensive
+            continue
+        if parts.scheme and parts.scheme.lower() not in ("https", ""):
+            host = (parts.hostname or "").lower()
+            if parts.scheme.lower() == "http" and host in (
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            ):
+                continue
+            errors.append(
+                f"{var}={value!r} is not https. The JWKS fetched from this origin is "
+                "the ONLY thing establishing that a token was issued by your IdP; "
+                "over cleartext, anyone on the network path can substitute the key "
+                "set and mint a token carrying the automation scope, which is full "
+                "unattended administrator access. Use https (loopback http is "
+                "permitted for a local test IdP)."
+            )
 
     if not _env("OAUTH_AUDIENCE"):
         errors.append(

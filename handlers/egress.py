@@ -480,6 +480,47 @@ def _host_like_exempt() -> frozenset[str]:
     return _HOST_LIKE_EXEMPT | frozenset(extra)
 
 
+def _assert_not_absolutely_denied(value: str, *, field: str, tool: str) -> None:
+    """Apply ONLY the denials that no configuration may lift.
+
+    Used where an operator exemption suppresses the allowlist. The allowlist is a
+    policy an operator may reasonably relax per field; the metadata, loopback and
+    link-local denials are not, and this module says so twice in its own hints. Split
+    out so the exempt path can honour the second without honouring the first.
+    """
+    host = split_host(value)
+    if not host:
+        return
+    lowered = host.lower().rstrip(".")
+    if lowered in _ALWAYS_DENIED_NAMES:
+        raise EgressDeniedError(
+            f"{tool}: `{field}`={host!r} is a loopback or metadata hostname and is "
+            "never an acceptable destination, including for a field listed in "
+            "CB_ADMIN_EGRESS_EXEMPT_FIELDS.",
+            hint=(
+                "An exemption suppresses the allowlist so a legitimate non-host "
+                "field stops being refused. It does not — and must not — lift the "
+                "instance-metadata denial, which returns IAM credentials to anything "
+                "that can reach it."
+            ),
+        )
+    ip = _as_ip(host)
+    if ip is None:
+        return
+    for net in _ALWAYS_DENIED_NETWORKS:
+        if ip in net:
+            raise EgressDeniedError(
+                f"{tool}: `{field}`={host!r} falls in {net}, a "
+                "loopback/link-local/metadata range that is never an acceptable "
+                "destination, including for an exempted field.",
+                hint=(
+                    "169.254.169.254 in particular returns cloud instance-role "
+                    "credentials. This denial cannot be configured away, and an "
+                    "exemption does not reach it."
+                ),
+            )
+
+
 def guard_host_like_fields(data: dict, *, tool: str) -> None:
     """Apply the egress allowlist to every value in `data` that names a destination.
 
@@ -497,11 +538,20 @@ def guard_host_like_fields(data: dict, *, tool: str) -> None:
     """
     for key, value in data.items():
         lowered = str(key).lower()
-        if lowered in _host_like_exempt():
+        if value is None or value is True or value is False or value == "":
             continue
-        if not any(fragment in lowered for fragment in _HOST_LIKE_FRAGMENTS):
+        exempt = lowered in _host_like_exempt()
+        host_like = any(fragment in lowered for fragment in _HOST_LIKE_FRAGMENTS)
+        if not host_like and not exempt:
             continue
-        if value in (None, ""):
+        if exempt:
+            # An EXEMPTION suppresses the allowlist, never the absolute denials.
+            #
+            # It was consulted before every check, so CB_ADMIN_EGRESS_EXEMPT_FIELDS
+            # =kmiphost -- added to clear one false positive -- silently re-opened the
+            # instance-metadata path for that field, against a denial this module
+            # twice promises "cannot be configured away".
+            _assert_not_absolutely_denied(str(value), field=str(key), tool=tool)
             continue
         assert_egress_allowed(str(value), field=str(key), tool=tool)
 
@@ -528,11 +578,39 @@ def _looks_like_a_destination(value: str) -> bool:
     Used only for the forced (scalar-root) path, so that a numeric or obviously
     non-host value is not run through the allowlist and refused for no reason. A value
     containing a scheme, a dot, or a colon is treated as possibly-a-destination.
+
+    The dot-colon-scheme test alone made the guard's verdict depend on the attacker's
+    SPELLING. `169.254.169.254` was denied; the same address as `2852039166` or
+    `0xa9fea9fe` has no dot and passed, as did the bare names `metadata` and
+    `localhost`. So the two forms this module already knows how to recognise are
+    consulted directly: anything `_as_ip` can parse (which normalises legacy numeric,
+    hex, octal and IPv4-mapped forms) and anything in the always-denied name list.
     """
     text = value.strip()
-    if not text or len(text) > 2048:
+    if not text:
         return False
-    return "://" in text or "." in text or ":" in text
+    # The length cap must bound RESOLUTION work, not decide the verdict. Testing the
+    # whole value meant padding defeated the guard outright:
+    # "s3://169.254.169.254/loot/" + "a"*2100 returned False and went unchecked, while
+    # split_host still extracted 169.254.169.254 from it. Cap the extracted HOST
+    # instead, which is the only part that reaches a DNS lookup.
+    # An over-long value returns TRUE, not False.
+    #
+    # Returning False here meant "not destination-shaped", which on the forced path
+    # SKIPS every check -- so padding converted a DENY into a silent ALLOW, strictly
+    # worse than the 2048-char bug it replaced:
+    # "169.254.169.254," + "b"*600 was allowed while the unpadded value was denied.
+    # Returning True hands it to assert_egress_allowed, which refuses it as an
+    # implausible host. The cap therefore bounds RESOLUTION work without ever
+    # deciding the verdict in the permissive direction.
+    host = split_host(text)
+    if (host and len(host) > 512) or (not host and len(text) > 2048):
+        return True
+    if "://" in text or "." in text or ":" in text:
+        return True
+    if text.lower() in _ALWAYS_DENIED_NAMES:
+        return True
+    return _as_ip(text) is not None
 
 
 def guard_nested_host_fields(
@@ -575,16 +653,41 @@ def guard_nested_host_fields(
         key_name: str, value: Any, where: str, *, force: bool = False
     ) -> None:
         """Apply the allowlist to one scalar, judged by the key that introduced it."""
-        if value in (None, "", True, False):
+        # Identity, not equality: `1 in (True,)` is True in Python, so integer and
+        # float leaves 0, 1, 0.0 and 1.0 were skipped here while the FLAT guard denied
+        # them -- {"hostname": 1} is 0.0.0.1, inside the 0.0.0.0/8 denial this module
+        # widened precisely because 0.0.0.1 routes to the local host on Linux. The two
+        # guards therefore disagreed in both directions for the same field.
+        if value is None or value is True or value is False or value == "":
             return
         lowered = str(key_name).lower()
         if not force:
             if lowered in _host_like_exempt():
+                # Exemption suppresses the ALLOWLIST only, never the absolute
+                # denials -- same rule as the flat guard, so the two agree.
+                _assert_not_absolutely_denied(
+                    str(value) if not isinstance(value, str) else value,
+                    field=where,
+                    tool=tool,
+                )
                 return
             if not any(fragment in lowered for fragment in _HOST_LIKE_FRAGMENTS):
                 return
-        if not isinstance(value, str) or not _looks_like_a_destination(value):
+        # Stringify rather than skip. A non-str leaf under a host-like key was
+        # dropped entirely, so `{"hostname": 2852039166}` was unchecked while
+        # `{"hostname": "169.254.169.254"}` was denied -- the same address, decided by
+        # its JSON type.
+        text = value if isinstance(value, str) else str(value)
+        # The heuristic applies ONLY on the forced path now. On the non-forced path
+        # the KEY has already declared this a destination (it matched
+        # _HOST_LIKE_FRAGMENTS and is not exempt), so second-guessing that with a
+        # shape test is what let `hostname: "metadata"` through -- while
+        # guard_host_like_fields, the flat guard over the same keys, applied no such
+        # test and denied it. Three guards over one payload disagreed in the unsafe
+        # direction; now the nested walk matches the flat one by construction.
+        if force and not _looks_like_a_destination(text):
             return
+        value = text
         _budget[0] -= 1
         if _budget[0] < 0:
             raise EgressDeniedError(

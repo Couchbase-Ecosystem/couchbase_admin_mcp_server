@@ -1,0 +1,47 @@
+flowchart TB
+  subgraph E["ENTRY POINTS"]
+    direction LR
+    S["server.py<br/>MCP transport"]
+    G["gui/gui_server.py<br/>Flask console"]
+  end
+  subgraph POL["POLICY LAYER"]
+    direction LR
+    PC["profile_config.py<br/>workstation | enterprise"]
+    DP["deployment.py<br/>which families load"]
+    AZ["authz.py<br/>ceiling, confirmation"]
+    DRY["dryrun.py<br/>preview vs execute"]
+    PC ~~~ DP ~~~ AZ ~~~ DRY
+  end
+  subgraph ID["IDENTITY"]
+    direction LR
+    SG["auth/scope_gate.py<br/>per-tool scope"]
+    RA["auth/request_auth.py<br/>claims in context"]
+    OI["auth/oidc.py<br/>JWKS, JWT"]
+    SE["auth/session.py<br/>signed cookies"]
+    SG ~~~ RA ~~~ OI ~~~ SE
+  end
+  subgraph H["HANDLERS - 208 tools"]
+    direction LR
+    SH["shared.py<br/>admin_request, redaction,<br/>statement guards"]
+    EG["egress.py<br/>SSRF denial"]
+    SM["13 self-managed modules"]
+    CP["capella/ - 4 modules"]
+  end
+  subgraph OB["OBSERVABILITY"]
+    direction LR
+    AU["audit.py<br/>one record per decision"]
+    LC["logging_config.py<br/>sinks, redaction filter"]
+    AU ~~~ LC
+  end
+  S --> POL
+  G --> POL
+  POL --> ID
+  ID --> H
+  SM --> SH
+  SM --> EG
+  CP --> SH
+  H --> OB
+  style E fill:#eef4fb,stroke:#2c6fb5
+  style POL fill:#f3e5f5,stroke:#6a1b9a
+  style ID fill:#fff8e1,stroke:#f9a825
+  style H fill:#e8f5e9,stroke:#2e7d32

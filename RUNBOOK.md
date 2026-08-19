@@ -4,8 +4,8 @@ The task this exists for: **stand up a Capella environment, point a phone app at
 down** — repeatedly, from CI, with nobody watching.
 
 This is the operator document. `README.md` describes the server, `CONTRIBUTING.md` describes
-the code, and `CAPELLA_HANDOFF.md` records the security review and the reasoning behind the
-controls. Everything here has been run.
+the code, and `docs/ARCHITECTURE.md` plus the architecture document under `docs/` record the
+controls and the reasoning behind them. Everything here has been run.
 
 ---
 

@@ -53,8 +53,23 @@ def gui(monkeypatch, tmp_path):
     import audit
 
     audit.reset_audit_sink()
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config
 
     importlib.reload(profile_config)
@@ -199,8 +214,23 @@ def test_login_is_refused_when_oauth_is_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv("CB_ADMIN_PROFILE", "workstation")
     monkeypatch.setenv("CB_ADMIN_TRANSPORT", "stdio")
     monkeypatch.setenv("CB_ADMIN_AUDIT_FILE", str(tmp_path / "a.log"))
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config
 
     importlib.reload(profile_config)
@@ -258,6 +288,35 @@ def test_a_callback_with_an_unknown_state_is_refused(client, gui):
     session belonging to the attacker's identity."""
     response = client.get("/auth/callback?code=attacker-code&state=never-issued")
     assert response.status_code == 400
+    assert not any(
+        gui._session.SESSION_COOKIE in c for c in response.headers.getlist("Set-Cookie")
+    )
+
+
+def test_an_unknown_state_is_refused_even_when_the_cookie_agrees(client, gui):
+    """The SERVER-SIDE half of the CSRF control, which the test above no longer reaches.
+
+    `state=never-issued` fails the shape check and carries no login cookie, so once the
+    state/cookie binding was added it is refused before the store is ever consulted --
+    and mutation round 5 duly reported that deleting the store lookup was caught by
+    nothing. The fix for one control had hidden the test for another.
+
+    Here the login is started for real, so the cookie and the query state agree exactly
+    as they would for the browser that began the flow; only the server-side record is
+    gone. A state the server never issued (or already redeemed) must not be exchangeable,
+    and the store is the only thing that knows the difference.
+
+    Asserted on the outcome, not the message: the fake IdP in this module exchanges any
+    code successfully, so a build that skips the store lookup answers 302 with a session
+    cookie -- an attacker-supplied code turned into a session.
+    """
+    state = _start_login(client, gui)
+    gui._pkce_store.clear()
+    response = client.get(f"/auth/callback?code=attacker-code&state={state}")
+    assert response.status_code == 400, (
+        "a state with no server-side record was accepted; the store lookup is what "
+        "distinguishes a state this server issued from one an attacker fabricated"
+    )
     assert not any(
         gui._session.SESSION_COOKIE in c for c in response.headers.getlist("Set-Cookie")
     )

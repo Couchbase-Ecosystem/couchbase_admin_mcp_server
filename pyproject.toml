@@ -79,11 +79,27 @@ dev = [
     "starlette>=0.35",
     # tomllib is stdlib on 3.11+; tomli is the same library, used as a fallback on 3.10
     "tomli>=2.0.0 ; python_version < '3.11'",
+    # DECLARED, not inherited transitively. jsonschema, PyJWT and cryptography reached
+    # the test environment only because `mcp` happened to depend on them, and `mcp`
+    # changed: at the declared floor (mcp==1.10.0) neither pyjwt nor cryptography ships,
+    # so the suite cannot run as tested. Removing cryptography silently SKIPS two TLS
+    # tests via importorskip and errors two more files at collection -- a green run that
+    # tested less than it appeared to.
+    "jsonschema>=4.20",
+    "PyJWT[crypto]>=2.8.0",
+    "cryptography>=44.0.1",
+    "requests>=2.32.4",
+    # CI has a step named "Tests, in randomised order" which was NOT randomised,
+    # because this was never declared or installed: the two test steps were
+    # byte-identical and the order-dependence check the repo says it relies on did not
+    # exist. It found a real one immediately -- a sys.modules.pop that silently
+    # disabled six tests, two of them enterprise-profile security refusals.
+    "pytest-randomly>=3.15",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server"
-Issues = "https://github.com/Couchbase-Ecosystem/couchbase-admin-mcp-server/issues"
+Homepage = "https://github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server"
+Issues = "https://github.com/Couchbase-Ecosystem/couchbase_admin_mcp_server/issues"
 
 [project.scripts]
 couchbase-admin-mcp-server = "server:main"
@@ -187,10 +203,17 @@ packages = ["handlers", "auth", "gui"]
 # Every top-level module server.py imports. audit.py, authz.py and profile_config.py
 # were missing, so the installed console script raised ModuleNotFoundError on import
 # — the wheel had the same defect as the container image.
+#
+# dryrun.py was missing for the same reason, one module later: it was added to
+# server.py's imports without either shipping list being updated, and the two
+# test_packaging tests reporting it were read as stale rather than as the defect
+# they were. Adding a top-level module means editing THREE places — this list, the
+# Dockerfile COPY block, and nothing else works.
 "server.py" = "server.py"
 "audit.py" = "audit.py"
 "authz.py" = "authz.py"
 "deployment.py" = "deployment.py"
+"dryrun.py" = "dryrun.py"
 "logging_config.py" = "logging_config.py"
 "mcp_compat.py" = "mcp_compat.py"
 "profile_config.py" = "profile_config.py"
@@ -237,4 +260,11 @@ exclude_lines = [
     "raise NotImplementedError",
 ]
 precision = 0
+
+# A REAL gate. This whole block, plus tests/test_coverage_config.py, previously
+# constrained a measurement nothing performed: no CI job ran --cov and there was no
+# fail_under, so the exclusions were pinned while the number they shape was never
+# produced or checked. Set just under the measured 91% so ordinary churn does not
+# break the build, while a genuine drop does.
+fail_under = 89
 show_missing = true

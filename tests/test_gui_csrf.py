@@ -64,8 +64,23 @@ def gui(monkeypatch, tmp_path):
     import audit
 
     audit.reset_audit_sink()
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config
 
     importlib.reload(profile_config)
@@ -187,8 +202,23 @@ def test_an_operator_can_allowlist_another_origin(monkeypatch, tmp_path):
     monkeypatch.setenv("CB_ADMIN_PROFILE", "workstation")
     monkeypatch.setenv("CB_GUI_INSECURE_NO_AUTH", "1")
     monkeypatch.setenv("OAUTH_ENABLED", "false")
-    for name in ("profile_config", "handlers.shared", "authz", "gui.gui_server"):
-        sys.modules.pop(name, None)
+    # RELOAD in place, never sys.modules.pop.
+    # Popping rebinds these to NEW module objects, so another test file
+    # holding a reference to the old one fails on its own importlib.reload
+    # with "module not in sys.modules". That silently disabled 6 tests in
+    # test_audit_and_profile.py -- including two enterprise-profile security
+    # refusals -- whenever this file collected first. reload re-executes the
+    # module body, which is what the pop was for, without breaking identity.
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
+    # time and that side effect is what these tests assert on, so it must genuinely
+    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
+    # file holds a long-lived reference to this module object.
+    sys.modules.pop("gui.gui_server", None)
     import profile_config
 
     importlib.reload(profile_config)

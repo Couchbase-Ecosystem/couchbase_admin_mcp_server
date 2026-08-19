@@ -16,6 +16,7 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .shared import (
     admin_request,
+    arg_truthy,
     assert_index_create_ddl,
     assert_index_drop_ddl,
     block_dml_if_readonly,
@@ -212,14 +213,33 @@ def handle(name: str, args: dict) -> list[TextContent]:
             cluster, _, _ = get_sdk_connection()
             wheres = []
             params: dict = {}
+            # system:indexes names the bucket in DIFFERENT columns depending on where
+            # the index lives. For an index on a named scope/collection, bucket_id
+            # holds the bucket and keyspace_id holds the collection. For an index on
+            # the bucket's DEFAULT collection, bucket_id is MISSING and keyspace_id
+            # holds the BUCKET. Filtering on bucket_id alone therefore returned zero
+            # rows for the common `CREATE INDEX ... ON \`bucket\`` case, and reported
+            # it as a successful empty listing -- so an agent concludes no indexes
+            # exist and creates duplicates, or believes a drop already happened.
             if args.get("bucket_name"):
-                wheres.append("bucket_id = $bucket")
+                wheres.append(
+                    "(bucket_id = $bucket OR (bucket_id IS MISSING "
+                    "AND keyspace_id = $bucket))"
+                )
                 params["bucket"] = args["bucket_name"]
             if args.get("scope_name"):
                 wheres.append("scope_id = $scope")
                 params["scope"] = args["scope_name"]
             if args.get("collection_name"):
-                wheres.append("keyspace_id = $coll")
+                # `_default` is spelled as a MISSING scope_id with keyspace_id holding
+                # the bucket, so an equality test on keyspace_id can never match it.
+                if str(args["collection_name"]) == "_default":
+                    wheres.append(
+                        "(keyspace_id = $coll OR (scope_id IS MISSING "
+                        "AND collection_id IS MISSING))"
+                    )
+                else:
+                    wheres.append("keyspace_id = $coll")
                 params["coll"] = args["collection_name"]
             stmt = "SELECT * FROM system:indexes"
             if wheres:
@@ -253,7 +273,12 @@ def handle(name: str, args: dict) -> list[TextContent]:
             scope = _safe_ident(args.get("scope_name", "_default"))
             coll = _safe_ident(args.get("collection_name", "_default"))
 
-            if args.get("is_primary"):
+            # arg_truthy, not raw truthiness. These are declared booleans that
+            # nothing enforces as boolean, and the GUI/console path applies no schema
+            # validation at all, so `is_primary="false"` took this branch: it built a
+            # full PRIMARY index on a production bucket and silently discarded the
+            # `fields` the caller asked for. Same class as the fixed BUG-5.
+            if arg_truthy(args.get("is_primary")):
                 idx = _safe_ident(args.get("index_name", "#primary"))
                 stmt = f"CREATE PRIMARY INDEX {idx} ON {bucket}.{scope}.{coll}"
             else:
@@ -270,7 +295,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
             withs = []
             if args.get("num_replica") is not None:
                 withs.append(f'"num_replica": {int(args["num_replica"])}')
-            if args.get("defer_build"):
+            # `defer_build="false"` used to DEFER the build, leaving an index that
+            # never builds and never serves a query, reported as created.
+            if arg_truthy(args.get("defer_build")):
                 withs.append('"defer_build": true')
             if withs:
                 stmt += " WITH {" + ", ".join(withs) + "}"
@@ -295,7 +322,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
             bucket = _safe_ident(args["bucket_name"])
             scope = _safe_ident(args.get("scope_name", "_default"))
             coll = _safe_ident(args.get("collection_name", "_default"))
-            if args.get("is_primary"):
+            # `is_primary="false"` used to drop the bucket's PRIMARY index instead
+            # of the named one -- the opposite index destroyed, and the one the
+            # caller named still present.
+            if arg_truthy(args.get("is_primary")):
                 stmt = f"DROP PRIMARY INDEX ON {bucket}.{scope}.{coll}"
             else:
                 if not args.get("index_name"):
@@ -308,6 +338,19 @@ def handle(name: str, args: dict) -> list[TextContent]:
             bucket = _safe_ident(args["bucket_name"])
             scope = args.get("scope_name")
             coll = args.get("collection_name")
+            # Refuse a half-specified keyspace instead of silently widening it.
+            # `scope_name` without `collection_name` used to build at BUCKET level:
+            # either an "index not found" attributed to the wrong keyspace, or -- if a
+            # same-named deferred index exists in the default collection -- the WRONG
+            # index built while the requested one stayed deferred.
+            if bool(scope) != bool(coll):
+                return err(
+                    "scope_name and collection_name must be supplied together for a "
+                    "scoped BUILD INDEX; supplying one without the other would build "
+                    "against the bucket's default collection instead of the keyspace "
+                    "you named.",
+                    tool=name,
+                )
             indexes = ", ".join(_safe_ident(i) for i in args["index_names"])
             if scope and coll:
                 # CB 7+ scoped build

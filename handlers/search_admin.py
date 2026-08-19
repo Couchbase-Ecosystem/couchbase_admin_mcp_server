@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from .egress import guard_nested_host_fields
 from .shared import admin_request, admin_request_json, err, ok, quote_path
 
 TOOLS: list[Tool] = [
@@ -158,7 +159,19 @@ def handle(name: str, args: dict) -> list[TextContent]:
 
         if name == "admin_fts_index_create":
             defn = args["definition"]
+            if not isinstance(defn, dict):
+                return err(
+                    "`definition` must be a JSON object holding the full FTS index "
+                    "definition.",
+                    tool=name,
+                )
             defn.setdefault("name", args["index_name"])
+            # Egress guard on the free-form definition, matching eventing's
+            # `definition` and backup's `target`. This was the one free-form JSON sink
+            # in the admin surface with no guard, so a definition whose source
+            # parameters name an off-cluster host went to the Search service
+            # unchecked -- the same shape the other two sinks are guarded against.
+            guard_nested_host_fields(defn, tool=name, path="definition")
             ix = quote_path(args["index_name"])
             return ok(admin_request_json("PUT", f"/api/index/{ix}", payload=defn))
 

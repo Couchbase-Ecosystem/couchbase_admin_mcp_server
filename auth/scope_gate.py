@@ -211,7 +211,22 @@ def _is_read_side(tool: Any) -> bool:
     if name in _always_read:
         return True
     ann = getattr(tool, "annotations", None)
-    return bool(ann and getattr(ann, "readOnlyHint", False))
+    # mcp_compat, not getattr-with-default: the default form silently answers
+    # "not read-only" under mcp 2.x naming, so a read-scoped token would be denied
+    # every read tool the read-only filter had loaded.
+    import mcp_compat
+
+    return bool(ann and mcp_compat.is_read_only(tool))
+
+
+def is_read_side(tool: Any) -> bool:
+    """Public name for the read/write classification.
+
+    Exported because the dry-run policy needs exactly the same answer the scope gate
+    uses: a second classifier would eventually disagree with this one, and the
+    disagreement would show up as a write that a dry run executed.
+    """
+    return _is_read_side(tool)
 
 
 def _required_scope_for(tool: Any) -> str:

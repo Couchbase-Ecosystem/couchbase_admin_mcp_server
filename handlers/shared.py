@@ -26,11 +26,14 @@ All tool names from upstream are preserved unchanged. New env vars are additive.
 from __future__ import annotations
 
 import base64
+import contextlib
+import http.client
 import json
 import os
 import re
 import ssl
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -106,6 +109,29 @@ def env_truthy(key: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in TRUTHY_VALUES
+
+
+def arg_truthy(value: Any) -> bool:
+    """Coerce a TOOL ARGUMENT to a boolean with the same notion of truth as env vars.
+
+    ``env_truthy`` covers configuration; this covers the other half. A schema saying
+    ``{"type": "boolean"}`` is documentation, not enforcement -- MCP clients send
+    ``"false"``, ``"no"`` and ``0`` for boolean fields routinely, and raw Python
+    truthiness reads every non-empty string as True. So ``enabled="false"`` ENABLED
+    auto-failover on a destructive-annotated tool, which is the inverse of what the
+    caller asked for and the worst possible direction for that particular setting.
+
+    Anything unrecognised is False, deliberately: a boolean argument controls whether
+    something is switched ON, and an uninterpretable request to switch something on
+    should not switch it on.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in TRUTHY_VALUES
+    return bool(value)
 
 
 def get_env_bool(key: str, default: bool) -> bool:
@@ -212,15 +238,31 @@ def get_sdk_connection():
     # WAN profile relaxes timeouts for remote / Capella connections.
     opts.apply_profile("wan_development")
 
-    _cluster = Cluster(conn_str, opts)
-    _cluster.wait_until_ready(timedelta(seconds=10))
+    # Build into LOCALS and publish only once every step has succeeded.
+    #
+    # `_cluster` was assigned before wait_until_ready, so one transient startup
+    # failure cached a cluster that had never readied: the guard at the top of this
+    # function then returned it forever with _bucket and _collection still None,
+    # constructed no new Cluster and never retried readiness. Every SQL++ tool stayed
+    # broken for the process lifetime even after the cluster recovered, and any
+    # consumer of _collection got None.
+    cluster = Cluster(conn_str, opts)
+    try:
+        cluster.wait_until_ready(timedelta(seconds=10))
 
-    bucket_name = get_env("CB_BUCKET", "default")
-    scope_name = get_env("CB_SCOPE", "_default")
-    coll_name = get_env("CB_COLLECTION", "_default")
+        bucket_name = get_env("CB_BUCKET", "default")
+        scope_name = get_env("CB_SCOPE", "_default")
+        coll_name = get_env("CB_COLLECTION", "_default")
 
-    _bucket = _cluster.bucket(bucket_name)
-    _collection = _bucket.scope(scope_name).collection(coll_name)
+        bucket = cluster.bucket(bucket_name)
+        collection = bucket.scope(scope_name).collection(coll_name)
+    except Exception:
+        # Leave the cache empty so the next call genuinely retries.
+        with contextlib.suppress(Exception):
+            cluster.close()
+        raise
+
+    _cluster, _bucket, _collection = cluster, bucket, collection
     return _cluster, _bucket, _collection
 
 
@@ -232,10 +274,23 @@ def _admin_url() -> str:
     raw = get_env("CB_CONNECTION_STRING", "couchbase://localhost")
     # Strip scheme to get host
     host = raw.replace("couchbases://", "").replace("couchbase://", "")
-    # Drop any path or query
-    host = host.split("/")[0]
-    # Drop SDK port if user specified one
-    host = host.split(":")[0]
+    # Drop any path, query or fragment. `?` and `#` must be cut BEFORE the port
+    # split, or `couchbase://h?kv_timeout=5s` yields `http://h?kv_timeout=5s:8091`,
+    # which urllib reads as host `h`, port 80 and selector `/?kv_timeout=5s:8091/...`
+    # -- the intended path is silently discarded and every call hits `/`.
+    for separator in ("/", "?", "#"):
+        host = host.split(separator)[0]
+    # ONE host. `couchbase://n1,n2,n3` is the standard HA spelling the SDK expects,
+    # and it produced `http://n1,n2,n3:8091`, so every admin REST call failed DNS
+    # resolution while the SDK path worked -- the management API takes a single node.
+    host = host.split(",")[0].strip()
+    # Drop SDK port if user specified one. IPv6 literals are bracketed, so only strip
+    # a port when the colon is not inside brackets.
+    if host.startswith("["):
+        closing = host.find("]")
+        host = host[: closing + 1] if closing != -1 else host
+    else:
+        host = host.split(":")[0]
     is_tls = "couchbases://" in raw
     default_port = "18091" if is_tls else "8091"
     port = get_env("CB_MGMT_PORT", default_port)
@@ -369,6 +424,24 @@ def admin_request(
                 except json.JSONDecodeError:
                     # Some endpoints (e.g. /api/cfg) return text/plain
                     return {"status": "ok", "body": raw.decode(errors="replace")}
+        except (TimeoutError, ssl.SSLError, http.client.HTTPException) as exc:
+            # A timeout during resp.read() raises bare TimeoutError, which is an
+            # OSError and NOT a URLError, so it escaped the retry below entirely: no
+            # retry for an idempotent GET, no path context, and none of redact_text's
+            # masking. Connect timeouts ARE wrapped by urllib, which is why only the
+            # read side was affected. Handled here with the same method-aware policy.
+            last_error = f"{type(exc).__name__}: {exc}"
+            # Gate on the METHOD, not on _retryable(0, ...). Status 0 is in neither the
+            # unprocessed set nor the 5xx set, so _retryable returned False for every
+            # method and the retry this branch exists to provide was dead code. A
+            # timeout leaves the outcome unknown, so only idempotent methods repeat --
+            # a POST that timed out may already have been applied.
+            if attempt < _MAX_ATTEMPTS and method.upper() in _IDEMPOTENT_METHODS:
+                time.sleep(_BASE_BACKOFF * (2 ** (attempt - 1)))
+                continue
+            raise RuntimeError(
+                f"Network error on {method} {path}: {redact_text(last_error)}"
+            ) from exc
         except urllib.error.HTTPError as exc:
             body_bytes = exc.read() if hasattr(exc, "read") else b""
             try:
@@ -532,14 +605,24 @@ def is_dml_statement(stmt: str) -> bool:
     text = stmt or ""
     if not text.strip():
         return False
-    if "\ufeff" in text[:4]:  # a BOM defeats \s in the pattern
-        return True
+    # Any leading zero-width or format character defeats \s in the pattern below, not
+    # just a BOM in the first four bytes: "    \ufeffDELETE FROM b", "\u200bDELETE",
+    # "\u2060DELETE" and "\xadDELETE" all read as non-DML before this. Strip the whole
+    # class rather than probing a fixed prefix.
+    text = _strip_format_chars(text)
+    if not text.strip():
+        return False
+    stripped = _strip_sql_literals(text)
     # Opened-but-unclosed block comment: the comment-skipping group matches zero
     # times, the keyword match then fails, and a mutation reads as read-only.
-    if text.count("/*") != text.count("*/"):
+    #
+    # Counted on the LITERAL-STRIPPED text. On the raw statement an ordinary read
+    # whose string literal contains `/*` or `*/` was classified as a write, so
+    # SELECT ... WHERE c = 'a/*b' was refused as "modifies data" -- the misleading
+    # refusal _strip_sql_literals exists to prevent, for a statement pulled straight
+    # out of system:completed_requests.
+    if stripped.count("/*") != stripped.count("*/"):
         return True
-
-    stripped = _strip_sql_literals(text)
     if re.match(r"^\s*WITH\b", stripped, re.IGNORECASE):
         return bool(
             re.search(
@@ -579,10 +662,30 @@ def assert_read_only_statement(stmt: str, *, tool: str) -> str | None:
     return None
 
 
+def _strip_format_chars(text: str) -> str:
+    r"""Remove zero-width and format characters that hide a leading keyword.
+
+    Cf-category characters (BOM, ZWSP, word joiner, soft hyphen) are invisible, are
+    not matched by ``\s``, and are tolerated by lexers -- so they can sit in front of
+    DELETE and defeat a `^\s*KEYWORD` match. Removed rather than refused, because a
+    statement round-tripped through a UI legitimately picks one up.
+    """
+    return "".join(ch for ch in (text or "") if unicodedata.category(ch) != "Cf")
+
+
 def block_dml_if_readonly(stmt: str) -> str | None:
     """If read-only mode is on and stmt is DML, return an error message.
     Otherwise return None (caller proceeds)."""
-    if READ_ONLY_MODE and is_dml_statement(stmt):
+    if not READ_ONLY_MODE:
+        return None
+    # Chaining first. This function is the documented read-only gate, and it looked
+    # only at is_dml_statement -- so "SELECT 1; DELETE FROM b" passed it. Today both
+    # callers happen to run assert_index_*_ddl first, which catches the chain, but the
+    # next caller to use this alone as "the read-only gate" would get a write past it.
+    chained = assert_single_statement(stmt)
+    if chained:
+        return chained
+    if is_dml_statement(stmt):
         return (
             "Read-only mode is enabled (CB_ADMIN_READ_ONLY_MODE=true). "
             "SQL++ statements that modify data or schema are blocked. "
@@ -635,6 +738,15 @@ def assert_single_statement(stmt: str) -> str | None:
             "one statement. Remove everything after the first ';' (semicolons "
             "inside string literals and quoted identifiers are fine)."
         )
+    # Couchbase's OPTIMIZER HINT syntax is a closed block comment and is legitimate
+    # SQL++ that an operator pastes from system:completed_requests:
+    #   SELECT /*+ INDEX(t idx_a) */ * FROM `b` t WHERE a = 1
+    # The reason comments are refused is that an UNCLOSED or trailing comment silently
+    # discards the rest of a generated statement, so what executes differs from what
+    # was confirmed. A well-formed `/*+ ... */` discards nothing, so refusing it was
+    # pure over-guarding -- and it landed on cb_explain_query and cb_index_advisor,
+    # whose whole input is real workload SQL.
+    text = re.sub(r"/\*\+.*?\*/", " ", text, flags=re.DOTALL)
     if "--" in text or "/*" in text:
         return (
             "SQL++ comments are not permitted in this parameter, because a "
@@ -916,6 +1028,33 @@ def _is_sensitive_key(key: str) -> bool:
 _REDACT_MAX_DEPTH = 24
 
 
+def _redact_credential_in_value(text: str) -> str:
+    """Mask a credential embedded in a single VALUE, without touching its surroundings.
+
+    Deliberately narrower than ``redact_text``: only the two shapes that carry a secret
+    inside the value itself, so nothing that merely looks like a key/value pair is
+    rewritten.
+    """
+    masked = redact_uri_credentials(text)
+
+    def _mask_if_credential(match: re.Match) -> str:
+        token = match.group(2)
+        # A CREDENTIAL, not the next English word. This rule previously only saw error
+        # text; applied to every string leaf it rewrote ordinary prose --
+        # "Basic authentication required" became "Basic ***REDACTED*** required", and a
+        # proxy's text/plain 401 page passes through admin_request into ok(). A real
+        # bearer token is long and not purely alphabetic, so require one or the other.
+        if len(token) >= 20 or not token.isalpha():
+            return f"{match.group(1)} {REDACTED}"
+        return match.group(0)
+
+    return re.sub(
+        r"\b(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/=-]{8,})",
+        _mask_if_credential,
+        masked,
+    )
+
+
 def redact(value: Any, _depth: int = 0) -> Any:
     """Return a deep copy of ``value`` with sensitive fields masked.
 
@@ -935,7 +1074,38 @@ def redact(value: Any, _depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [redact(v, _depth + 1) for v in value]
+    # String LEAVES are masked by CONTENT as well as by key.
+    #
+    # redact() was key-based only and a documented no-op on a string, so
+    # err("boom", args={"note": "Authorization: Bearer <tok>"}) emitted the token in
+    # clear while the identical text as a top-level context value was masked.
+    #
+    # But NOT via redact_text: that is a LINE-oriented matcher built for log records,
+    # and it rewrites `key: value` pairs -- redact_text('"auth": "none"') returns
+    # '"auth": ***REDACTED***', stripping the quotes. Applied to a JSON string leaf it
+    # produced audit records that were no longer parseable JSON, which is a worse
+    # failure than the leak: an audit trail that cannot be read is not a trail. So the
+    # two value-shaped credential forms are masked directly instead.
+    if isinstance(value, str):
+        return _redact_credential_in_value(value)
     return value
+
+
+def _without_error_marker(data: Any) -> Any:
+    """Strip the refusal discriminator from a SUCCESS payload.
+
+    ERROR_MARKER is only ever written by err(), and both dispatchers classify a payload
+    carrying it as a refusal. But ok() did not remove it from the data it serialises, so
+    any handler echoing a caller-controlled top-level key could produce a successful
+    mutating call that the audit trail records as `denied_handler` -- a write that
+    happened, filed as a write that was refused. No current handler does that, which
+    makes this cheap insurance rather than a live fix.
+    """
+    if isinstance(data, dict) and ERROR_MARKER in data:
+        cleaned = dict(data)
+        cleaned.pop(ERROR_MARKER, None)
+        return cleaned
+    return data
 
 
 def ok(data: Any) -> list[TextContent]:
@@ -953,7 +1123,10 @@ def ok(data: Any) -> list[TextContent]:
     are now masked on the same rules as logs.
     """
     return [
-        TextContent(type="text", text=json.dumps(redact(data), indent=2, default=str))
+        TextContent(
+            type="text",
+            text=json.dumps(redact(_without_error_marker(data)), indent=2, default=str),
+        )
     ]
 
 
@@ -1067,8 +1240,17 @@ def _value_is_prose(value: str) -> bool:
 #: left the rest of the password in the clear — `admin:p@ssword@host` masked as
 #: `admin:***REDACTED***@ssword@host`. Over-masking a host is harmless; under-masking a
 #: password is the whole bug.
+#: The scheme length is BOUNDED, and that bound is load-bearing for CPU, not for
+#: correctness. `[a-zA-Z0-9+.\-]*://` backtracks quadratically over any long unbroken
+#: token: every position in the token is a candidate scheme start, and each one rescans
+#: to the end looking for "://". Measured 0.03s at 5KB, 0.48s at 20KB, 1.9s at 40KB,
+#: and 36.9s for a 120KB single-token argument -- inside audit.emit_tool_call, so a
+#: raw certificate passed to admin_kmip_set stalled the audit path for over half a
+#: minute (a 1MB value extrapolates to ~40 minutes). It only became reachable from
+#: ordinary arguments when redact() started masking string leaves; before that only
+#: error text reached here. No real scheme approaches 32 characters.
 _URI_CREDENTIAL_RE = re.compile(
-    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)"
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]{0,31}://)"
     r"(?P<user>[^/?#@\s:]+)"
     r":(?P<password>[^/?#\s]*)"
     r"(?=@)"
@@ -1142,6 +1324,15 @@ def redact_text(text: str) -> str:
     )
 
 
+def _redact_context_value(key: str, value: Any) -> Any:
+    """Mask a diagnostic context value by its KEY as well as its contents."""
+    if _is_sensitive_key(key):
+        return REDACTED
+    if isinstance(value, str):
+        return redact_text(value)
+    return redact(value)
+
+
 def err(msg: str, **context) -> list[TextContent]:
     """Structured error response. `context` adds diagnostic fields like
     `tool`, `args`, `hint` that help the LLM recover.
@@ -1158,7 +1349,11 @@ def err(msg: str, **context) -> list[TextContent]:
     # field back on error would put it in the response and the log.
     payload = {"error": redact_text(msg)}
     if context:
-        payload.update({k: redact(v) for k, v in context.items()})
+        # The two halves of one response must mask the same way. `redact()` recurses
+        # into containers but is a documented no-op on a bare STRING and ignores the
+        # key it arrived under, so err("boom", password="s3cret") emitted the
+        # credential in clear while the identical text inside `msg` was masked.
+        payload.update({k: _redact_context_value(k, v) for k, v in context.items()})
     # Machine-readable discriminator for the audit classifier. Reading back the
     # presence of an "error" KEY was wrong: several handlers return a SUCCESS payload
     # that carries a top-level "error" describing a sub-resource problem (a phase

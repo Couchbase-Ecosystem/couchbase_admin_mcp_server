@@ -35,6 +35,7 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .shared import (
     admin_request,
+    arg_truthy,
     err,
     get_sdk_connection,
     is_8x,
@@ -110,7 +111,10 @@ def _with_clause(
         parts.append(f'"description": {json.dumps(description)}')
     if num_replica is not None:
         parts.append(f'"num_replica": {int(num_replica)}')
-    if defer_build:
+    # arg_truthy: defer_build="false" used to DEFER, creating a vector index that is
+    # never built, so every ANN query silently returns nothing until someone runs
+    # BUILD INDEX by hand -- and the tool reported the index as created.
+    if arg_truthy(defer_build):
         parts.append('"defer_build": true')
     return " WITH {" + ", ".join(parts) + "}"
 

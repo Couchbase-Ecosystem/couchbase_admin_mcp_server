@@ -264,6 +264,31 @@ def _refresh_budget_available(now: float) -> bool:
 REQUIRED_CLAIM_NAMES: tuple[str, ...] = ("exp", "iss", "sub")
 
 
+#: Kids that have successfully resolved, per JWKS URI. Deliberately ours rather than
+#: PyJWT's: PyJWT's cache has a lifespan, and an EXPIRED cache is what turned the
+#: unknown-kid gate into an amplifier. A kid that once existed is evidence enough that
+#: a token bearing it is not the invented-kid abuse this gate is aimed at, and being
+#: wrong here costs one extra fetch, not a security property.
+_resolved_kids: dict[str, set[str]] = {}
+
+#: Bound on the record, so a rotating IdP cannot grow it without limit.
+_MAX_RESOLVED_KIDS = 64
+
+
+def _jwks_uri_of(jwks_client: Any) -> str:
+    return str(getattr(jwks_client, "uri", "") or "")
+
+
+def _remember_resolved_kid(jwks_uri: str, kid: str | None) -> None:
+    if not kid:
+        return
+    with _throttle_lock:
+        known = _resolved_kids.setdefault(jwks_uri, set())
+        if len(known) >= _MAX_RESOLVED_KIDS:
+            known.clear()
+        known.add(kid)
+
+
 def _kid_of(token: str) -> str | None:
     try:
         return jwt.get_unverified_header(token).get("kid")
@@ -279,7 +304,40 @@ def _kid_is_known(jwks_client: Any, kid: str | None) -> bool:
     """
     if not kid:
         return False
+    # Read the CACHE OBJECT, not get_signing_keys(refresh=False).
+    #
+    # PyJWT resolves that call by FETCHING whenever the cached key set is absent or
+    # past its lifespan -- so the gate consumed the outbound request it exists to
+    # budget, before the budget was consulted. Measured: 50 requests carrying the same
+    # unknown kid produced 51 outbound JWKS fetches despite the per-kid memo refusing
+    # 49 of them, and 30 unknown-kid requests against an expired cache produced 40
+    # fetches with the budget set to 10. That is 1:1 amplification against the
+    # customer's IdP, worst exactly when the IdP is already unhealthy, and each fetch
+    # also ties up a default-executor worker for PyJWT's timeout.
+    # 1. Our OWN record of kids that have resolved before. Checked first because it
+    #    is the only source that cannot cause a network call and cannot expire.
+    if kid in _resolved_kids.get(_jwks_uri_of(jwks_client), ()):
+        return True
     try:
+        # 2. PyJWT's cached key set, read directly. get_signing_keys(refresh=False)
+        #    was used here, and PyJWT resolves that by FETCHING whenever the cache is
+        #    absent or past its lifespan -- so the gate consumed the outbound request
+        #    it exists to budget, before the budget was consulted. Measured: 50
+        #    requests with one unknown kid produced 51 fetches, and 30 unknown-kid
+        #    requests against an expired cache produced 40 fetches against a budget of
+        #    10. That is 1:1 amplification against the customer's IdP, worst exactly
+        #    when the IdP is already unhealthy.
+        cache = getattr(jwks_client, "jwk_set_cache", None)
+        jwk_set = cache.get() if cache is not None else None
+        if jwk_set is not None:
+            for key in getattr(jwk_set, "keys", []) or []:
+                if getattr(key, "key_id", None) == kid:
+                    return True
+            return False
+        # 3. Cold start only: nothing cached and nothing ever resolved for this URI, so
+        #    there is no way to answer without one fetch -- and that fetch is the one
+        #    a first legitimate request needs anyway. Once anything resolves, step 1
+        #    answers forever and the gate stops fetching.
         for key in jwks_client.get_signing_keys(refresh=False):
             if getattr(key, "key_id", None) == kid:
                 return True
@@ -364,6 +422,7 @@ def reset_jwks_throttle() -> None:
     with _throttle_lock:
         _unknown_kids.clear()
         _refresh_times.clear()
+        _resolved_kids.clear()
 
 
 def _forget_unknown_kid(token: str, jwks_uri: str) -> None:
@@ -375,8 +434,27 @@ def _forget_unknown_kid(token: str, jwks_uri: str) -> None:
     """
     kid = _kid_of(token)
     if kid:
+        _remember_resolved_kid(jwks_uri, kid)
         with _throttle_lock:
             _unknown_kids.pop(f"{jwks_uri}|{kid}", None)
+            # DELIBERATELY does not refund the budget slot this fetch consumed.
+            #
+            # Refunding on success looks fair and is not: a caller holding any token
+            # whose kid resolves could interleave one such request per invented kid
+            # and hold the budget permanently open, restoring the IdP amplification
+            # the budget exists to prevent.
+            # test_forgetting_a_kid_does_not_reset_the_whole_budget pins this, and it
+            # is correct to.
+            #
+            # ACCEPTED LIMITATION: the budget is global, so unauthenticated traffic
+            # carrying invented kids can exhaust it and, until the window rolls, a
+            # correctly-signed token for a newly rotated key is refused. Of the two
+            # failure modes -- throttled authentication for up to
+            # CB_ADMIN_JWKS_REFRESH_BUDGET's window, versus unbounded amplification
+            # against the customer's IdP -- this is the safer one, and the window and
+            # size are both operator-tunable. A per-client budget would be strictly
+            # better but needs the request's identity, which this layer does not have;
+            # it is the right fix if this ever bites in practice.
 
 
 def validate_token(token: str) -> dict[str, Any]:
@@ -501,6 +579,21 @@ def validate_token(token: str) -> dict[str, Any]:
         audience=audience,
         **decode_opts,
     )
+    # PyJWT's `require` checks PRESENCE only, so `sub: ""` satisfied it. That
+    # produced exactly the unattributable admin action the requirement exists to
+    # prevent: scope_gate.principal_of() does `claims.get("sub") or ...`, which reads
+    # "" as absent and returns principal None with automation True, and the audit
+    # record then carries `"principal": null` for an unattended privileged write --
+    # with no os_user fallback on the OAuth path. A required claim has to be
+    # non-empty to mean anything.
+    for claim in REQUIRED_CLAIM_NAMES:
+        value = claims.get(claim)
+        if isinstance(value, str) and not value.strip():
+            raise jwt.InvalidTokenError(
+                f"token claim {claim!r} is present but empty; it cannot identify "
+                "the principal or the issuer, and an audit record without a "
+                "principal cannot answer who performed an unattended write"
+            )
     return claims
 
 

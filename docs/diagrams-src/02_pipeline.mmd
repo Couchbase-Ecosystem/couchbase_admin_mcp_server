@@ -1,0 +1,20 @@
+sequenceDiagram
+  participant C as Client
+  participant T as Transport + scope gate
+  participant AZ as authz.evaluate
+  participant H as Handler + egress guard
+  participant X as Cluster / Capella
+  C->>T: tools/call
+  T->>T: resolve claims, check required scope
+  T-->>C: denied_scope
+  T->>AZ: evaluate(tool, args, human_present)
+  Note over AZ: 1 hard ceiling - first, unconditional<br/>2 read-only mode<br/>3 confirm:true OR automation scope
+  AZ-->>C: denied_ceiling | denied_read_only | denied_confirmation
+  AZ->>H: allowed - control fields stripped
+  Note over H: dry run? preview, no IO
+  H->>H: egress guard on any caller destination
+  H-->>C: EgressDenied
+  H->>X: REST / v4 / SDK call
+  X-->>H: response
+  H-->>C: ok() redacted | err() redacted
+  Note over C,X: one audit record emitted per decision,<br/>whatever the decision was

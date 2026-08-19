@@ -162,18 +162,28 @@ TOOLS: list[Tool] = [
         name="admin_internal_settings_set",
         description=(
             "Update internal cluster settings. ADVANCED USE ONLY — misconfiguration "
-            "can wedge a cluster. Requires confirm:true."
+            "can wedge a cluster. Requires confirm:true. Pass every tunable inside "
+            'the `settings` object, e.g. {"settings": {"maxParallelIndexers": 4}}.'
         ),
+        # `settings` is the ONLY accepted argument, and it is now declared. The schema
+        # previously advertised five individual tunables that the handler refuses,
+        # while requiring a `settings` object it never declared -- so the tool was
+        # uncallable by any model that trusted its own schema.
         inputSchema={
             "type": "object",
             "properties": {
-                "indexAwareRebalanceDisabled": {"type": "boolean"},
-                "rebalanceIgnoreViewCompactions": {"type": "boolean"},
-                "rebalanceIndexWaitingDisabled": {"type": "boolean"},
-                "maxParallelIndexers": {"type": "integer"},
-                "maxParallelReplicaIndexers": {"type": "integer"},
+                "settings": {
+                    "type": "object",
+                    "description": (
+                        "Tunables to change, as name/value pairs. Named explicitly "
+                        "rather than spread across the argument list so the change is "
+                        "reviewable in the audit record. /internalSettings is an "
+                        "undocumented surface: only set what you can cite."
+                    ),
+                },
                 "confirm": {"type": "boolean"},
             },
+            "required": ["settings"],
         },
         annotations=ToolAnnotations(
             readOnlyHint=False,
@@ -241,7 +251,11 @@ def handle(name: str, args: dict) -> list[TextContent]:
         if name == "admin_stats_single":
             m = quote_path(args["metric_name"])
             params: dict = {}
-            for k in ("start", "end", "step"):
+            # `bucket` (and scope/collection where declared) are documented label
+            # filters and were silently dropped, so a caller asking for one bucket's
+            # metric got the cluster-wide value and was told it was that bucket's --
+            # a wrong answer rather than a missing one.
+            for k in ("start", "end", "step", "bucket", "scope", "collection"):
                 if args.get(k) is not None:
                     params[k] = args[k]
             return ok(
@@ -260,11 +274,18 @@ def handle(name: str, args: dict) -> list[TextContent]:
             )
 
         if name == "admin_system_events":
-            limit = args.get("limit", 50)
-            result = admin_request("GET", "/events")
-            if isinstance(result, list):
-                result = result[:limit]
-            return ok(result)
+            # The endpoint takes its own `limit` query parameter and defaults to
+            # 250. It was never sent, and the `result[:limit]` slice below was dead
+            # code because /events answers with an OBJECT ({"events": [...]}), not an
+            # array -- so every call dumped 250 events into the model's context. A
+            # non-positive limit is clamped rather than honoured: limit=0 returned
+            # nothing and limit=-3 silently dropped the last three.
+            try:
+                limit = int(args.get("limit", 50))
+            except (TypeError, ValueError):
+                limit = 50
+            limit = max(1, limit)
+            return ok(admin_request("GET", "/events", params={"limit": limit}))
 
         if name == "admin_node_self_info":
             return ok(admin_request("GET", "/nodes/self"))
@@ -277,6 +298,11 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # not document as customer-facing, so the caller must name each key
             # deliberately via `settings` rather than having the whole argument
             # dict forwarded.
+            # The schema used to declare five individual tunables that this handler
+            # refuses, and required a `settings` object it did not declare -- so a
+            # model reading the advertised schema could never call the tool
+            # successfully and could only discover `settings` from this error text.
+            # The schema now declares `settings` and nothing else.
             explicit = args.get("settings")
             if not isinstance(explicit, dict) or not explicit:
                 return err(

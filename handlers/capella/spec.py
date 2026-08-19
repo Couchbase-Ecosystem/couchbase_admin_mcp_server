@@ -248,6 +248,13 @@ _ID_DESCRIPTIONS: dict[str, str] = {
     ),
     "allowed_cidr_id": "Allowlist entry UUID.",
     "admin_user_id": "App Service admin user UUID.",
+    "backup_id": "Managed backup UUID. See capella_backups_list.",
+    "function_name": "Eventing function name (a name, not a UUID).",
+    "replication_id": (
+        "XDCR replication UUID. See capella_replications_list. NOTE these are "
+        "DELETED when a cluster is turned off — capture before park, replay on "
+        "resume."
+    ),
 }
 
 _PAGE_QUERY: tuple[str, ...] = ("sortBy", "sortDirection")
@@ -561,6 +568,17 @@ OPS: tuple[Op, ...] = (
             "description": {"type": "string"},
             "serviceGroups": {"type": "array", "items": {"type": "object"}},
             "support": {"type": "object"},
+            "enableDataApi": {
+                "type": "boolean",
+                "description": (
+                    "Enable the per-cluster Data API endpoint at "
+                    "https://{clusterId}.data.cloud.couchbase.com. Off by "
+                    "default. Required before capella_fixture_export or "
+                    "_import, which reach the query and FTS services through "
+                    "its passthrough routes. Uses a CLUSTER ACCESS credential "
+                    "and HTTP Basic, not the organization API key."
+                ),
+            },
         },
         guarded=True,
     ),
@@ -814,7 +832,7 @@ OPS: tuple[Op, ...] = (
             "Create a database credential for the app under test. If password is "
             "omitted Capella generates one and returns it in this response ONLY "
             "— it cannot be retrieved later. This server redacts it from logs and "
-            "from the tool result; use capella_env_connection_info, which returns "
+            "from the tool result; use capella_env_ensure, which returns "
             "it once, deliberately, at the point of use. [TF database_credential.go]"
         ),
         group="credentials",

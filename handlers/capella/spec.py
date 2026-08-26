@@ -249,6 +249,11 @@ _ID_DESCRIPTIONS: dict[str, str] = {
     "allowed_cidr_id": "Allowlist entry UUID.",
     "admin_user_id": "App Service admin user UUID.",
     "backup_id": "Managed backup UUID. See capella_backups_list.",
+    "event_id": "Event UUID. See capella_events_list or capella_project_events_list.",
+    "export_id": "Audit-log export job UUID. Returned by the export-create call.",
+    "alert_integration_id": (
+        "Alert integration UUID. See capella_alert_integrations_list."
+    ),
     "function_name": "Eventing function name (a name, not a UUID).",
     "replication_id": (
         "XDCR replication UUID. See capella_replications_list. NOTE these are "

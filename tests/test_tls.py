@@ -207,7 +207,7 @@ def certs(tmp_path_factory):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
     d = tmp_path_factory.mktemp("tls")
 
@@ -225,18 +225,65 @@ def certs(tmp_path_factory):
             .not_valid_after(now + datetime.timedelta(days=30))
         )
         if is_ca:
+            # KeyUsage is REQUIRED on a CA by RFC 5280 4.2.1.3, and OpenSSL 3.5 --
+            # the version behind CPython 3.13 and 3.14 on the CI runners -- rejects a
+            # chain without it: "CA cert does not include key usage extension". The
+            # same refusal is reproducible on older OpenSSL with
+            # `openssl verify -x509_strict`, which is how this was settled rather than
+            # by adding one extension per CI run.
             builder = builder.add_extension(
                 x509.BasicConstraints(ca=True, path_length=None), critical=True
+            ).add_extension(
+                x509.KeyUsage(
+                    digital_signature=False,
+                    content_commitment=False,
+                    key_encipherment=False,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=True,
+                    crl_sign=True,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
             )
         else:
-            builder = builder.add_extension(
-                x509.SubjectAlternativeName(
-                    [
-                        x509.DNSName("localhost"),
-                        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-                    ]
-                ),
-                critical=False,
+            # Both EKUs on every leaf: this fixture issues the server certificate and
+            # the mTLS client certificate from the same builder, and a verifier that
+            # checks purpose wants serverAuth on one and clientAuth on the other.
+            builder = (
+                builder.add_extension(
+                    x509.SubjectAlternativeName(
+                        [
+                            x509.DNSName("localhost"),
+                            x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                        ]
+                    ),
+                    critical=False,
+                )
+                .add_extension(
+                    x509.KeyUsage(
+                        digital_signature=True,
+                        content_commitment=False,
+                        key_encipherment=True,
+                        data_encipherment=False,
+                        key_agreement=False,
+                        key_cert_sign=False,
+                        crl_sign=False,
+                        encipher_only=False,
+                        decipher_only=False,
+                    ),
+                    critical=True,
+                )
+                .add_extension(
+                    x509.ExtendedKeyUsage(
+                        [
+                            ExtendedKeyUsageOID.SERVER_AUTH,
+                            ExtendedKeyUsageOID.CLIENT_AUTH,
+                        ]
+                    ),
+                    critical=False,
+                )
             )
 
         # Key identifiers, and they are NOT decoration.
@@ -388,3 +435,88 @@ def test_mutual_tls_refuses_a_client_with_no_certificate(certs):
     finally:
         proc.terminate()
         proc.communicate(timeout=15)
+
+
+def test_the_fixture_certificates_are_rfc5280_conformant(certs):
+    """Pin the certificate SHAPE, not just "the handshake worked here".
+
+    This is the fourth extension this fixture has needed and the third CI run spent
+    discovering one: certificates built without key identifiers, then without KeyUsage,
+    verified fine on older OpenSSL and were refused by OpenSSL 3.5 behind CPython 3.13
+    and 3.14. "The tests pass on this machine" is not evidence, because the local
+    OpenSSL may not enforce what the runner's does.
+
+    So assert the structure directly. A developer on a lenient OpenSSL who drops one of
+    these fails HERE, with the reason named, rather than in a TLS handshake three
+    Python versions away.
+    """
+    pytest.importorskip("cryptography")
+    from cryptography import x509
+    from cryptography.x509.oid import ExtendedKeyUsageOID
+
+    def load(stem):
+        return x509.load_pem_x509_certificate((certs / f"{stem}.crt").read_bytes())
+
+    ca = load("ca")
+    ca_bc = ca.extensions.get_extension_for_class(x509.BasicConstraints).value
+    assert ca_bc.ca is True, "the CA certificate does not assert BasicConstraints CA"
+    ca_ku = ca.extensions.get_extension_for_class(x509.KeyUsage).value
+    assert ca_ku.key_cert_sign, (
+        "the CA has no keyCertSign: RFC 5280 4.2.1.3 requires KeyUsage on a CA, and "
+        "OpenSSL 3.5 refuses the chain with 'CA cert does not include key usage "
+        "extension'"
+    )
+    ca_ski = ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+
+    for stem in ("server", "client"):
+        leaf = load(stem)
+        leaf_aki = leaf.extensions.get_extension_for_class(
+            x509.AuthorityKeyIdentifier
+        ).value
+        assert leaf_aki.key_identifier == ca_ski.digest, (
+            f"{stem}.crt's AuthorityKeyIdentifier does not match the CA's "
+            "SubjectKeyIdentifier, so the chain is not linkable by key identifier"
+        )
+        leaf_ku = leaf.extensions.get_extension_for_class(x509.KeyUsage).value
+        assert leaf_ku.digital_signature and not leaf_ku.key_cert_sign, (
+            f"{stem}.crt has the wrong KeyUsage for an end-entity certificate"
+        )
+        leaf_eku = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        assert ExtendedKeyUsageOID.SERVER_AUTH in leaf_eku
+        assert ExtendedKeyUsageOID.CLIENT_AUTH in leaf_eku
+
+
+def test_the_fixture_chain_passes_strict_verification_where_openssl_exists(certs):
+    """The same check an OpenSSL 3.5 client performs, run against the real fixture.
+
+    `-x509_strict` enables the RFC 5280 conformance checks that OpenSSL 3.5 applies by
+    DEFAULT, so it reproduces the runner's refusal on an older local OpenSSL. Skipped
+    where the binary is absent; the structural test above does not depend on it.
+    """
+    import shutil
+    import subprocess
+
+    openssl = shutil.which("openssl")
+    if openssl is None:  # pragma: no cover - depends on the host
+        pytest.skip("openssl is not available")
+
+    for stem, purpose in (("server", "sslserver"), ("client", "sslclient")):
+        result = subprocess.run(
+            [
+                openssl,
+                "verify",
+                "-x509_strict",
+                "-purpose",
+                purpose,
+                "-CAfile",
+                str(certs / "ca.crt"),
+                str(certs / f"{stem}.crt"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"{stem}.crt failed strict verification as {purpose}:\n"
+            f"{result.stdout}{result.stderr}"
+        )

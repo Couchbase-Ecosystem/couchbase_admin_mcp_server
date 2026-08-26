@@ -300,7 +300,13 @@ _CEILING_UNKNOWN: set[str] = _AUTOMATION_HARD_CEILING - {t.name for t in _RAW_TO
 
 #: This server's version, mirrored from pyproject.toml. tests/test_packaging.py asserts
 #: the two agree, so the mirror cannot drift silently.
-__version__ = "0.1.0"
+#:
+#: 1.0.0 rather than 0.x: the tool surface is stable, the security model is
+#: documented and measured, and it is published. A 0.x number on a server that
+#: administers production infrastructure understates what a reader is being asked to
+#: trust, and 0.x also licenses breaking changes that this tool should not be making
+#: casually -- every tool name here is a published interface.
+__version__ = "1.0.0"
 
 
 def _server_version() -> str:

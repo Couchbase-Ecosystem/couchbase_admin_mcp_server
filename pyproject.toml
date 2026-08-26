@@ -1,6 +1,6 @@
 [project]
 name = "couchbase-admin-mcp-server"
-version = "0.1.0"
+version = "1.0.0"
 description = "Couchbase Admin MCP Server — cluster administration and operations as MCP tools, for self-managed Couchbase Server and Couchbase Capella"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"

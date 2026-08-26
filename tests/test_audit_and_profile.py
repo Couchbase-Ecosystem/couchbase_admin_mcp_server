@@ -401,3 +401,68 @@ def test_an_unknown_encryption_tool_is_refused(monkeypatch):
     monkeypatch.setattr(encryption, "admin_request", lambda *a, **k: {}, raising=False)
     body = json.loads(encryption.handle("admin_not_a_real_tool", {})[0].text)
     assert body[ERROR_MARKER] is True
+
+
+def test_a_later_audit_file_is_honoured_after_an_earlier_emit(tmp_path, monkeypatch):
+    """The sink memo must be keyed on the PATH, not on "have we looked before".
+
+    Found by the randomised-order CI run, not by file order: an emit with
+    CB_ADMIN_AUDIT_FILE unset memoised "no sink", and because the memo recorded no
+    path, a CB_ADMIN_AUDIT_FILE set afterwards was never read. audit_sink_error() then
+    reported a perfectly writable file as unusable -- and both _enforce_gui_posture()
+    and server._enforce_profile() treat that as fatal, so the process refused to start
+    over a sink that was fine.
+
+    Not test-only: profile_config applies the enterprise profile's env defaults at
+    IMPORT time, so whether the variable is set before or after the first audit emit is
+    decided by import order.
+    """
+    import audit
+
+    monkeypatch.delenv("CB_ADMIN_AUDIT_FILE", raising=False)
+    audit.reset_audit_sink()
+    try:
+        # An audit record with no dedicated sink configured. This is what sets the memo.
+        audit.emit({"ts": "t", "event": "probe", "decision": "allowed"})
+        assert audit.audit_sink_error() is None, "no sink requested, so no error"
+
+        # Now configure one, in a directory that exists and is writable.
+        target = tmp_path / "audit.log"
+        monkeypatch.setenv("CB_ADMIN_AUDIT_FILE", str(target))
+        assert audit.audit_sink_error() is None, (
+            "a writable audit file was reported unusable because the memo from the "
+            "earlier emit was never invalidated; this refusal is fatal at startup"
+        )
+
+        # And it is genuinely attached, not merely un-refused.
+        audit.emit({"ts": "t", "event": "probe2", "decision": "allowed"})
+        assert target.exists() and "probe2" in target.read_text(encoding="utf-8"), (
+            "the sink reported itself usable but wrote nothing"
+        )
+    finally:
+        audit.reset_audit_sink()
+
+
+def test_switching_the_audit_file_does_not_keep_writing_to_the_old_one(
+    tmp_path, monkeypatch
+):
+    """The other half: rebuilding on a path change must release the previous handler
+    and start writing to the new file, or a reconfigure silently keeps appending to a
+    file nobody is reading any more."""
+    import audit
+
+    first, second = tmp_path / "one.log", tmp_path / "two.log"
+    audit.reset_audit_sink()
+    try:
+        monkeypatch.setenv("CB_ADMIN_AUDIT_FILE", str(first))
+        audit.emit({"ts": "t", "event": "to_first", "decision": "allowed"})
+        monkeypatch.setenv("CB_ADMIN_AUDIT_FILE", str(second))
+        audit.emit({"ts": "t", "event": "to_second", "decision": "allowed"})
+
+        assert "to_first" in first.read_text(encoding="utf-8")
+        assert "to_second" in second.read_text(encoding="utf-8")
+        assert "to_second" not in first.read_text(encoding="utf-8"), (
+            "records kept going to the previous audit file after it was reconfigured"
+        )
+    finally:
+        audit.reset_audit_sink()

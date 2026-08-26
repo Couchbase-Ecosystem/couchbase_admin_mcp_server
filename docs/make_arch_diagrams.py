@@ -593,11 +593,36 @@ def reference_architecture():
     # five of them fit. Set on one line, "COUCHBASE MCP SERVER" alone drove the whole row down to
     # roughly 4pt on the printed page. Narrow cells buy back the font size.
     components = [
-        ("ADMIN\nMCP SERVER", "clusters, buckets,\nusers, allowlists\nlifecycle", ADMIN, False),
-        ("COUCHBASE\nMCP SERVER", "KV and SQL++,\nschema, health,\nqueries", CRUD, False),
-        ("AGENT\nMEMORY", "state across\nsessions: user /\nsession / block", AIDP, True),
-        ("AGENT\nCATALOG", "tool and prompt\ndefinitions, pinned\nby git commit", AIDP, True),
-        ("AGENT\nTRACER", "spans for every\ntool call, LLM call\nand hand-off", AIDP, True),
+        (
+            "ADMIN\nMCP SERVER",
+            "clusters, buckets,\nusers, allowlists\nlifecycle",
+            ADMIN,
+            False,
+        ),
+        (
+            "COUCHBASE\nMCP SERVER",
+            "KV and SQL++,\nschema, health,\nqueries",
+            CRUD,
+            False,
+        ),
+        (
+            "AGENT\nMEMORY",
+            "state across\nsessions: user /\nsession / block",
+            AIDP,
+            True,
+        ),
+        (
+            "AGENT\nCATALOG",
+            "tool and prompt\ndefinitions, pinned\nby git commit",
+            AIDP,
+            True,
+        ),
+        (
+            "AGENT\nTRACER",
+            "spans for every\ntool call, LLM call\nand hand-off",
+            AIDP,
+            True,
+        ),
     ]
     cells = [(h, b, s) for h, b, s, _ in components]
     _, _, comp_h = row(

@@ -91,6 +91,11 @@ _log.setLevel(logging.INFO)
 _AUDIT_FILE_HANDLER: Any = None
 _AUDIT_SINK_READY = False
 
+#: The path the memo above was built FOR. Without it the memo is keyed on nothing:
+#: `_AUDIT_SINK_READY` alone means "we have already looked", so the first look wins
+#: forever and a later CB_ADMIN_AUDIT_FILE is never read. See _audit_file_logger.
+_AUDIT_SINK_PATH: str | None = None
+
 
 class AuditSinkUnavailableError(RuntimeError):
     """The configured durable audit sink could not be opened."""
@@ -129,12 +134,40 @@ def _audit_file_logger():
     rotation, and a refusal to write through a symlink — the audit file is the single
     most attractive target for `ln -sf /dev/null`.
     """
-    global _AUDIT_FILE_HANDLER, _AUDIT_SINK_READY
-    if _AUDIT_SINK_READY:
+    global _AUDIT_FILE_HANDLER, _AUDIT_SINK_READY, _AUDIT_SINK_PATH
+
+    # The memo is keyed on the RESOLVED PATH, not on "have we looked before".
+    #
+    # It used to short-circuit on _AUDIT_SINK_READY alone, without recording which
+    # path it had been built for, so the first call decided the answer permanently:
+    #
+    #   1. anything touches the audit path with CB_ADMIN_AUDIT_FILE unset
+    #      -> _AUDIT_SINK_READY = True, handler = None, returns None
+    #   2. CB_ADMIN_AUDIT_FILE is then set to a perfectly writable file
+    #      -> the memo returns None without ever looking at it, so
+    #         audit_sink_error() reports the new path as unusable
+    #
+    # In this server that is a startup refusal: _enforce_gui_posture() and
+    # server._enforce_profile() both treat a requested-but-unusable audit sink as
+    # fatal, correctly. So a process that reads the variable after first touching
+    # audit -- profile_config applies the profile's env defaults at IMPORT time, and
+    # import order decides who is first -- refuses to start over a sink that is fine.
+    # A full-suite run in randomised order found it; file order never did.
+    path = (os.environ.get("CB_ADMIN_AUDIT_FILE") or "").strip()
+    if _AUDIT_SINK_READY and path == _AUDIT_SINK_PATH:
         return _AUDIT_FILE_HANDLER
 
+    # The path changed. Close whatever the previous path left open rather than
+    # leaking a file handle per reconfigure.
+    if _AUDIT_FILE_HANDLER is not None:
+        for stale in list(_AUDIT_FILE_HANDLER.handlers):
+            with contextlib.suppress(Exception):
+                stale.close()
+        _AUDIT_FILE_HANDLER.handlers = []
+        _AUDIT_FILE_HANDLER = None
+
     _AUDIT_SINK_READY = True
-    path = (os.environ.get("CB_ADMIN_AUDIT_FILE") or "").strip()
+    _AUDIT_SINK_PATH = path
     if not path:
         return None
 
@@ -182,7 +215,7 @@ def _audit_file_logger():
 
 def reset_audit_sink() -> None:
     """Drop the memoised sink so a test (or a reconfigure) re-reads the env."""
-    global _AUDIT_FILE_HANDLER, _AUDIT_SINK_READY
+    global _AUDIT_FILE_HANDLER, _AUDIT_SINK_READY, _AUDIT_SINK_PATH
     if _AUDIT_FILE_HANDLER is not None:
         for handler in list(_AUDIT_FILE_HANDLER.handlers):
             with contextlib.suppress(Exception):
@@ -190,6 +223,7 @@ def reset_audit_sink() -> None:
         _AUDIT_FILE_HANDLER.handlers = []
     _AUDIT_FILE_HANDLER = None
     _AUDIT_SINK_READY = False
+    _AUDIT_SINK_PATH = None
 
 
 #: Cap on the caller-supplied correlation id. It is untrusted text that lands in

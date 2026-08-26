@@ -94,6 +94,19 @@ def get_env(key: str, default: Any = _REQUIRED) -> str | None:
     return val
 
 
+#: Upper bound on optimizer-hint blocks in one statement. Real queries carry one or
+#: two; a large count only appears in an input built to make the matcher backtrack.
+_MAX_HINT_BLOCKS = 32
+
+#: Upper bound on a caller-supplied SQL++ statement. Generous for a real query and far
+#: below where the guards' worst-case cost becomes a denial of service.
+_MAX_STATEMENT_CHARS = 16384
+
+#: Upper bound on the text redaction will SCAN. Above it the value is truncated
+#: unscanned: the patterns are super-linear, the input can be caller- or
+#: cluster-controlled, and this runs on the event-loop thread inside err().
+_REDACT_MAX_TEXT = 4096
+
 #: The single accepted spelling set for boolean environment variables.
 #:
 #: Five call sites accepted "on" and one did not, so CB_ADMIN_HTTP_REQUIRE_AUTH=on
@@ -724,6 +737,20 @@ def assert_single_statement(stmt: str) -> str | None:
     index's dimension and similarity), so what executes differs from what the
     operator confirmed.
     """
+    # Length cap FIRST. Nothing downstream of here is linear -- the literal lexer, the
+    # comment-balance count and the hint strip below are all super-linear in the worst
+    # case, and `statement` is caller-supplied. A 200KB statement made of unclosed `/*+`
+    # openers took 60 seconds in the hint strip alone. No legitimate statement this
+    # server is asked to guard is 64KB.
+    if len(stmt or "") > _MAX_STATEMENT_CHARS:
+        return (
+            f"Statement is {len(stmt)} characters, over the "
+            f"{_MAX_STATEMENT_CHARS}-character limit this parameter accepts. Refusing "
+            "rather than parsing it: the chaining and comment checks are super-linear "
+            "in the input, so scanning an oversized statement is a denial of service "
+            "against this server. Send the statement that actually needs running."
+        )
+
     text, unterminated = _lex_sql_literals(stmt or "")
     if unterminated:
         return (
@@ -746,7 +773,19 @@ def assert_single_statement(stmt: str) -> str | None:
     # was confirmed. A well-formed `/*+ ... */` discards nothing, so refusing it was
     # pure over-guarding -- and it landed on cb_explain_query and cb_index_advisor,
     # whose whole input is real workload SQL.
-    text = re.sub(r"/\*\+.*?\*/", " ", text, flags=re.DOTALL)
+    # Bound the strip ITSELF, not just the input length. `/\*\+.*?\*/` scans forward for
+    # a closing `*/` once per opener, so N unclosed `/*+` cost O(N x len) -- 40KB of
+    # them took 2.4s even under the length cap. A real statement has one or two hints.
+    hint_openers = text.count("/*+")
+    if hint_openers > _MAX_HINT_BLOCKS:
+        return (
+            f"Statement contains {hint_openers} `/*+` optimizer-hint openers, over the "
+            f"limit of {_MAX_HINT_BLOCKS}. Refusing rather than parsing it: matching "
+            "each opener to its close is quadratic when they are unclosed, so this is "
+            "a denial of service against this server rather than a query."
+        )
+    if hint_openers and "*/" in text:
+        text = re.sub(r"/\*\+.*?\*/", " ", text, flags=re.DOTALL)
     if "--" in text or "/*" in text:
         return (
             "SQL++ comments are not permitted in this parameter, because a "
@@ -1035,7 +1074,19 @@ def _redact_credential_in_value(text: str) -> str:
     inside the value itself, so nothing that merely looks like a key/value pair is
     rewritten.
     """
-    masked = redact_uri_credentials(text)
+    # Full key/value masking on the leaf as well, not just URIs and auth schemes.
+    #
+    # A credential embedded as free text under a HARMLESS key is a real shape, not a
+    # hypothetical: admin_eventing_get returns an Eventing function's own source, and
+    # `var x = { "password": "s3cret" }` inside `appcode` was written to the audit log
+    # and returned to the model in the clear. admin_eventing_get is annotated read-only,
+    # so it loads in the safest profile.
+    #
+    # Safe to use redact_text here because this operates on a LEAF value, not on a
+    # serialized record: json.dumps quotes and escapes whatever comes back, so the
+    # audit line stays valid JSON. An earlier attempt applied it at the wrong layer and
+    # produced unparseable records, which is why this note exists.
+    masked = redact_text(text)
 
     def _mask_if_credential(match: re.Match) -> str:
         token = match.group(2)
@@ -1048,10 +1099,15 @@ def _redact_credential_in_value(text: str) -> str:
             return f"{match.group(1)} {REDACTED}"
         return match.group(0)
 
+    # IGNORECASE, matching the byte-identical pattern in redact_text below. Without it a
+    # lowercase `bearer <jwt>` -- the spelling that appears in an Eventing function's
+    # own source, which admin_eventing_get returns and which is a READ-ONLY tool loaded
+    # in the safest profile -- was returned to the model in the clear.
     return re.sub(
         r"\b(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/=-]{8,})",
         _mask_if_credential,
         masked,
+        flags=re.IGNORECASE,
     )
 
 
@@ -1291,9 +1347,31 @@ def redact_text(text: str) -> str:
     # couchbase://admin:pw@host" is the single most likely place this leaks.
     text = redact_uri_credentials(text)
 
+    # A single oversized token is refused work rather than scanned.
+    #
+    # The key group below is a bounded-but-still-costly pattern, and the value it
+    # guards can be caller-controlled: `err()` runs this over the message AND the
+    # `tool=` context, so an MCP client sending a 20 000-character TOOL NAME -- which
+    # needs no authentication, since an unknown name is refused after this runs --
+    # stalled the event-loop thread for 25 seconds and every other client with it.
+    # A cluster error body reaches the same path through each handler's except block.
+    # Nothing legitimate in a log line is a single unbroken 4KB token.
+    if len(text) > _REDACT_MAX_TEXT:
+        return (
+            text[:_REDACT_MAX_TEXT]
+            + f"...(truncated at {_REDACT_MAX_TEXT} characters before redaction; "
+            "an oversized value is not scanned, because scanning it is a denial of "
+            "service against this server)"
+        )
+
     fragments = "|".join(re.escape(part) for part in _SENSITIVE_KEY_PARTS)
     pattern = re.compile(
-        r"(?P<key>[\"\']?[\w.-]*?(?:" + fragments + r")[\w.-]*[\"\']?)"
+        # Both quantifiers BOUNDED. `[\w.-]*?(?:frag)[\w.-]*` is the same unbounded
+        # prefix shape that made _URI_CREDENTIAL_RE quadratic: every position in a long
+        # token is a candidate key start, and each one rescans looking for a fragment.
+        # Measured 0.26s at 2KB, 1.6s at 5KB, 6.4s at 10KB, 25.4s at 20KB. No real
+        # config key name approaches 32 characters on either side of the fragment.
+        r"(?P<key>[\"\']?[\w.-]{0,32}?(?:" + fragments + r")[\w.-]{0,32}[\"\']?)"
         r"(?P<sep>\s*[:=]+\s*)"
         # A scheme-prefixed value is ONE value. Without this alternative the value
         # matched only the word "Bearer", so `Authorization: Bearer <jwt>` became

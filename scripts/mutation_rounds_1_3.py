@@ -53,9 +53,15 @@ MUTATIONS = [
         T3,
     ),
     (
+        # Anchor RETARGETED: this logic moved from server.py into
+        # audit.classify_result so BOTH dispatch paths share it -- the console was
+        # collapsing every refusal to `denied_handler`. When the code moved, this
+        # mutation's anchor stopped matching and the harness reported ANCHOR-GONE,
+        # which is the harness working: a control that silently stops being
+        # mutation-tested is the failure it exists to catch.
         "classify: key presence instead of the err() marker",
-        "server.py",
-        """        if isinstance(payload, dict) and payload.get(shared.ERROR_MARKER) is True:""",
+        "audit.py",
+        """        if isinstance(payload, dict) and payload.get(error_marker) is True:""",
         """        if isinstance(payload, dict) and "error" in payload:""",
         T3,
     ),
@@ -102,9 +108,14 @@ MUTATIONS = [
     (
         "audit sink: make CB_ADMIN_AUDIT_FILE a phantom again",
         "audit.py",
+        # Anchor updated: the call is now PRE-FORMATTED ("AUDIT " + line) rather than
+        # %-formatted. logging_config's filter redacts record.args, and passing the
+        # already-serialized, already-redacted JSON as an arg made it rewrite
+        # `"auth": "none"` to unquoted ***REDACTED***, so the audit line stopped being
+        # parseable JSON.
         """        sink = _audit_file_logger()
         if sink is not None:
-            sink.info("AUDIT %s", line)""",
+            sink.info("AUDIT " + line)  # pre-formatted; see the note above""",
         """        pass""",
         T3,
     ),
@@ -135,9 +146,14 @@ MUTATIONS = [
         "tests/test_egress_and_statement_guards.py",
     ),
     (
+        # Anchor RETARGETED for the same reason: `_with_correlation_id` became
+        # `_with_control_fields`, which now delegates to
+        # mcp_compat.with_control_fields so the console advertises the same fields as
+        # the transport (it was serving raw schemas with neither dry_run nor
+        # correlation_id on them).
         "correlation_id: stop declaring it on tool schemas",
         "server.py",
-        """        filtered.append(_with_correlation_id(t))""",
+        """        filtered.append(_with_control_fields(t))""",
         """        filtered.append(t)""",
         T3,
     ),

@@ -238,7 +238,30 @@ def certs(tmp_path_factory):
                 ),
                 critical=False,
             )
-        return key, builder.sign(ca_key or key, hashes.SHA256())
+
+        # Key identifiers, and they are NOT decoration.
+        #
+        # OpenSSL 3.5 -- which ships with the CPython 3.13 and 3.14 builds on the CI
+        # runners -- enforces the RFC 5280 requirement that a chain be linkable by key
+        # identifier, and refuses the handshake with
+        # "certificate verify failed: Missing Authority Key Identifier" when it is not.
+        # These certificates were built without either identifier and verified fine on
+        # older stacks, so the fixture passed for as long as the matrix stopped at 3.13
+        # with an older OpenSSL and failed the moment it did not. The certificates were
+        # always non-conformant; only the verifier changed.
+        #
+        # SKI on everything, AKI pointing at whoever signed it -- the CA itself for the
+        # self-signed root, the CA's key for a leaf.
+        signing_key = ca_key or key
+        builder = builder.add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False
+        ).add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                signing_key.public_key()
+            ),
+            critical=False,
+        )
+        return key, builder.sign(signing_key, hashes.SHA256())
 
     def write(stem, key, cert):
         (d / f"{stem}.key").write_bytes(

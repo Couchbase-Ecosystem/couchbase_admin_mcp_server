@@ -346,10 +346,21 @@ def emit(record: dict) -> None:
     """
     try:
         line = json.dumps(record, sort_keys=True, default=str)
-        _log.info("AUDIT %s", line)
+        # PRE-FORMATTED, with no %-args, and that is deliberate.
+        #
+        # logging_config's SafeRecordFilter applies handlers.shared.redact to
+        # `record.args` -- correct for an ordinary log call, where the args are raw
+        # values a handler forgot to mask. But this record's fields were ALREADY
+        # redacted individually by _redact() at build time, and `line` is the serialized
+        # JSON. Passing it as an arg meant the filter ran content redaction over the
+        # serialized form, rewriting `"auth": "none"` to `"auth": ***REDACTED***` --
+        # unquoted -- so the audit line stopped being parseable JSON. An audit trail a
+        # SIEM cannot parse is worse than a slightly less redacted one, and re-redacting
+        # an already-redacted record can only ever corrupt it.
+        _log.info("AUDIT " + line)
         sink = _audit_file_logger()
         if sink is not None:
-            sink.info("AUDIT %s", line)
+            sink.info("AUDIT " + line)  # pre-formatted; see the note above
     except BaseException:
         try:
             _log.info(

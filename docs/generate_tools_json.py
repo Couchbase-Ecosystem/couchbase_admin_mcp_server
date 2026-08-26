@@ -21,8 +21,8 @@ import sys
 os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
 os.environ.setdefault("CB_ADMIN_READ_ONLY_MODE", "false")
 
-import mcp_compat  # noqa: E402
-from handlers import (  # noqa: E402
+import mcp_compat
+from handlers import (
     backup,
     buckets,
     capella,

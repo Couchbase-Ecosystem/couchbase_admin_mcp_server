@@ -37,11 +37,11 @@ Tools added (10):
 
 from __future__ import annotations
 
+import re
+
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .egress import guard_nested_host_fields
-import re
-
 from .shared import admin_request, admin_request_json, err, ok, quote_path
 
 # Cluster-manager proxy prefix for the Eventing REST API. See module

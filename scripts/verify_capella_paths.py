@@ -876,6 +876,57 @@ def discover(token: str, args) -> dict:
     else:
         print("  app service  : NONE FOUND (App Services paths will be SKIPPED)")
 
+    # ── Eventing functions and XDCR replications ────────────────────────────
+    #
+    # These two identifiers were listed as a BLOCKER in spec_pending.py: without them
+    # every eventing and replication operation reported SKIPPED, so a probe run could
+    # never say anything about roughly a third of the parked records.
+    #
+    # The list endpoints used here are themselves PARKED and unverified, which is the
+    # point rather than a problem. Three outcomes, all informative:
+    #
+    #   * items returned  -> an identifier for the detail paths, AND the list path is
+    #                        confirmed to exist
+    #   * 2xx but empty   -> the path is right and the cluster simply has none; the
+    #                        detail paths stay SKIPPED, honestly
+    #   * 404             -> the parked LIST path is WRONG, which is a finding in its
+    #                        own right and is printed as one
+    #
+    # So the discovery step doubles as a probe of the two list paths. The status is
+    # reported either way rather than being swallowed, because "no functions exist" and
+    # "we asked the wrong URL" look identical from an empty `ids` dict.
+    for label, segment, id_key, keys in (
+        (
+            "eventing fn ",
+            "eventing/functions",
+            "function_name",
+            ("name", "appname", "id"),
+        ),
+        ("replication ", "replications", "replication_id", ("id", "replicationId")),
+    ):
+        status, rbody = _request("GET", f"{base}/{segment}", token)
+        if status is None:
+            print(f"  {label}: request failed; {id_key} paths SKIPPED")
+            continue
+        if status == 404:
+            print(
+                f"  {label}: HTTP 404 on {segment} — the PARKED LIST PATH IS WRONG, "
+                f"not merely empty. Fix it in spec_pending.py before probing."
+            )
+            continue
+        if status >= 400:
+            print(f"  {label}: HTTP {status} — {rbody[:90]}; {id_key} paths SKIPPED")
+            continue
+        found = _first_id(rbody, *keys)
+        if found:
+            ids[id_key] = found
+            print(f"  {label}: {found}")
+        else:
+            print(
+                f"  {label}: {segment} answered HTTP {status} with no items — path "
+                f"looks right, cluster has none; {id_key} paths SKIPPED"
+            )
+
     # Identifiers that only exist once something has been created are left ABSENT on
     # purpose, so the affected operations report SKIPPED rather than a false MISSING.
     return ids

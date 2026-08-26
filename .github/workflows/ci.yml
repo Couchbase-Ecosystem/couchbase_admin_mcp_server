@@ -15,8 +15,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
       - run: uv sync --extra dev
@@ -35,18 +35,18 @@ jobs:
         # 3.14 is included because requires-python claims <3.15 and it was never built.
         python-version: ["3.10", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev
       # Node is only needed by the console's compile-and-render tests. They skip cleanly
       # without it, and a skipped frontend test is how the console came to render a blank
       # page unnoticed — so CI installs it.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
       # Node alone was NOT enough. The render assertions sat behind
@@ -82,12 +82,12 @@ jobs:
     # behind it, however green the suite looks.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
       - run: uv sync --extra dev
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
       - name: Mutations, rounds 1-3
@@ -107,8 +107,8 @@ jobs:
     # tree where every file exists.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
       - run: uv sync --extra dev
@@ -124,9 +124,15 @@ jobs:
           docker run --rm -e CB_ADMIN_PROFILE=workstation couchbase-admin-mcp:ci \
             python -c "import server; from gui import gui_server; print(f'{len(server._TOOLS)} tools')"
   capella-paths:
-    # Verifies the Capella v4 paths against a live organization. Skipped unless the
-    # secret is configured, because a fork's PR cannot have it — and a job that fails for
-    # everyone without credentials gets disabled, taking the check with it.
+    # Verifies the Capella v4 paths against a live organization.
+    #
+    # A missing credential FAILS this job. It used to warn and exit 0, on the reasoning
+    # that a job which fails for everyone without credentials gets disabled — but the
+    # `if:` below already restricts it to push and manual dispatch, so a fork and a
+    # Dependabot PR never reach it, and the credential is now configured. What remains
+    # of the soft skip is the failure mode it was protecting: the secret being removed or
+    # renamed, after which the job stays green forever having verified nothing. That is
+    # the case worth failing on.
     #
     # Read-only: GETs run for real, writes are probed with OPTIONS.
     #
@@ -140,8 +146,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
         with:
           enable-cache: true
       - run: uv sync --extra dev
@@ -150,13 +156,16 @@ jobs:
           CB_CAPELLA_API_KEY: ${{ secrets.CB_CAPELLA_API_KEY }}
         run: |
           if [ -z "$CB_CAPELLA_API_KEY" ]; then
-            echo "::warning title=Capella paths not verified::CB_CAPELLA_API_KEY is not configured, so no v4 path was checked. This job is green because it did not run, not because it passed."
+            echo "::error title=Capella paths not verified::CB_CAPELLA_API_KEY is not configured, so no v4 path was checked. This job exists to verify the paths against a live organization; with no credential it verifies nothing, and a green tick that means nothing is worse than a red one."
             {
-              echo "### Capella path verification SKIPPED"
+              echo "### Capella path verification FAILED: no credential"
               echo ""
-              echo "\`CB_CAPELLA_API_KEY\` is not configured, so **no path was verified**."
-              echo "Set it to a read-only Capella API key SECRET to enable this job."
+              echo "\`CB_CAPELLA_API_KEY\` is not set, so **no path was verified**."
+              echo "Set the repository secret to a READ-ONLY Capella API key SECRET."
+              echo ""
+              echo "This job runs only on push to main and on manual dispatch, so a fork"
+              echo "or a Dependabot PR is unaffected by this failure."
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           uv run python scripts/verify_capella_paths.py

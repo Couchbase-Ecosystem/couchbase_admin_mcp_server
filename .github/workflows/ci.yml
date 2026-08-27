@@ -8,7 +8,21 @@ on:
   workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # NOT on main, deliberately.
+  #
+  # cancel-in-progress is a pull-request optimisation: on a busy branch it stops five
+  # queued runs of superseded commits burning runner minutes. On a release branch it does
+  # something else entirely -- it lets a commit go UNVERIFIED, because the next thing to
+  # enter the group kills the run that was checking it.
+  #
+  # That is not hypothetical here. Re-running an older failed run puts it in this same
+  # group, so clicking "Re-run jobs" on a historical run cancelled the in-progress run of
+  # the current commit -- twice -- while itself replaying the old commit's workflow and
+  # reproducing the old error. Two confusing symptoms, one setting.
+  #
+  # So: cancel freely on branches and PRs, never on main. A main run that has started
+  # runs to completion and produces a verdict.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
 jobs:

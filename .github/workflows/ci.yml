@@ -7,7 +7,21 @@ on:
   pull_request:
   workflow_dispatch:
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # The "-v2" is a SALT, and it is load-bearing.
+  #
+  # Concurrency is evaluated from the INCOMING run's own workflow file. A re-run of a
+  # historical run therefore brings that commit's concurrency block with it -- including
+  # its cancel-in-progress: true -- and evicts whatever is currently running. Scoping
+  # cancel-in-progress on main does NOT prevent this, because the old file decides, and
+  # the old file cannot be changed.
+  #
+  # Salting the group name does prevent it: runs from old commits compute
+  # "CI-refs/heads/main" while runs from this commit onward compute "CI-v2-refs/heads/main",
+  # so they are in different groups and cannot cancel each other. Re-running an old,
+  # broken run is now harmless to the current one.
+  #
+  # Bump the salt again if this ever recurs.
+  group: ${{ github.workflow }}-v2-${{ github.ref }}
   # NOT on main, deliberately.
   #
   # cancel-in-progress is a pull-request optimisation: on a busy branch it stops five

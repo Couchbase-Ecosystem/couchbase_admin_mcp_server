@@ -124,15 +124,24 @@ jobs:
           docker run --rm -e CB_ADMIN_PROFILE=workstation couchbase-admin-mcp:ci \
             python -c "import server; from gui import gui_server; print(f'{len(server._TOOLS)} tools')"
   capella-paths:
-    # Verifies the Capella v4 paths against a live organization.
+    # Verifies the Capella v4 paths against a live organization, WHEN a credential is
+    # available. A missing credential warns and passes.
     #
-    # A missing credential FAILS this job. It used to warn and exit 0, on the reasoning
-    # that a job which fails for everyone without credentials gets disabled — but the
-    # `if:` below already restricts it to push and manual dispatch, so a fork and a
-    # Dependabot PR never reach it, and the credential is now configured. What remains
-    # of the soft skip is the failure mode it was protecting: the secret being removed or
-    # renamed, after which the job stays green forever having verified nothing. That is
-    # the case worth failing on.
+    # This went fail-on-missing-credential briefly and was reverted deliberately, so the
+    # reasoning is recorded rather than rediscovered:
+    #
+    # GitHub encrypts Actions secrets, nobody can read the value back, and they are never
+    # exposed to a fork's pull request. The exposure that matters here is different: this
+    # is a PUBLIC repository in an org where other people have write access, and anyone
+    # who can push a workflow change can print a secret to a log. A read-only Capella API
+    # key is still a key to a real organization, so the right trade is not to hold one
+    # here at all.
+    #
+    # The cost of that choice, stated plainly: this job is GREEN WHEN IT VERIFIED
+    # NOTHING. The ::warning and the job summary exist so that is visible rather than
+    # implied, and scripts/verify_capella_paths.py is meant to be run BY A MAINTAINER,
+    # locally, with a key that never leaves their machine — see CONTRIBUTING.md. Treat a
+    # green tick on this job as "not checked", not as "checked and fine".
     #
     # Read-only: GETs run for real, writes are probed with OPTIONS.
     #
@@ -156,16 +165,20 @@ jobs:
           CB_CAPELLA_API_KEY: ${{ secrets.CB_CAPELLA_API_KEY }}
         run: |
           if [ -z "$CB_CAPELLA_API_KEY" ]; then
-            echo "::error title=Capella paths not verified::CB_CAPELLA_API_KEY is not configured, so no v4 path was checked. This job exists to verify the paths against a live organization; with no credential it verifies nothing, and a green tick that means nothing is worse than a red one."
+            echo "::warning title=Capella paths NOT verified::No credential is configured, so no v4 path was checked. This job is green because it did not run, not because it passed. By design: see the comment on this job."
             {
-              echo "### Capella path verification FAILED: no credential"
+              echo "### Capella path verification NOT PERFORMED"
               echo ""
-              echo "\`CB_CAPELLA_API_KEY\` is not set, so **no path was verified**."
-              echo "Set the repository secret to a READ-ONLY Capella API key SECRET."
+              echo "No \`CB_CAPELLA_API_KEY\` is configured, so **no path was verified**."
+              echo "This is deliberate: a real Capella API key is not held in a public"
+              echo "repository whose org grants write access to others, because anyone"
+              echo "who can push a workflow change can print a secret to a log."
               echo ""
-              echo "This job runs only on push to main and on manual dispatch, so a fork"
-              echo "or a Dependabot PR is unaffected by this failure."
+              echo "**A green tick here means \"not checked\", not \"checked and fine\".**"
+              echo "The paths are verified by a maintainer running"
+              echo "\`scripts/verify_capella_paths.py\` locally, with a key that stays on"
+              echo "their machine."
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            exit 0
           fi
           uv run python scripts/verify_capella_paths.py

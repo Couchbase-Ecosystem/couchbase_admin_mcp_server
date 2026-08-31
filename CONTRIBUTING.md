@@ -255,6 +255,52 @@ Two things to know before you touch it:
 
 ---
 
+## 🔑 Verifying Capella v4 paths (maintainer step, never CI)
+
+The `capella-paths` CI job is **green when it verified nothing**, on purpose. A real
+Capella API key is not held as a repository secret: this is a public repository in an org
+that grants write access to several people, and anyone who can push a workflow change can
+print a secret to a log. GitHub encrypts secrets and never exposes them to a fork's PR —
+the exposure is the write access, not GitHub.
+
+So path verification is a maintainer step, run locally, with a key that never leaves the
+machine:
+
+```bash
+# A READ-ONLY organization API key SECRET (the secret, not the key id).
+export CB_CAPELLA_API_KEY='...'          # PowerShell: $env:CB_CAPELLA_API_KEY = '...'
+
+# Read-only sweep: GETs run for real, writes are probed with OPTIONS.
+uv run python scripts/verify_capella_paths.py
+
+# Machine-readable, for promoting parked operations out of spec_pending.py.
+uv run python scripts/verify_capella_paths.py --method-probe --json \
+    > verify_capella_paths-$(date +%Y%m%d).json
+```
+
+What makes this safe to run against a real organization:
+
+- GETs are real; every write is probed with `OPTIONS`, never executed.
+- `--method-probe` deliberately does NOT send write bodies — it reads the 422 the API
+  returns for an empty body, which names the required fields. That is how the disputed
+  managed-backup restore path gets settled without performing a restore.
+- The exit status is honest: non-zero when any path ERRORs, and non-zero when ZERO paths
+  were VERIFIED. A 401 (which Capella returns before routing, so it says nothing about
+  whether a route exists) and a 429 do not count as proof.
+
+**Before sharing the JSON:** it records organization, project and cluster ids, so it is
+gitignored (`verify_capella_paths-*.json`) and should be treated as internal. Nothing in
+it is a credential.
+
+Promoting a parked operation, once probed:
+
+1. Move the record from `handlers/capella/spec_pending.py` into `OPS` in `spec.py`.
+2. Retag its summary `[LIVE]` or `[LIVE+METHOD]`.
+3. Record the observed status in `LIVE_VERIFIED`.
+4. Run the suite — `test_every_operation_has_been_verified_against_a_live_organization`
+   is what stops an unverified path shipping, and it exists because a commit message once
+   claimed all paths were verified while ten were not.
+
 ## 🏗️ Project layout
 
 ```

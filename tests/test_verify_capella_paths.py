@@ -77,7 +77,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._send(405, {"message": "method not allowed"})
         if path == "/v4/organizations/ORG/projects/PROJ/clusters/CL/buckets":
             if self.command == "GET":
-                return self._send(200, {"data": [{"id": "BKT", "name": "travel"}]})
+                # The INTERNAL bucket is listed first, as it was on the real
+                # organization. Taking item [0] is what picked N1QL_SYSTEM_BUCKET.
+                return self._send(
+                    200,
+                    {
+                        "data": [
+                            {"id": "TjFRTF9TWVNURU1fQlVDS0VU"},
+                            {"id": "BKT", "name": "travel"},
+                        ]
+                    },
+                )
             if self.command == "POST":
                 # What Capella really does with an empty body on a create: the method is
                 # accepted and the PAYLOAD is rejected, so nothing is created.
@@ -111,6 +121,30 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     "message": "Failed to get On/Off schedule",
                 },
             )
+        # ── Routes only the PARKED set touches ──────────────────────────────
+        #
+        # Three of the four are themselves parked list paths, which is why discovery
+        # prints their status: an empty list and a wrong URL are indistinguishable from
+        # an absent identifier, and only one of them is a finding.
+        if path == "/v4/organizations/ORG/projects/PROJ/clusters/CL/backups":
+            return self._send(200, {"data": [{"id": "BKP"}]})
+        if path == "/v4/organizations/ORG/projects/PROJ/events":
+            return self._send(200, {"data": [{"id": "EVT"}]})
+        if path == "/v4/organizations/ORG/projects/PROJ/clusters/CL/auditLogExports":
+            # 200 with NO items: the path is right, this cluster simply has no export
+            # jobs. export_id must stay absent rather than be invented.
+            return self._send(200, {"data": []})
+        if path == "/v4/organizations/ORG/projects/PROJ/alertIntegrations":
+            return self._send(200, {"data": [{"id": "ALERT"}]})
+        if path.endswith("/queryService/indexes"):
+            return self._send(200, {"data": [{"indexName": "def_primary"}]})
+        if path.endswith("/eventingFunctions"):
+            return self._send(200, {"data": [{"name": "enrich"}]})
+        if path.endswith("/replications"):
+            # 404 on a PARKED list path is a FINDING: the record in spec_pending.py is
+            # wrong, not the cluster empty.
+            return self._send(404, {"message": "route not found"})
+
         if path.endswith("/buckets/GONE"):
             return self._send(
                 404, {"message": "bucket GONE does not exist in cluster CL"}
@@ -153,13 +187,28 @@ class _Args:
 
 
 class _Op:
-    def __init__(self, name, method, path, summary="", group="g", body=None):
+    """A test double for handlers.capella.spec.Op.
+
+    `destructive` defaults to False, matching the real dataclass. It has to be present:
+    `_is_destructive` fails CLOSED, so a double that simply omits the attribute is treated
+    as destructive — correct for an unknown operation, and wrong for a stand-in whose
+    real counterpart declares False. Leaving it off made every double look destructive to
+    the --method-probe exclusion, which is a test-double artifact rather than a finding.
+
+    Tests that want the fail-closed path exercise it with their own bare object; see
+    test_an_unknown_destructive_flag_fails_closed.
+    """
+
+    def __init__(
+        self, name, method, path, summary="", group="g", body=None, destructive=False
+    ):
         self.name = name
         self.method = method
         self.path = path
         self.summary = summary
         self.group = group
         self.body = body
+        self.destructive = destructive
 
 
 # ── Discovery ────────────────────────────────────────────────────────────────
@@ -399,6 +448,23 @@ def test_the_real_spec_has_no_unfillable_placeholders():
         "certificate_id",
         "sample_name",
         "event_id",
+        # Discovered from the eventing list, which is why the eventing operations could
+        # be promoted at all. Added here when they shipped on 2026-09-01 — this guard is
+        # what says "a shipped path must be one the verifier can actually reach", and it
+        # fired the moment they moved across.
+        "function_name",
+        # Discovered from the replications list. Registered when the two replication
+        # operations shipped on 2026-09-01 under SHIPPED_UNVERIFIED — this guard says "a
+        # shipped path must be one the verifier can reach", and that holds whether or not
+        # the path has been verified yet. If anything it matters MORE for those.
+        "replication_id",
+        # From the index sweep, registered when the query-index operations shipped.
+        "index_name",
+        # Registered when the alert-integration trio and the audit-log export getter
+        # shipped under SHIPPED_UNVERIFIED on 2026-09-01. Discovery already looks for
+        # both; the objects simply do not exist in the test organization.
+        "alert_integration_id",
+        "export_id",
         "audit_log_id",
         "on_off_schedule_id",
         "free_tier_cluster_id",
@@ -626,8 +692,18 @@ def test_a_method_probe_is_skipped_where_it_could_actually_mutate(script):
         "k",
         mode="method",
     )
-    assert result.verdict == "SKIPPED"
-    assert "could SUCCEED and mutate" in result.detail
+    # The SAFETY property, which has not changed: the operation's own method never
+    # reaches the wire, so nothing can have been created.
+    assert result.method_sent == "OPTIONS"
+    assert "METHOD NOT CONFIRMED" in result.detail
+
+    # ...and the PATH is still checked, which is the part that used to be thrown away.
+    # This asserted `verdict == "SKIPPED"` until a live run showed what that cost: 22 of
+    # 97 operations came back with no verdict at all, because --method-probe refused the
+    # empty-body probe AND declined to fall back to the OPTIONS probe the default mode
+    # would have run. A flag meaning "confirm more" returned strictly less.
+    assert result.verdict == "VERIFIED"
+    assert result.status == 405
 
 
 def test_an_accepted_empty_body_is_reported_as_an_error(script, monkeypatch):
@@ -1123,7 +1199,9 @@ def test_teardown_runs_even_when_verification_raises(script, monkeypatch, capsys
         "discover",
         lambda token, args: {"project_id": "PROJ", "cluster_id": "CL"},
     )
-    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+    monkeypatch.setattr(
+        script, "load_ops", lambda **_kwargs: [_Op("op", "GET", "/v4/x")]
+    )
 
     def _explode(*_a, **_k):
         raise KeyboardInterrupt("operator gave up")
@@ -1171,7 +1249,9 @@ def test_an_existing_app_service_is_reused_rather_than_paid_for_twice(
             "app_service_id": "PRE_EXISTING",
         },
     )
-    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+    monkeypatch.setattr(
+        script, "load_ops", lambda **_kwargs: [_Op("op", "GET", "/v4/x")]
+    )
     monkeypatch.setattr(script, "_run_probes", lambda *a, **k: 0)
     monkeypatch.setattr(
         sys,
@@ -1877,7 +1957,9 @@ def test_child_teardown_runs_before_the_app_service_is_deleted(script, monkeypat
         "discover",
         lambda token, args: {"project_id": "PROJ", "cluster_id": "CL"},
     )
-    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+    monkeypatch.setattr(
+        script, "load_ops", lambda **_kwargs: [_Op("op", "GET", "/v4/x")]
+    )
     monkeypatch.setattr(script, "_run_probes", lambda *a, **k: 0)
     monkeypatch.setattr(script, "bootstrap_app_service", lambda *a, **k: "AS1")
     monkeypatch.setattr(
@@ -1919,7 +2001,9 @@ def test_child_teardown_survives_an_interrupt(script, monkeypatch):
             "app_service_id": "AS1",
         },
     )
-    monkeypatch.setattr(script, "load_ops", lambda: [_Op("op", "GET", "/v4/x")])
+    monkeypatch.setattr(
+        script, "load_ops", lambda **_kwargs: [_Op("op", "GET", "/v4/x")]
+    )
 
     def _explode(*_a, **_k):
         raise KeyboardInterrupt("operator gave up")
@@ -2094,7 +2178,11 @@ def test_json_output_is_machine_readable(script, monkeypatch):
         script, monkeypatch, "--org", "ORG", "--only", "capella_projects_list", "--json"
     )
     assert code == 0
-    payload = json.loads(out[out.index("{") :]) if "{" in out else {}
+    # No slicing. `out[out.index("{"):]` is what this used to do, and it is precisely the
+    # workaround that hid the defect: stdout carried the discovery preamble in front of
+    # the document, so anything that did NOT know to slice — jq, a CI step, a reader —
+    # got a parse error out of a successful run.
+    payload = json.loads(out)
     assert payload
 
 
@@ -2104,7 +2192,7 @@ def test_a_missing_path_fails_the_run(script, monkeypatch):
     ops = [
         _Op("capella_fake", "GET", "/v4/organizations/{organization_id}/nonexistent")
     ]
-    monkeypatch.setattr(script, "load_ops", lambda: ops)
+    monkeypatch.setattr(script, "load_ops", lambda **_kwargs: ops)
     code, out, _err = _main(script, monkeypatch, "--org", "ORG")
     assert code == 1
     assert "MISSING" in out
@@ -2119,7 +2207,7 @@ def test_a_clean_sweep_exits_zero(script, monkeypatch):
             "/v4/organizations/{organization_id}/projects",
         )
     ]
-    monkeypatch.setattr(script, "load_ops", lambda: ops)
+    monkeypatch.setattr(script, "load_ops", lambda **_kwargs: ops)
     code, _out, _err = _main(script, monkeypatch, "--org", "ORG")
     assert code == 0
 
@@ -2181,3 +2269,1111 @@ def test_a_real_looking_value_is_not_refused(script):
         "be388b87-43cb-4e9b-a3f1-0f837609c4af",
     ):
         assert not script._looks_like_a_placeholder(real), real
+
+
+#: The parked registry is ALLOWED to be empty — that is the goal state, reached on
+#: 2026-09-01 when the last record was promoted. Tests that need a parked operation to
+#: point at skip rather than fail, because "there are none left" is a success and must not
+#: read as a broken suite.
+def _a_parked_name() -> str:
+    from handlers.capella.spec_pending import PENDING_OPS
+
+    if not PENDING_OPS:
+        pytest.skip("the parked registry is empty — nothing left to verify")
+    return PENDING_OPS[0].name
+
+
+# ── The parked set: --include-pending ────────────────────────────────────────
+#
+# handlers/capella/spec_pending.py holds 36 operations that are written but not shipped,
+# because their paths were transcribed from the v4 reference and never confirmed against
+# a live control plane. CONTRIBUTING.md documents a promotion procedure that begins "run
+# the probe" — and until --include-pending existed, load_ops() read spec.py and nothing
+# else, so the probe could not see a single one of them. It re-checked the 61 paths that
+# were already verified and reported nothing about the 36 that needed verifying.
+#
+# These tests pin the two halves of the fix: that the parked records are LOADED, and that
+# the report distinguishes a promotion candidate from a re-verification. The second half
+# matters as much as the first — a run that verifies a parked path and buries the result
+# in a 97-line table has done the work and hidden the answer.
+
+
+def test_the_parked_operations_are_absent_by_default(script):
+    """The default must stay the shipped surface. A probe that silently included parked
+    paths would report MISSING for records nobody claimed were verified, and the exit
+    status is used in CI."""
+    parked = _a_parked_name()
+    names = {op.name for op in script.load_ops()}
+    assert parked not in names
+
+
+def test_include_pending_loads_every_parked_operation(script):
+    shipped = script.load_ops()
+    both = script.load_ops(include_pending=True)
+
+    from handlers.capella.spec_pending import PENDING_OPS
+
+    assert len(both) == len(shipped) + len(PENDING_OPS)
+    names = {op.name for op in both}
+    assert {op.name for op in PENDING_OPS} <= names
+    assert len(names) == len(both), "an operation was loaded twice"
+
+
+def test_a_parked_operation_is_identifiable_as_parked(script):
+    """Op is a frozen dataclass, so "this record is parked" cannot be stamped onto the
+    object. If the bookkeeping that replaces it drifts, the report silently starts
+    describing promotion candidates as ordinary re-verifications."""
+    parked = _a_parked_name()
+    ops = {op.name: op for op in script.load_ops(include_pending=True)}
+    assert script._is_pending(ops[parked])
+    assert not script._is_pending(ops["capella_projects_list"])
+
+
+def test_the_pending_marks_are_cleared_when_pending_is_not_requested(script):
+    """A load WITHOUT the flag must not leave the previous run's marks behind — the report
+    would then tag shipped operations [PEND] and invite someone to "promote" a record that
+    is already in spec.py."""
+    script.load_ops(include_pending=True)
+    ops = {op.name: op for op in script.load_ops()}
+    assert not script._is_pending(ops["capella_projects_list"])
+    assert not script._PENDING_NAMES
+
+
+def test_an_operation_in_both_registries_is_refused(script, monkeypatch):
+    """A half-finished promotion: the record was copied into OPS and never deleted from
+    PENDING_OPS. Probing it twice reports one path under one name with two verdicts, so
+    the run is stopped rather than allowed to produce a report nobody can act on."""
+    from handlers.capella import spec_pending
+    from handlers.capella.spec import OPS_BY_NAME
+
+    already_shipped = next(iter(OPS_BY_NAME.values()))
+    monkeypatch.setattr(
+        spec_pending, "PENDING_OPS", (*spec_pending.PENDING_OPS, already_shipped)
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        script.load_ops(include_pending=True)
+    assert already_shipped.name in str(excinfo.value)
+
+
+def test_the_static_fallback_also_reads_the_parked_registry(script, monkeypatch):
+    """The fallback exists so the script runs with nothing installed, which is how it runs
+    on the machine that has the Capella key. If it silently dropped the parked set there,
+    the promotion procedure would work only in an environment nobody performs it in."""
+    parked = _a_parked_name()
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _block(name, *args, **kwargs):
+        if name.startswith(("handlers", "mcp")):
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block)
+    ops = script.load_ops(include_pending=True)
+    monkeypatch.undo()
+
+    names = {op.name for op in ops}
+    assert parked in names
+    assert script._is_pending(next(o for o in ops if o.name == parked))
+
+
+def test_naming_a_parked_operation_without_the_flag_says_why(script, monkeypatch):
+    """ "unknown operation" is a misleading answer here: the record exists, it is simply not
+    in the registry this run loaded. Someone following CONTRIBUTING.md hits this first."""
+    code, _out, err = _main(
+        script, monkeypatch, "--org", "ORG", "--only", _a_parked_name()
+    )
+    assert code == 2
+    assert "--include-pending" in err
+    assert "spec_pending.py" in err
+
+
+def test_a_typo_is_still_reported_as_unknown(script, monkeypatch):
+    """The diagnostic above must not swallow the ordinary case it sits next to."""
+    code, _out, err = _main(
+        script, monkeypatch, "--org", "ORG", "--only", "capella_nope"
+    )
+    assert code == 2
+    assert "capella_nope" in err
+    assert "--include-pending" not in err
+
+
+# ── Discovery of the identifiers only the parked set needs ───────────────────
+
+
+def test_the_parked_identifiers_are_discovered_only_when_asked(script):
+    """Nothing in the shipped registry consumes these four, so an unconditional walk would
+    spend four requests a run buying nothing."""
+    plain = script.discover("fake-secret", _Args())
+    assert "backup_id" not in plain
+    assert "alert_integration_id" not in plain
+
+    with_pending = script.discover("fake-secret", _Args(include_pending=True))
+    assert with_pending["backup_id"] == "BKP"
+    assert with_pending["event_id"] == "EVT"
+    assert with_pending["alert_integration_id"] == "ALERT"
+
+
+def test_an_empty_list_leaves_the_identifier_absent(script, capsys):
+    """200 with no items means the PATH is right and the object does not exist here. The
+    affected operations must report SKIPPED — inventing an id would make a correct path
+    report MISSING, which is the confidently-wrong outcome this script exists to avoid."""
+    ids = script.discover("fake-secret", _Args(include_pending=True))
+    assert "export_id" not in ids
+    out = capsys.readouterr().out
+    assert "none exist ON THIS CLUSTER" in out
+
+
+def test_a_404_on_a_parked_list_path_is_reported_as_a_finding(script, capsys):
+    """The distinction the whole discovery step turns on: "this cluster has none" and "we
+    asked the wrong URL" both leave the id absent, and only the second is a defect."""
+    script.discover("fake-secret", _Args(include_pending=True))
+    out = capsys.readouterr().out
+    assert "PARKED LIST PATH IS WRONG" in out
+
+
+def test_app_services_failing_does_not_abort_the_rest_of_discovery(script, monkeypatch):
+    """This used to `return ids`. One 403 on the org-wide App Services list — a list that
+    has nothing to do with eventing, replication or the parked set — silently cost every
+    later identifier its verdict, and the output gave no hint that the walk had stopped."""
+    real_request = script._request
+
+    def _fail_app_services(method, path, token, *args, **kwargs):
+        if "/appservices" in path:
+            return 403, '{"message":"forbidden"}'
+        return real_request(method, path, token, *args, **kwargs)
+
+    monkeypatch.setattr(script, "_request", _fail_app_services)
+    ids = script.discover("fake-secret", _Args(include_pending=True))
+
+    assert "app_service_id" not in ids
+    # Everything discovered AFTER the App Services list must still be there.
+    assert ids["function_name"] == "enrich"
+    assert ids["backup_id"] == "BKP"
+    assert ids["alert_integration_id"] == "ALERT"
+
+
+# ── The promotion report ─────────────────────────────────────────────────────
+
+
+def _pending_report(script, monkeypatch, ops, pending_names):
+    """Run the report over a synthetic op set with chosen records marked parked."""
+    monkeypatch.setattr(script, "load_ops", lambda **_kwargs: ops)
+    monkeypatch.setattr(script, "_PENDING_NAMES", set(pending_names))
+    return _main(script, monkeypatch, "--org", "ORG", "--include-pending")
+
+
+def test_a_verified_parked_path_is_named_as_ready_to_promote(script, monkeypatch):
+    """Working out by hand which of 97 rows now has evidence behind it is the step at which
+    this stops getting done, so the script does it."""
+    ops = [
+        _Op(
+            "capella_parked_ok",
+            "GET",
+            "/v4/organizations/{organization_id}/projects",
+            summary="[DOC]",
+        )
+    ]
+    code, out, _err = _pending_report(script, monkeypatch, ops, {"capella_parked_ok"})
+    assert code == 0
+    assert "READY TO PROMOTE" in out
+    assert "capella_parked_ok" in out
+    assert "LIVE_VERIFIED" in out
+
+
+def test_a_parked_path_that_404s_is_reported_as_wrong_not_as_pending(
+    script, monkeypatch
+):
+    """A parked record that came back MISSING is the one result here that says something is
+    BROKEN. Folding it in with the ones that merely lacked an identifier loses it."""
+    ops = [
+        _Op(
+            "capella_parked_wrong",
+            "GET",
+            "/v4/organizations/{organization_id}/nope",
+            summary="[DOC]",
+        )
+    ]
+    code, out, _err = _pending_report(
+        script, monkeypatch, ops, {"capella_parked_wrong"}
+    )
+    assert code == 1, "a wrong path must fail the run"
+    assert "PATH IS WRONG" in out
+    assert "do NOT promote it" in out
+
+
+def test_an_options_probe_does_not_earn_the_method_tag(script, monkeypatch):
+    """A 405 from OPTIONS proves the route exists and proves nothing about whether POST is
+    accepted there. Tagging that [LIVE+METHOD] would overstate the exact evidence this
+    script exists to keep honest."""
+
+    class _Result:
+        def __init__(self, method, status, verdict="VERIFIED"):
+            self.op = _Op("x", method, "/v4/x")
+            self.status = status
+            self.verdict = verdict
+
+    assert not script.mode_confirmed_method(_Result("POST", 405))
+    assert script.mode_confirmed_method(_Result("POST", 422))
+    assert script.mode_confirmed_method(_Result("GET", 200))
+    # A GET "verified" by 403 was never actually performed.
+    assert not script.mode_confirmed_method(_Result("GET", 403))
+
+
+def test_the_json_output_marks_which_records_are_parked(script, monkeypatch):
+    """The JSON is what a promotion is driven from, so "shipped" and "parked" has to be
+    readable without cross-referencing the source."""
+    ops = [
+        _Op("capella_parked_ok", "GET", "/v4/organizations/{organization_id}/projects")
+    ]
+    monkeypatch.setattr(script, "load_ops", lambda **_kwargs: ops)
+    monkeypatch.setattr(script, "_PENDING_NAMES", {"capella_parked_ok"})
+    code, out, _err = _main(
+        script, monkeypatch, "--org", "ORG", "--include-pending", "--json"
+    )
+    assert code == 0
+    payload = json.loads(out[out.index("{") :])
+    assert payload["results"][0]["pending"] is True
+
+
+# ── What the first live run exposed ──────────────────────────────────────────
+#
+# Three defects, all found by pointing the tool at a real organization rather than by
+# reading it. Each cost real information in that run, and each is pinned here.
+
+
+def test_an_options_fallback_never_earns_the_method_tag(script):
+    """The tag is the promotion decision. A 405 from OPTIONS proves the route exists and
+    says nothing about POST — and a status-only rule would have to guess, which is exactly
+    how a [LIVE+METHOD] gets handed out on evidence that does not support it."""
+
+    class _R:
+        def __init__(self, method, status, sent, verdict="VERIFIED"):
+            self.op = _Op("x", method, "/v4/x")
+            self.status = status
+            self.verdict = verdict
+            self.method_sent = sent
+
+    # The real method was sent and the payload rejected: confirmed.
+    assert script.mode_confirmed_method(_R("POST", 422, "POST"))
+    # The same status reached via OPTIONS is NOT.
+    assert not script.mode_confirmed_method(_R("POST", 422, "OPTIONS"))
+    assert not script.mode_confirmed_method(_R("POST", 405, "OPTIONS"))
+    assert script.mode_confirmed_method(_R("GET", 200, "GET"))
+
+
+def test_json_output_is_only_json(script, monkeypatch):
+    """`--json > out.json` produced the discovery preamble followed by the object, which no
+    JSON reader parses — the promotion step this flag exists to feed had to be hand-edited
+    first. The preamble also names the organization, project and cluster."""
+    code, out, err = _main(
+        script, monkeypatch, "--org", "ORG", "--only", "capella_projects_list", "--json"
+    )
+    assert code == 0
+    json.loads(out)  # the WHOLE of stdout, with no slicing
+    # The human report is still produced — on stderr.
+    assert "Discovering identifiers" in err
+
+
+def test_json_records_which_method_was_actually_sent(script, monkeypatch):
+    """A promotion is decided from this file, so "we sent POST" and "we sent OPTIONS at a
+    POST route" cannot look the same in it."""
+    code, out, _err = _main(
+        script, monkeypatch, "--org", "ORG", "--only", "capella_projects_list", "--json"
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["results"][0]["method_sent"] == "GET"
+
+
+def test_out_writes_utf8_not_whatever_the_shell_would_do(script, monkeypatch, tmp_path):
+    """PowerShell 5.1 encodes `>` output as UTF-16LE with a BOM. The first live run
+    produced a 76KB file that was unreadable as JSON for that reason alone, and the caller
+    had no way to know from the script's own instructions."""
+    target = tmp_path / "probe.json"
+    code, _out, _err = _main(
+        script,
+        monkeypatch,
+        "--org",
+        "ORG",
+        "--only",
+        "capella_projects_list",
+        "--json",
+        "--out",
+        str(target),
+    )
+    assert code == 0
+    raw = target.read_bytes()
+    assert not raw.startswith(b"\xff\xfe") and not raw.startswith(b"\xef\xbb\xbf")
+    json.loads(raw.decode("utf-8"))
+
+
+def test_out_implies_json(script, monkeypatch, tmp_path):
+    """`--out` on its own used to exit 2 saying it "only means something with --json".
+
+    There is nothing else the flag could mean, so that guard caught only people using it
+    correctly — it cost two live runs and prevented no mistake. The document is written.
+    """
+    target = tmp_path / "probe.json"
+    code, _out, _err = _main(
+        script,
+        monkeypatch,
+        "--org",
+        "ORG",
+        "--only",
+        "capella_projects_list",
+        "--out",
+        str(target),
+    )
+    assert code == 0
+    assert json.loads(target.read_text(encoding="utf-8"))["results"]
+
+
+# ── Selector query parameters ────────────────────────────────────────────────
+
+
+def test_a_required_selector_is_sent(script):
+    """/queryService/indexes 400s without `bucket`. A 400 counts as VERIFIED, so the run
+    reported the path confirmed while never once seeing the endpoint answer — the weakest
+    evidence that still looks like evidence."""
+    op = _Op(
+        "cb_indexes",
+        "GET",
+        "/v4/organizations/{organization_id}/projects/{project_id}"
+        "/clusters/{cluster_id}/queryService/indexes",
+    )
+    op.query = ("bucket", "scope", "collection")
+    seen = {}
+
+    def _capture(method, path, token, *a, **k):
+        seen["path"] = path
+        return 200, '{"data":[]}'
+
+    original = script._request
+    script._request = _capture
+    try:
+        script.probe(
+            op,
+            {
+                "organization_id": "ORG",
+                "project_id": "PROJ",
+                "cluster_id": "CL",
+                "bucket_id": "BKT",
+                "scope_name": "inventory",
+            },
+            "k",
+        )
+    finally:
+        script._request = original
+
+    assert "bucket=BKT" in seen["path"]
+    assert "scope=inventory" in seen["path"]
+    # Absent identifiers are omitted rather than sent empty — an empty selector is a
+    # different request from no selector.
+    assert "collection=" not in seen["path"]
+
+
+def test_paging_parameters_are_not_sent_as_selectors(script):
+    """An endpoint that needs paging to answer at all is a different finding, and quietly
+    supplying page/sortBy would hide it."""
+    op = _Op("cb_list", "GET", "/v4/organizations/{organization_id}/projects")
+    op.query = ("sortBy", "sortDirection", "page")
+    assert script._required_query(op, {"bucket_id": "BKT"}) == ""
+
+
+def test_a_get_verified_by_a_400_does_not_earn_the_method_tag(script):
+    """The route matched and the call was refused. Nobody has watched it return data, so
+    the response shape is still a guess — and a read tool's response shape is the tool."""
+
+    class _R:
+        def __init__(self, status):
+            self.op = _Op("x", "GET", "/v4/x")
+            self.status = status
+            self.verdict = "VERIFIED"
+            self.method_sent = "GET"
+
+    assert script.mode_confirmed_method(_R(200))
+    assert not script.mode_confirmed_method(_R(400))
+    assert not script.mode_confirmed_method(_R(404))
+
+
+def test_the_static_parse_resolves_a_shared_query_constant(script):
+    """`query=_PAGE_QUERY` is a NAME, and `query=("projectId", *_PAGE_QUERY)` is a tuple
+    containing one. literal_eval returns None for both, which is indistinguishable from
+    "declared nothing" — and shared tuples are how these specs avoid repetition, so that
+    reads as "no query parameters" across most of the file.
+
+    The companion guard is test_the_static_parse_carries_every_field_the_script_consults,
+    which compares the two loaders field by field. It was correct and it did not fire,
+    because `query` had been added to the script and not to CONSULTED_FIELDS — a field the
+    guard does not know about is a field it cannot compare. Registering the field is what
+    armed it.
+    """
+    # A bare NAME. _KEYSPACE_QUERY moved into spec.py with the query-index promotion on
+    # 2026-09-01, so both shapes now live in the same file — which is the ordinary case
+    # and still the one literal_eval cannot read.
+    shipped_ks = {
+        o.name: o for o in script._ops_by_static_parse("handlers/capella/spec.py")
+    }
+    assert shipped_ks["capella_query_index_properties_get"].query == (
+        "bucket",
+        "scope",
+        "collection",
+    )
+    # A tuple SPLICING one, in spec.py itself — the shape that literal_eval also cannot
+    # read, and the one that hid most of the registry's query declarations.
+    shipped = {
+        o.name: o for o in script._ops_by_static_parse("handlers/capella/spec.py")
+    }
+    assert shipped["capella_app_services_list"].query == (
+        "projectId",
+        "sortBy",
+        "sortDirection",
+    )
+
+
+# ── Discovery picked the wrong bucket, then misread the consequence ──────────
+
+
+def test_discovery_prefers_a_user_bucket_over_an_internal_one(script):
+    """It took the first item in the buckets list, and on the real organization that was
+    N1QL_SYSTEM_BUCKET — Couchbase's own. Not a valid keyspace for the query-index API, so
+    /queryService/indexes answered 404 for the BUCKET while looking like a 404 for the
+    route, and the run told someone to go and fix a record that was correct.
+
+    Capella bucket ids are base64 of the name, so the name is recoverable even when the
+    list omits it — which is how the internal one is recognised here.
+    """
+    ids = script.discover("fake-secret", _Args())
+    assert ids["bucket_id"] == "BKT"
+
+
+def test_a_cluster_with_only_an_internal_bucket_still_gets_one(script):
+    """Preferring a user bucket must not mean refusing to probe at all. Probing the system
+    bucket beats probing nothing."""
+    body = '{"data":[{"id":"TjFRTF9TWVNURU1fQlVDS0VU"}]}'
+    assert script._preferred_bucket(body) == "TjFRTF9TWVNURU1fQlVDS0VU"
+
+
+def test_an_absent_object_is_not_reported_as_a_wrong_path(script, capsys):
+    """probe() has always distinguished "the route matched and the object is absent" from
+    "the route does not exist", using the Capella domain code. Discovery did not, and
+    printed PARKED LIST PATH IS WRONG at a correct record."""
+    real = script._request
+
+    def _domain_404(method, path, token, *a, **k):
+        if path.endswith("/auditLogExports"):
+            return 404, (
+                '{"code":11040,"hint":"Returned when the bucket has no indexes.",'
+                '"httpStatusCode":404,"message":"no indexes found"}'
+            )
+        return real(method, path, token, *a, **k)
+
+    script._request = _domain_404
+    try:
+        ids = script.discover("fake-secret", _Args(include_pending=True))
+    finally:
+        script._request = real
+
+    out = capsys.readouterr().out
+    line = out.split("audit export")[-1].split("\n")[0]
+    assert "PARKED LIST PATH IS WRONG" not in line
+    assert "route MATCHED" in line
+    assert "Capella error 11040" in line
+    assert "export_id" not in ids
+
+
+def test_a_404_matched_only_by_prose_says_so_and_shows_the_body(script, capsys):
+    """The two 404 branches are not equally strong, and the output rendered them
+    identically — the weaker one printed "Capella error None", which reads as a missing
+    value rather than as "a different test was used".
+
+    This is the branch a reader most needs to second-guess, so it names the test and
+    carries the body. Without that, a live 404 on /queryService/indexes was accepted and
+    there was no way to tell from the run's own output whether the route had matched: the
+    evidence was discarded at the moment of judging it.
+    """
+    real = script._request
+
+    def _prose_404(method, path, token, *a, **k):
+        if path.endswith("/auditLogExports"):
+            return 404, '{"message":"export job does not exist on cluster CL"}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _prose_404
+    try:
+        script.discover("fake-secret", _Args(include_pending=True))
+    finally:
+        script._request = real
+
+    line = capsys.readouterr().out.split("audit export")[-1].split("\n")[0]
+    assert "Capella error None" not in line
+    assert "weaker evidence" in line
+    assert "does not exist on cluster CL" in line
+
+
+def test_every_probe_verdict_records_the_method_it_sent(script):
+    """`method_sent` was stamped on some returns and not others, so a GET judged on the
+    404 branch reported None — and None is the value that means "unknown", which the
+    promotion tag reader treats as "do not object". A field consulted for a promotion
+    decision cannot be absent on some paths through the function.
+    """
+    ids = {"organization_id": "ORG", "project_id": "PROJ", "cluster_id": "CL"}
+    for op, mode in (
+        (_Op("g", "GET", "/v4/organizations/{organization_id}/projects"), "options"),
+        (_Op("g404", "GET", "/v4/organizations/{organization_id}/nope"), "options"),
+        (_Op("w", "POST", "/v4/organizations/{organization_id}/projects"), "options"),
+        (_Op("m", "POST", "/v4/organizations/{organization_id}/projects"), "method"),
+    ):
+        result = script.probe(op, ids, "k", mode=mode)
+        assert result.method_sent, f"{op.name} ({mode}) recorded no method_sent"
+
+
+def test_the_prose_scan_reads_the_message_not_the_hint(script):
+    """Capella's error envelope carries a generic `hint` that is not about this request.
+
+    One real hint reads "Returned from the API when a database does not have an existing
+    On/Off schedule" — containing both "does not have" and "no existing". Scanning the
+    whole body meant a router 404 carrying that boilerplate would read as proof the route
+    matched, on the strength of a sentence describing a different endpoint.
+    """
+    misleading_hint = (
+        '{"code":404,"httpStatusCode":404,'
+        '"hint":"Returned from the API when a database does not have an existing '
+        'On/Off schedule.","message":"route not found"}'
+    )
+    assert not script._object_absent_prose(misleading_hint)
+
+    # The live body this was built from: `code` is the HTTP status echoed back, not a
+    # domain code, so the structural check declines it — but the message names a domain
+    # object, which only the query-index handler could have produced.
+    real = (
+        '{"code":404,"hint":"Please review your request and ensure that all required '
+        'parameters are correctly provided.","httpStatusCode":404,'
+        '"message":"Index not found in key space"}'
+    )
+    assert script._capella_domain_error(real) is None
+    assert script._object_absent_prose(real)
+
+    # Non-JSON keeps the old whole-body behaviour rather than silently answering False.
+    assert script._object_absent_prose("bucket GONE does not exist in cluster CL")
+
+
+# ── Finding an index ─────────────────────────────────────────────────────────
+
+
+def test_the_index_sweep_looks_past_the_default_keyspace(script):
+    """One guess was not good enough. The first attempt asked the first bucket's
+    _default._default, got "Index not found in key space", and three parked operations
+    stayed parked on the strength of it — a true answer to a question nobody meant to ask.
+    An organization can easily have indexes and none in that one spot.
+    """
+    real = script._request
+
+    def _only_one_keyspace_has_one(method, path, token, *a, **k):
+        if "queryService/indexes" in path:
+            if "scope=reporting" in path and "collection=daily" in path:
+                return 200, '{"data":[{"indexName":"ix_daily_ts"}]}'
+            return 404, '{"message":"Index not found in key space"}'
+        if path.endswith("/buckets/BKT/scopes"):
+            return 200, '{"data":[{"name":"_default"},{"name":"reporting"}]}'
+        if path.endswith("/scopes/reporting/collections"):
+            return 200, '{"data":[{"name":"daily"}]}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _only_one_keyspace_has_one
+    try:
+        ids = {"bucket_id": "BKT"}
+        script._discover_an_index(
+            "k", "/v4/organizations/ORG/projects/PROJ/clusters/CL", ids
+        )
+    finally:
+        script._request = real
+
+    assert ids["index_name"] == "ix_daily_ts"
+
+
+def test_the_index_sweep_is_bounded(script):
+    """A convenience, not a survey. An organization with many buckets must not turn one
+    probe run into hundreds of requests."""
+    real = script._request
+    calls = []
+
+    def _never_any(method, path, token, *a, **k):
+        if "queryService/indexes" in path:
+            calls.append(path)
+            return 404, '{"message":"Index not found in key space"}'
+        if "/scopes/" in path and path.endswith("/collections"):
+            return 200, '{"data":[{"name":"c1"}]}'
+        if path.endswith("/scopes"):
+            scopes = ",".join(f'{{"name":"s{i}"}}' for i in range(20))
+            return 200, '{"data":[' + scopes + "]}"
+        if path.endswith("/buckets"):
+            buckets = ",".join(f'{{"id":"b{i}"}}' for i in range(20))
+            return 200, '{"data":[' + buckets + "]}"
+        return real(method, path, token, *a, **k)
+
+    script._request = _never_any
+    try:
+        ids = {}
+        script._discover_an_index(
+            "k", "/v4/organizations/ORG/projects/PROJ/clusters/CL", ids
+        )
+    finally:
+        script._request = real
+
+    assert "index_name" not in ids
+    assert len(calls) <= script._INDEX_SWEEP_KEYSPACES, (
+        f"the sweep made {len(calls)} calls; the ceiling is "
+        f"{script._INDEX_SWEEP_KEYSPACES}"
+    )
+
+
+def test_an_empty_sweep_says_what_it_looked_at(script, capsys):
+    """ "this organization has no indexes" and "we looked in one empty corner of it" are
+    different conclusions, and only the first is worth acting on."""
+    real = script._request
+
+    def _never_any(method, path, token, *a, **k):
+        if "queryService/indexes" in path:
+            return 404, '{"message":"Index not found in key space"}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _never_any
+    try:
+        script._discover_an_index(
+            "k", "/v4/organizations/ORG/projects/PROJ/clusters/CL", {"bucket_id": "BKT"}
+        )
+    finally:
+        script._request = real
+
+    out = capsys.readouterr().out
+    assert "keyspace(s) asked" in out
+    # It must not generalise from a bounded sweep to the whole organization.
+    assert "The route ANSWERS" in out
+    # And it must name what it asked. A bare "none found" gives an operator who can SEE
+    # indexes in the console nothing to compare against, so "the sweep is wrong somehow"
+    # never becomes "it never looked at the one I mean".
+    assert "Asked:" in out
+    assert "BKT.inventory.airline" in out, out
+
+
+def test_method_probe_never_sends_the_real_method_of_a_destructive_operation(script):
+    """--method-probe rests on "an empty body is guaranteed to be rejected", which is an
+    assumption about the server rather than a guarantee — probe() has a branch for when it
+    is wrong, reporting that the operation "may have just been performed".
+
+    For capella_backup_restore that sentence means a cluster's data was overwritten. The
+    exclusion had to be added: the destructive guard existed only for --write-probe, and
+    the only thing stopping a real POST to .../backups/{backup_id}/restore was that the
+    record happened to carry body_required=(). Recording its required fields — precisely
+    what the promotion procedure asks for once a 422 names them — would have armed it.
+    """
+    sent = []
+
+    def _capture(method, path, token, *a, **k):
+        sent.append(method)
+        return 405, "{}"
+
+    op = _Op("cb_restore", "POST", "/v4/organizations/{organization_id}/projects")
+    op.body_required = ("sourceClusterId",)
+    op.destructive = True
+
+    original = script._request
+    script._request = _capture
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k", mode="method")
+    finally:
+        script._request = original
+
+    assert sent == ["OPTIONS"], f"a destructive operation was probed with {sent}"
+    assert result.method_sent == "OPTIONS"
+    assert "DESTRUCTIVE" in result.detail
+
+
+def test_a_non_destructive_write_still_gets_its_method_confirmed(script):
+    """The exclusion must not quietly disable the mode for everything else."""
+    sent = []
+
+    def _capture(method, path, token, *a, **k):
+        sent.append(method)
+        return 422, '{"message":"name is required"}'
+
+    op = _Op("cb_create", "POST", "/v4/organizations/{organization_id}/projects")
+    op.body_required = ("name",)
+    op.destructive = False
+
+    original = script._request
+    script._request = _capture
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k", mode="method")
+    finally:
+        script._request = original
+
+    assert sent == ["POST"]
+    assert result.verdict == "VERIFIED"
+    assert result.method_sent == "POST"
+
+
+def test_a_first_of_many_pick_says_so(script, monkeypatch, capsys):
+    """Discovery takes the first project and the first cluster. On a shared organization
+    that is a coin toss, and it was silent — so a run reported "this cluster has no
+    eventing functions" about a cluster nobody chose, while the function sat on another.
+
+    A survey of the organization and a look at one corner of it cannot print the same way.
+    """
+    real = script._request
+
+    def _many(method, path, token, *a, **k):
+        if path.endswith("/projects"):
+            return 200, '{"data":[{"id":"PROJ"},{"id":"PROJ2"},{"id":"PROJ3"}]}'
+        if path.endswith("/clusters") and method == "GET":
+            return 200, '{"data":[{"id":"CL"},{"id":"CL2"}]}'
+        return real(method, path, token, *a, **k)
+
+    monkeypatch.setattr(script, "_request", _many)
+    script.discover("fake-secret", _Args())
+    out = capsys.readouterr().out
+
+    assert "1 of 3 projects" in out
+    assert "1 of 2 clusters" in out
+    assert "--project" in out and "--cluster" in out
+
+
+def test_a_single_target_is_not_flagged(script, capsys):
+    """One project and one cluster is unambiguous; saying "1 of 1" would be noise."""
+    script.discover("fake-secret", _Args())
+    out = capsys.readouterr().out
+    assert "1 of 1" not in out
+
+
+def test_a_nested_list_item_still_yields_its_id(script):
+    """v4 sometimes nests one level deeper: {"data":[{"data":{...}}]}. The App Services
+    discovery unwrapped that and this helper did not, so an endpoint using the nested
+    shape read as an EMPTY LIST — "the cluster has none" for a cluster that has some."""
+    nested = '{"data":[{"data":{"name":"enrich_orders"}}]}'
+    assert script._first_id(nested, "name", "id") == "enrich_orders"
+    flat = '{"data":[{"name":"enrich_orders"}]}'
+    assert script._first_id(flat, "name", "id") == "enrich_orders"
+
+
+def test_the_scope_and_collection_lists_read_the_nested_shape(script):
+    """_first_id learned to unwrap {"data":[{"data":{...}}]}; _names did not, so a scopes
+    or collections list in that shape came back EMPTY and the index sweep fell back to
+    ["_default"] — one keyspace per bucket. Three lookups then produced "this organization
+    simply has no index", in an organization that has plenty."""
+    assert script._names('{"data":[{"data":{"name":"reporting"}}]}') == ["reporting"]
+    assert script._names('{"data":[{"name":"reporting"}]}') == ["reporting"]
+    assert script._names('{"data":[]}') == []
+
+
+def test_the_alternatives_are_named_not_just_counted(script, monkeypatch, capsys):
+    """ "1 of 2 clusters" without saying what the other one IS sends someone to the Capella
+    console to copy a UUID out of a URL. The id is already in the response that produced
+    the count."""
+    real = script._request
+
+    def _two(method, path, token, *a, **k):
+        if path.endswith("/clusters") and method == "GET":
+            return 200, (
+                '{"data":[{"id":"CL","name":"sandbox"},'
+                '{"id":"CL2","name":"field-demo"}]}'
+            )
+        return real(method, path, token, *a, **k)
+
+    monkeypatch.setattr(script, "_request", _two)
+    script.discover("fake-secret", _Args())
+    out = capsys.readouterr().out
+
+    assert "CL2" in out and "field-demo" in out
+    assert "<- probing this one" in out
+
+
+def test_the_sweep_names_buckets_readably(script):
+    """Capella bucket ids are base64 of the name. A sweep report printing only
+    aGFydmVzdGVy is unreadable to the person being asked to compare it with their
+    console."""
+    assert script._bucket_label("aGFydmVzdGVy") == "harvester"
+    assert script._bucket_label("TjFRTF9TWVNURU1fQlVDS0VU") == "N1QL_SYSTEM_BUCKET"
+    # Not base64, or base64 of something unprintable: fall back to the id itself rather
+    # than printing mojibake.
+    assert script._bucket_label("not-base64!") == "not-base64!"
+
+
+def test_the_sweep_flags_an_empty_scope_list(script, capsys):
+    """ "1 keyspace per bucket" is the signature of a scopes list that came back empty and
+    was silently replaced with ["_default"] — which is exactly how a bucket with indexes
+    in a named scope gets reported as having none."""
+    real = script._request
+
+    def _no_scopes(method, path, token, *a, **k):
+        if path.endswith("/scopes"):
+            return 200, '{"data":[]}'
+        if "queryService/indexes" in path:
+            return 404, '{"message":"Index not found in key space"}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _no_scopes
+    try:
+        script._discover_an_index(
+            "k", "/v4/organizations/ORG/projects/PROJ/clusters/CL", {"bucket_id": "BKT"}
+        )
+    finally:
+        script._request = real
+
+    assert "scopes list empty" in capsys.readouterr().out
+
+
+# ── Response shapes ──────────────────────────────────────────────────────────
+
+
+def test_a_parked_read_reports_its_response_keys(script):
+    """capella_eventing_function_code_set has a confirmed PATH and a request body with no
+    source anywhere — the Terraform provider has no /code endpoint at all. GET on the same
+    path answers 200, and whatever it returns is what the setter round-trips, so reading
+    the getter settles the setter without sending anything."""
+    op = _Op("cb_code_get", "GET", "/v4/organizations/{organization_id}/projects")
+    script._PENDING_NAMES.add("cb_code_get")
+    real = script._request
+    script._request = lambda *a, **k: (
+        200,
+        '{"code":"function OnUpdate(){}","name":"x"}',
+    )
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k")
+    finally:
+        script._request = real
+        script._PENDING_NAMES.discard("cb_code_get")
+
+    assert "response keys: code, name" in result.detail
+
+
+def test_a_sensitive_response_never_has_its_shape_reported(script):
+    """Keys are schema; values are not. But an operation flagged sensitive_response is one
+    whose response carries a signed URL or a credential, and key names on those endpoints
+    are close enough to the secret's shape that the honest default is silence."""
+    op = _Op("cb_export_get", "GET", "/v4/organizations/{organization_id}/projects")
+    op.sensitive_response = True
+    script._PENDING_NAMES.add("cb_export_get")
+    real = script._request
+    script._request = lambda *a, **k: (200, '{"downloadURL":"https://signed"}')
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k")
+    finally:
+        script._request = real
+        script._PENDING_NAMES.discard("cb_export_get")
+
+    assert "response keys" not in result.detail
+    assert "downloadURL" not in result.detail
+
+
+def test_a_shipped_read_is_not_shape_reported(script):
+    """Only the parked set needs this. A shipped tool's response contract is already
+    written down, and adding a line per operation to every run is noise."""
+    op = _Op("cb_shipped", "GET", "/v4/organizations/{organization_id}/projects")
+    real = script._request
+    script._request = lambda *a, **k: (200, '{"a":1,"b":2}')
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k")
+    finally:
+        script._request = real
+    assert "response keys" not in result.detail
+
+
+def test_a_list_envelope_reports_the_element_shape(script):
+    """{"data":[...],"cursor":{...}} — the useful shape is one ELEMENT. Reporting
+    "data, cursor" would describe the envelope every list endpoint shares."""
+    assert script._response_shape('{"data":[{"id":1,"name":"x"}],"cursor":{}}') == [
+        "id",
+        "name",
+    ]
+    assert script._response_shape('{"data":[{"data":{"z":1,"a":2}}]}') == ["a", "z"]
+
+
+def test_the_static_parse_reads_sensitive_response(script):
+    """Registered in CONSULTED_FIELDS rather than reached with a bare getattr — that is
+    the mistake `query` made. Under the static fallback the attribute would be absent,
+    getattr(..., False) would answer "not sensitive", and the guard stopping a signed URL
+    reaching the report would be inert on the only configuration anyone runs."""
+    static = {
+        o.name: o for o in script._ops_by_static_parse("handlers/capella/spec.py")
+    }
+    assert static["capella_database_credential_create"].sensitive_response is True
+    assert static["capella_projects_list"].sensitive_response is False
+
+
+# ── v4 does not use one list envelope ────────────────────────────────────────
+
+
+def test_a_non_data_envelope_is_read(script):
+    """GET /buckets/{id}/scopes answers {"scopes": [...]}, and a scope answers
+    {"collections": [...]}. Both helpers assumed {"data": [...]}, so a scopes list read as
+    EMPTY — and the caller had `or "_default"` behind it, turning a parse failure into a
+    plausible default nobody questioned.
+
+    Three buckets reporting three empty scope lists was never a fact about the
+    organization: every bucket has at least a _default scope.
+    """
+    assert script._names('{"scopes":[{"name":"reporting"},{"name":"_default"}]}') == [
+        "reporting",
+        "_default",
+    ]
+    assert script._names('{"collections":[{"name":"daily"}]}') == ["daily"]
+    assert script._first_id('{"scopes":[{"name":"reporting"}]}', "name") == "reporting"
+    # The common envelope still wins outright.
+    assert script._names('{"data":[{"name":"a"}],"cursor":{}}') == ["a"]
+
+
+def test_an_ambiguous_envelope_fails_closed(script):
+    """Two list-valued keys is a shape this does not understand, and guessing between them
+    is how the first version came to assume "data" everywhere."""
+    assert script._names('{"scopes":[{"name":"a"}],"other":[{"name":"b"}]}') == []
+
+
+def test_an_assumed_scope_is_labelled_as_assumed(script, capsys, monkeypatch):
+    """`or "_default"` printed "_default" whether the scopes list said so or could not be
+    read at all. Only one of those is a discovery."""
+    real = script._request
+
+    def _unreadable_scopes(method, path, token, *a, **k):
+        if path.endswith("/scopes"):
+            return 200, '{"unexpected":{"shape":true}}'
+        return real(method, path, token, *a, **k)
+
+    monkeypatch.setattr(script, "_request", _unreadable_scopes)
+    ids = script.discover("fake-secret", _Args())
+    out = capsys.readouterr().out
+
+    assert ids["scope_name"] == "_default"
+    assert "ASSUMED" in out
+
+
+def test_the_keyspace_selector_uses_the_bucket_name(script):
+    """A keyspace is `bucket`.`scope`.`collection` — three NAMES. The scope and collection
+    selectors were already names while the bucket was a base64 id, which is not a keyspace
+    anything would recognise, and the API duly answered "Index not found in key space".
+    That is a true statement about a keyspace that does not exist.
+    """
+    op = _Op("cb_ix", "GET", "/v4/organizations/{organization_id}/projects")
+    op.query = ("bucket", "scope", "collection")
+    q = script._required_query(
+        op,
+        {
+            "bucket_id": "aGFydmVzdGVy",
+            "bucket_name": "harvester",
+            "scope_name": "governance",
+            "collection_name": "trial_signals",
+        },
+    )
+    assert "bucket=harvester" in q
+    assert "aGFydmVzdGVy" not in q
+    assert "scope=governance" in q and "collection=trial_signals" in q
+
+
+def test_the_selector_falls_back_to_the_id(script):
+    """A run that could not resolve the name should still ask, rather than omit the
+    required parameter and collect a 400."""
+    op = _Op("cb_ix", "GET", "/v4/organizations/{organization_id}/projects")
+    op.query = ("bucket",)
+    assert "bucket=BKT" in script._required_query(op, {"bucket_id": "BKT"})
+
+
+def test_the_sweep_skips_internal_buckets(script, capsys):
+    """Four of twelve keyspaces in a live run went to N1QL_SYSTEM_BUCKET, whose scopes are
+    Couchbase's own bookkeeping. Nobody looking for a user index wants that budget."""
+    real = script._request
+
+    def _many(method, path, token, *a, **k):
+        if path.endswith("/buckets"):
+            return 200, (
+                '{"data":[{"id":"TjFRTF9TWVNURU1fQlVDS0VU"},{"id":"aGFydmVzdGVy"}]}'
+            )
+        if "queryService/indexes" in path:
+            return 404, '{"message":"Index not found in key space"}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _many
+    try:
+        script._discover_an_index(
+            "k", "/v4/organizations/ORG/projects/PROJ/clusters/CL", {}
+        )
+    finally:
+        script._request = real
+
+    out = capsys.readouterr().out
+    assert "N1QL_SYSTEM_BUCKET" not in out
+    assert "harvester" in out
+
+
+def test_the_sweep_budget_is_shared_across_buckets(script, capsys):
+    """Depth-first spent the whole ceiling inside one bucket's scopes and never reached the
+    third bucket at all — so "we looked everywhere" was false in a way the report could not
+    show."""
+    real = script._request
+
+    def _deep_first_bucket(method, path, token, *a, **k):
+        if path.endswith("/buckets"):
+            return 200, '{"data":[{"id":"YQ=="},{"id":"Yg=="},{"id":"Yw=="}]}'
+        if path.endswith("/scopes"):
+            scopes = ",".join(f'{{"name":"s{i}"}}' for i in range(30))
+            return 200, '{"scopes":[' + scopes + "]}"
+        if path.endswith("/collections"):
+            return 200, '{"collections":[{"name":"c1"}]}'
+        if "queryService/indexes" in path:
+            return 404, '{"message":"Index not found in key space"}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _deep_first_bucket
+    try:
+        script._discover_an_index(
+            "k", "/v4/organizations/ORG/projects/PROJ/clusters/CL", {}
+        )
+    finally:
+        script._request = real
+
+    out = capsys.readouterr().out
+    # Every bucket must get a look, not just the first.
+    for name in ("a.", "b.", "c."):
+        assert name in out, f"bucket {name!r} was never asked:\n{out}"
+
+
+def test_the_sweep_asks_for_exactly_what_it_reports(script):
+    """The report printed the decoded bucket NAME while the request carried the base64 ID.
+
+    So a run said it had asked "harvester.governance.trial_signals" and had actually asked
+    "aGFydmVzdGVy.governance.trial_signals" — a keyspace that does not exist, answered
+    accurately with "Index not found in key space". Twelve of those read as twelve empty
+    collections.
+
+    A report that does not print the request it made is worse than no report: it is the
+    only thing a reader has to check the tool against, and this one quietly agreed with
+    itself.
+    """
+    asked = []
+    real = script._request
+
+    def _capture(method, path, token, *a, **k):
+        if "queryService/indexes" in path:
+            asked.append(path)
+            return 404, '{"message":"Index not found in key space"}'
+        if path.endswith("/buckets"):
+            return 200, '{"data":[{"id":"aGFydmVzdGVy"}]}'
+        if path.endswith("/scopes"):
+            return 200, '{"scopes":[{"name":"governance"}]}'
+        if path.endswith("/collections"):
+            return 200, '{"collections":[{"name":"trial_signals"}]}'
+        return real(method, path, token, *a, **k)
+
+    script._request = _capture
+    try:
+        script._discover_an_index("k", "/v4/organizations/O/projects/P/clusters/C", {})
+    finally:
+        script._request = real
+
+    assert asked, "the sweep made no query-index request at all"
+    assert "bucket=harvester" in asked[0], asked[0]
+    assert "aGFydmVzdGVy" not in asked[0], (
+        "the sweep sent the base64 id while reporting the name"
+    )

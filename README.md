@@ -407,7 +407,11 @@ pytest
 
 ## License
 
-MIT © 2026 Chris Ahrendt
+Apache License 2.0. See [LICENSE](LICENSE) for the full text and [NOTICE](NOTICE) for
+attribution — Apache 2.0 section 4(d) requires NOTICE to travel with redistributions, so
+both files ship in the wheel.
+
+Copyright 2026 Couchbase, Inc.
 
 ---
 

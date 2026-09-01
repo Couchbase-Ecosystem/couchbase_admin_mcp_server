@@ -12,6 +12,7 @@ at one page.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -147,7 +148,12 @@ def test_every_operation_has_been_verified_against_a_live_organization():
     """
     from handlers.capella import spec
 
-    declared = {op.name for op in OPS}
+    # SHIPPED_UNVERIFIED is subtracted, not ignored. Those operations ship on a primary
+    # source plus a confirmed sibling, and they say so in their own tool description. The
+    # register is the thing that keeps this test meaningful: without it the only way to
+    # ship one was to invent a LIVE_VERIFIED entry, which is precisely the false claim
+    # this test was written to catch.
+    declared = {op.name for op in OPS} - set(spec.SHIPPED_UNVERIFIED)
     recorded = set(spec.LIVE_VERIFIED)
     assert recorded == declared, (
         "the live verification record and the operation registry disagree.\n"
@@ -162,7 +168,9 @@ def test_the_recorded_statuses_are_ones_that_prove_a_route_matched():
     from handlers.capella import spec
 
     for name, status in spec.LIVE_VERIFIED.items():
-        assert status in {"200", "404", "405"}, f"{name}: implausible status {status}"
+        assert status in {"200", "400", "404", "405", "422"}, (
+            f"{name}: implausible status {status}"
+        )
 
 
 def test_every_read_operation_was_verified_by_a_real_call():
@@ -172,11 +180,31 @@ def test_every_read_operation_was_verified_by_a_real_call():
     from handlers.capella import spec
 
     for op in OPS:
-        if op.method == "GET":
+        if op.method == "GET" and op.name not in spec.SHIPPED_UNVERIFIED:
             assert spec.LIVE_VERIFIED[op.name] in {"200", "404"}, (
                 f"{op.name} is a GET but was only OPTIONS-probed ("
                 f"{spec.LIVE_VERIFIED[op.name]}), so its method was never confirmed"
             )
+
+
+#: Statuses a write may be recorded with, and what each proves.
+#:
+#:   405  an OPTIONS probe matched the route and was refused for the method. Confirms
+#:        the PATH and says nothing about the method. The weakest of the three.
+#:   422  the operation's OWN method was sent and the request was refused on its
+#:        CONTENTS or on entitlement. Confirms path AND method, and nothing ran.
+#:   400  the same, for endpoints that answer 400 where others answer 422.
+#:
+#: 422 and 400 were added on 2026-09-01. This test previously demanded 405 exactly, on
+#: the reasoning that "a write verified by anything other than an OPTIONS probe means
+#: something was actually performed" — which predates --method-probe and is not true of
+#: it: an empty body that comes back 422 is the proof that nothing was performed. The
+#: live case that forced the question was PUT .../auditLog answering
+#: "your support package does not include audit logging", which is a real PUT, refused,
+#: with the cluster untouched.
+#:
+#: A 2xx is still absent and must stay absent. That would mean the write happened.
+_WRITE_EVIDENCE = frozenset({"400", "405", "422"})
 
 
 def test_write_operations_are_path_verified_only_and_that_is_deliberate():
@@ -189,12 +217,17 @@ def test_write_operations_are_path_verified_only_and_that_is_deliberate():
     """
     from handlers.capella import spec
 
-    writes = [op for op in OPS if op.method != "GET"]
+    writes = [
+        op
+        for op in OPS
+        if op.method != "GET" and op.name not in spec.SHIPPED_UNVERIFIED
+    ]
     assert writes, "expected write operations to exist"
     for op in writes:
-        assert spec.LIVE_VERIFIED[op.name] == "405", (
-            f"{op.name} recorded {spec.LIVE_VERIFIED[op.name]}; a write verified by anything "
-            "other than an OPTIONS probe means something was actually performed"
+        assert spec.LIVE_VERIFIED[op.name] in _WRITE_EVIDENCE, (
+            f"{op.name} recorded {spec.LIVE_VERIFIED[op.name]}; the only statuses that "
+            "prove a route without performing the operation are "
+            f"{sorted(_WRITE_EVIDENCE)}"
         )
 
 
@@ -910,3 +943,288 @@ def test_the_app_endpoint_is_addressed_by_name_not_by_id():
         assert (
             "{app_endpoint_name}" in op.path or "{app_endpoint_keyspace}" in op.path
         ), f"{op.name} addresses an App Endpoint by something other than its name"
+
+
+def test_bucket_flush_is_a_put():
+    """It shipped as POST. The path was OPTIONS-probed and recorded [LIVE 405], which is
+    true and irrelevant: a 405 from OPTIONS confirms the route and says nothing about which
+    method the route accepts. The Terraform provider's generated client — generated from
+    Couchbase's own API document — issues PUT.
+
+    Pinned because the failure is quiet. A caller asking to flush a bucket got a 405 that
+    reads like an entitlement problem, on the one operation whose purpose is a fast reset
+    between test runs, so it would be retried rather than investigated.
+    """
+    from handlers.capella import spec
+
+    flush = spec.OPS_BY_NAME["capella_bucket_flush"]
+    assert flush.method == "PUT", (
+        "capella_bucket_flush must be PUT; POST returns 405 and looks like a permissions "
+        "failure rather than a wrong method"
+    )
+    assert flush.path.endswith("/buckets/{bucket_id}/flush")
+
+
+#: Shipped write operations that genuinely take NO request body. Each needs a reason,
+#: because "no body" and "we never worked out the body" look identical in the code and
+#: only the second is a defect.
+#: DELETE is excluded wholesale rather than listed here — a DELETE identifies its target
+#: entirely by path, and requiring a body schema for one would be noise.
+_WRITES_WITH_NO_BODY = {
+    # The provider's NewPostBackupRequest takes no body argument: the bucket in the path
+    # is the whole request.
+    "capella_backup_create",
+    # ACTION endpoints: the path names both the target and the verb, so there is nothing
+    # left for a body to say. All of these predate the 2026-09-01 promotion and have
+    # shipped this way throughout; they are listed to make the claim explicit rather than
+    # implicit, not because anything about them changed.
+    "capella_app_endpoint_offline",
+    "capella_app_endpoint_online",
+    "capella_app_endpoint_resync_start",
+    "capella_app_service_turn_off",
+    "capella_app_service_turn_on",
+    "capella_bucket_flush",
+    "capella_cluster_turn_off",
+}
+
+
+def test_no_shipped_write_tool_is_missing_its_body_schema():
+    """A write with body={} renders as a TOOL WITH NO WAY TO SEND A BODY.
+
+    This is not cosmetic. capella_query_index_manage shipped that way, and its input
+    schema was {organization_id, project_id, cluster_id, confirm} — no `definition`, the
+    one field the operation exists to carry. The tool could be called and could not
+    possibly work.
+
+    It happened because a promotion was made on PATH verification alone: an OPTIONS probe
+    confirms a route and says nothing about what the route wants. The registry's own
+    test_write_operations_are_path_verified_only_and_that_is_deliberate says exactly that,
+    and names it as "the gap that let three wrong request bodies sit behind verified
+    paths". Wrong bodies were the earlier symptom; absent ones are this one.
+    """
+    from handlers.capella import spec
+
+    missing = [
+        op.name
+        for op in OPS
+        if op.method not in ("GET", "DELETE")
+        # body_scalar counts: a body that IS a JSON string is still a declared body. It
+        # lives in its own field because almost every v4 endpoint takes an object and
+        # exactly one does not.
+        and not (op.body or op.body_scalar)
+        and op.name not in _WRITES_WITH_NO_BODY
+    ]
+    assert not missing, (
+        "these shipped write operations declare no request body, so their tools expose "
+        f"no way to send one: {sorted(missing)}.\n"
+        "Either give each a body schema from a primary source, or add it to "
+        "_WRITES_WITH_NO_BODY with the evidence that it takes none."
+    )
+
+    stale = sorted(_WRITES_WITH_NO_BODY - {op.name for op in spec.OPS})
+    assert not stale, f"exempted operations that no longer exist: {stale}"
+
+
+def test_a_required_body_field_is_actually_in_the_schema():
+    """body_required naming a field the schema does not define would make the tool
+    unsatisfiable: the caller is told a field is required and given nowhere to put it."""
+    for op in OPS:
+        undeclared = [f for f in op.body_required if f not in (op.body or {})]
+        assert not undeclared, (
+            f"{op.name} requires {undeclared}, which its body schema does not define"
+        )
+
+
+def test_no_write_is_recorded_with_a_success_status():
+    """The one status a write must never carry. 2xx means the operation RAN — a bucket
+    was deleted, a cluster was created, a restore overwrote a target. Recording it as
+    evidence would mean the verification run itself did the damage, and the record would
+    read as a clean pass.
+    """
+    from handlers.capella import spec
+
+    performed = {
+        op.name: spec.LIVE_VERIFIED[op.name]
+        for op in OPS
+        if op.method != "GET"
+        and op.name not in spec.SHIPPED_UNVERIFIED
+        and spec.LIVE_VERIFIED[op.name].startswith("2")
+    }
+    assert not performed, (
+        f"these writes are recorded with a SUCCESS status: {performed}. Either the probe "
+        "performed them, or someone recorded a status by hand. Both need investigating "
+        "before this is treated as verification."
+    )
+
+
+def test_an_opaque_object_is_not_accepted_as_a_body_schema():
+    """A body of {"type": "object"} with no properties passes the "has a body" guard and
+    tells a caller nothing — the body={} defect wearing a different hat.
+
+    capella_alert_integration_create shipped that way for config.webhook and a live 422
+    named what was missing: "does not provide a valid authentication method". A caller
+    could not have known to send one.
+    """
+
+    def _opaque(schema, path):
+        found = []
+        if not isinstance(schema, dict):
+            return found
+        if schema.get("type") == "object" and not schema.get("properties"):
+            # A free-form map (headers, settings, filters) is legitimately shapeless; it
+            # says so in its description rather than being silently empty.
+            if "description" not in schema:
+                found.append(path)
+        for key, value in (schema.get("properties") or {}).items():
+            found += _opaque(value, f"{path}.{key}")
+        return found
+
+    offenders = []
+    for op in OPS:
+        for field, schema in (op.body or {}).items():
+            offenders += _opaque(schema, f"{op.name}.{field}")
+    assert not offenders, (
+        "these body fields are typed `object` with neither properties nor a description "
+        f"saying why they are free-form: {sorted(offenders)}"
+    )
+
+
+def test_the_alert_integration_writes_are_guarded_and_say_why():
+    """These three are the only shipped operations where CALLING THE TOOL makes Capella
+    open a connection to a host the caller named.
+
+    Observed live: creating an integration pointed at https://example.com produced
+    "Received 405 while trying to connect", with the remote page's HTML quoted back inside
+    the error. So the create is a synchronous outbound request carrying caller-supplied
+    credentials, and its error carries whatever the probed host returned.
+
+    Two consequences this pins: the operations must be `guarded` so the egress allowlist
+    runs before the call, and the summary must SAY the request happens at create time —
+    a reader who thinks it merely stores config will place the allowlist check in the
+    wrong place.
+    """
+    from handlers.capella.spec import OPS_BY_NAME
+
+    for name in (
+        "capella_alert_integration_create",
+        "capella_alert_integration_update",
+        "capella_alert_integration_test",
+    ):
+        op = OPS_BY_NAME.get(name)
+        if op is None:
+            continue  # still parked; nothing shipped, nothing to guard
+        assert op.guarded, f"{name} performs egress and must be guarded"
+
+    create = OPS_BY_NAME["capella_alert_integration_create"]
+    assert "EGRESS" in create.summary
+    assert "SSRF" in create.summary, (
+        "the summary must name the shape of the hazard, not just the word 'egress' — "
+        "'names an outbound destination' reads as configuration, and it is a request"
+    )
+
+
+# ── The unverified register ──────────────────────────────────────────────────
+
+
+def test_every_unverified_operation_gives_a_reason_and_exists():
+    """A name in this register with no reason is an exemption nobody can review — and the
+    register only earns its place by being reviewable. It exists so that shipping without
+    live evidence is a recorded decision rather than a faked LIVE_VERIFIED entry.
+    """
+    from handlers.capella import spec
+
+    names = {op.name for op in OPS}
+    for name, reason in spec.SHIPPED_UNVERIFIED.items():
+        assert name in names, (
+            f"{name} is registered as shipped-unverified but is not in OPS. Either it "
+            "was promoted out of this state and the entry was left behind, or it never "
+            "shipped."
+        )
+        assert len(reason) > 80, (
+            f"{name}: the reason must say what evidence DOES exist and what is missing, "
+            "not just that it is unverified"
+        )
+        assert re.search(r"\d{4}-\d{2}-\d{2}", reason), (
+            f"{name}: the reason must carry the DATE the exception was made. Without one "
+            "there is no telling a decision taken today from one nobody has revisited in "
+            "a year, and this register is only safe while that is visible."
+        )
+        assert name not in spec.LIVE_VERIFIED, (
+            f"{name} is in both registers. It is either verified or it is not."
+        )
+
+
+def test_the_unverified_register_stays_small():
+    """A ceiling, because the pressure on this register is always one more exception.
+
+    It was 4, and moved to 8 on 2026-09-01 — the same day it was written. That is worth
+    being uncomfortable about, so here is the distinction being drawn:
+
+      * ONE batch decision, taken once, for one reason: unblock a customer evaluation on
+        operations whose paths are sourced and whose siblings are confirmed live, in an
+        organization that cannot produce the objects needed to finish the job.
+      * NOT accretion — a name added here every few weeks because verifying was
+        inconvenient that day.
+
+    A cap that moves once with a reason is still a cap. A cap that moves whenever it fires
+    is decoration. If it fires again, read the DATES: entries that have sat here across
+    several rounds of verification are the evidence this became a habit.
+    """
+    from handlers.capella import spec
+
+    assert len(spec.SHIPPED_UNVERIFIED) <= 8, (
+        f"{len(spec.SHIPPED_UNVERIFIED)} operations now ship without live verification: "
+        f"{sorted(spec.SHIPPED_UNVERIFIED)}"
+    )
+
+
+def test_an_unverified_operation_warns_in_its_own_description():
+    """The register is not where a caller looks. A model deciding whether to trust a 404
+    from one of these needs to know at the point of use that the path itself is unproven.
+    """
+    from handlers.capella import spec
+
+    tools = {t.name: t for t in spec.build_tools()}
+    for name in spec.SHIPPED_UNVERIFIED:
+        assert "UNVERIFIED PATH" in tools[name].description, (
+            f"{name} ships unverified and its tool description does not say so"
+        )
+    verified = next(n for n in spec.LIVE_VERIFIED if n in tools)
+    assert "UNVERIFIED PATH" not in tools[verified].description
+    # And the notice must not begin "[PAT", which the verifier reads as the inferred-path
+    # provenance tag. Two different states; one substring away from being the same one.
+    assert not spec._UNVERIFIED_NOTICE.startswith("[PAT")
+
+
+def test_the_parked_registry_is_allowed_to_be_empty():
+    """Reaching zero is the goal, not a broken import.
+
+    spec_pending.py opened the day with 36 records and ended it with none. Several tests
+    needed a parked operation to point at, and the honest fix was for them to SKIP rather
+    than fail — a suite that goes red when the work is finished teaches people to leave one
+    behind.
+    """
+    from handlers.capella import spec_pending
+
+    assert isinstance(spec_pending.PENDING_OPS, tuple)
+    assert all(hasattr(op, "path") for op in spec_pending.PENDING_OPS)
+
+
+def test_the_only_scalar_body_is_the_one_that_needs_to_be():
+    """`body_scalar` exists for PUT .../eventingFunctions/{name}/code, whose request body
+    is the JavaScript source as a bare JSON string rather than an object.
+
+    Pinned narrowly because the field is an escape hatch. If a second operation acquires
+    one, that is worth a look — either v4 has more non-object bodies than we thought, or
+    someone reached for the hatch instead of writing a schema.
+    """
+    scalar = {op.name for op in OPS if op.body_scalar}
+    assert scalar == {"capella_eventing_function_code_set"}, scalar
+
+    op = OPS_BY_NAME["capella_eventing_function_code_set"]
+    assert op.body_scalar["type"] == "string"
+    assert not op.body, "an operation declares either an object body or a scalar one"
+
+    schema = build_input_schema(op)
+    assert schema["properties"]["body"]["type"] == "string"
+    assert "body" in schema["required"]

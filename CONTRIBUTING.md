@@ -274,9 +274,31 @@ export CB_CAPELLA_API_KEY='...'          # PowerShell: $env:CB_CAPELLA_API_KEY =
 uv run python scripts/verify_capella_paths.py
 
 # Machine-readable, for promoting parked operations out of spec_pending.py.
-uv run python scripts/verify_capella_paths.py --method-probe --json \
-    > verify_capella_paths-$(date +%Y%m%d).json
+# --include-pending is the part that matters: WITHOUT it this script reads spec.py only,
+# so it re-checks the 61 paths that are already verified and says nothing whatever about
+# the 36 that need verifying.
+# Use --out rather than a shell redirect. On Windows PowerShell `>` encodes output as
+# UTF-16LE with a BOM, which no JSON reader will accept; --out writes UTF-8 itself.
+uv run python scripts/verify_capella_paths.py --method-probe --include-pending \
+    --out verify_capella_paths-$(date +%Y%m%d).json
 ```
+
+### What the target organization needs
+
+A parked operation reports SKIPPED when the object its path needs does not exist. That is
+honest, and it is also a floor on how much one run can settle. To get a verdict on the
+whole parked set, the organization wants:
+
+| Parked group | Ops | What must exist |
+| --- | --- | --- |
+| `diagnostics` | 14 | audit logging enabled; at least one alert integration; at least one audit-log export job |
+| `eventing` | 9 | a cluster running the Eventing service with at least one deployed function |
+| `backup` | 5 | at least one completed managed backup on a bucket |
+| `query_index` | 4 | any bucket carrying a GSI index |
+| `replication` | 4 | at least one XDCR replication |
+
+None of it needs to be large — one of each is enough, and a read-only key can see all of
+it. Provision once and the same organization serves every future run.
 
 What makes this safe to run against a real organization:
 
@@ -292,10 +314,16 @@ What makes this safe to run against a real organization:
 gitignored (`verify_capella_paths-*.json`) and should be treated as internal. Nothing in
 it is a credential.
 
-Promoting a parked operation, once probed:
+Promoting a parked operation, once probed. The run's PROMOTION REPORT names the
+candidates and the tag each has earned, so this is transcription rather than judgement:
 
-1. Move the record from `handlers/capella/spec_pending.py` into `OPS` in `spec.py`.
-2. Retag its summary `[LIVE]` or `[LIVE+METHOD]`.
+1. Move the record from `handlers/capella/spec_pending.py` into `OPS` in `spec.py`, and
+   **delete the parked copy** — a name left in both registries stops the next run with an
+   error rather than probing it twice.
+2. Retag its summary `[LIVE]` or `[LIVE+METHOD]`, as the promotion report says. The
+   distinction is not cosmetic: an `OPTIONS` probe confirms the PATH and says nothing
+   about whether the real method is accepted there, so only an operation whose own method
+   was sent and rejected on its contents (400/422) earns `[LIVE+METHOD]`.
 3. Record the observed status in `LIVE_VERIFIED`.
 4. Run the suite — `test_every_operation_has_been_verified_against_a_live_organization`
    is what stops an unverified path shipping, and it exists because a commit message once

@@ -157,6 +157,56 @@ def test_the_licence_metadata_and_files_agree():
     assert "Couchbase, Inc." in notice
 
 
+def test_no_shipped_file_claims_a_different_licence_than_the_project_has():
+    """The test above checked pyproject, LICENSE and NOTICE — three of the FOUR files that
+    state a licence — and the fourth is the one a reader opens first.
+
+    README.md ended `MIT © 2026 Chris Ahrendt` while LICENSE, NOTICE and pyproject all said
+    Apache 2.0 / Couchbase, Inc., and it stayed that way through publication to a public
+    Couchbase-Ecosystem repository. Two claims were wrong in one line: the licence, and the
+    copyright holder — and the second is an ownership assertion, which is the half that
+    stops a review.
+
+    The lesson is not "also check the README". It is that a licence restated in prose drifts
+    from the licence in LICENSE, because nothing recomputes it. So this asserts the shape
+    that cannot drift: no shipped document names a licence OTHER than the project's, and the
+    README points at the licence files rather than paraphrasing them.
+    """
+    wrong_licences = ("MIT", "BSD", "GPL", "MPL", "Proprietary")
+    checked = 0
+    for name in ("README.md", "CONTRIBUTING.md", "PUBLISHING.md", "RUNBOOK.md"):
+        path = ROOT / name
+        if not path.exists():
+            continue
+        checked += 1
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            # Only lines that are ABOUT licensing. A prose mention of a dependency's
+            # terms elsewhere is not a claim about this project.
+            lowered = line.lower()
+            if "licen" not in lowered and "©" not in line:
+                continue
+            if "large language models" in lowered:
+                continue  # the LLM-use disclaimer, which is not a licence grant
+            for wrong in wrong_licences:
+                assert not re.search(rf"\b{wrong}\b", line), (
+                    f"{name} names {wrong} on a licensing line, but this project is "
+                    f"Apache-2.0:\n    {line.strip()}"
+                )
+    assert checked, "no documents were checked; the file list has gone stale"
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Apache License 2.0" in readme
+    assert "Couchbase, Inc." in readme, (
+        "the README must name the copyright holder the NOTICE names; an individual's "
+        "name here is an ownership claim over a Couchbase-Ecosystem repository"
+    )
+    assert "(LICENSE)" in readme and "(NOTICE)" in readme, (
+        "the README should LINK the licence files rather than restate their contents — "
+        "a restated licence is one that drifts"
+    )
+
+
 def test_both_licence_files_ship_in_the_wheel():
     """Apache 2.0 section 4(d) requires NOTICE to travel with redistributions."""
     declared = _pyproject()["project"].get("license-files", [])

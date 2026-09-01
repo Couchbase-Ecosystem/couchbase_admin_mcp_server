@@ -154,7 +154,16 @@ pass2.txt
 pass2.json
 smoke-report.json
 smoke-indexes-*.json
+
+# Probe output, under any spelling. This was `verify_capella_paths-*.json` alone, which
+# matches the exact filename CONTRIBUTING.md suggests and nothing else — so the very
+# plausible `verify-20260901.json` sat in the tree UNIGNORED. That file records
+# organization, project and cluster ids. A pattern that only catches the name in the
+# documentation is a pattern that catches the careful case and misses the real one.
 verify_capella_paths-*.json
+verify-*.json
+verify*.json
+capella-paths-*.json
 
 # ── Documentation: what ships and what does not ──────────────────────────────
 # TRACKED, deliberately, because a reader needs the architecture and the install

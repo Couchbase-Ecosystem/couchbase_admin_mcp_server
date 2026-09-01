@@ -94,7 +94,12 @@ from mcp.types import Tool, ToolAnnotations
 # ── Live verification record ─────────────────────────────────────────────────
 
 #: Date of the last full sweep against a live Capella organization.
-LIVE_VERIFIED_ON = "2026-07-30"
+# 2026-07-30 for the original 61; 2026-09-01 for the seventeen promoted from
+# spec_pending.py on that date, when the whole registry was re-probed. The later date is
+# recorded because it is the one a reader should judge staleness against — but note that
+# the App Services subtree SKIPPED in both runs for want of an App Service, so those paths
+# rest on the July evidence.
+LIVE_VERIFIED_ON = "2026-09-01"
 
 #: Every operation, and the HTTP status the control plane answered when its path was last
 #: exercised for real by scripts/verify_capella_paths.py.
@@ -117,7 +122,65 @@ LIVE_VERIFIED_ON = "2026-07-30"
 #: registry were wrong while their paths were 405-verified — `access` missing from both
 #: credential creates, and `deltaSync` for `deltaSyncEnabled`. A path probe cannot catch
 #: that, because it never sends a body.
+#: Operations SHIPPED WITHOUT LIVE VERIFICATION, and why.
+#:
+#: This register exists because the alternative was worse. The ask was "mark XDCR active
+#: so Disney can test it and we fix whatever breaks" — a reasonable product call — and the
+#: two ways to grant it were to fake a LIVE_VERIFIED entry or to say plainly that these
+#: ship on weaker evidence. A faked entry is the exact failure
+#: test_every_operation_has_been_verified_against_a_live_organization was written for: a
+#: claim of verification that nobody made.
+#:
+#: What these DO have: a path read from the Terraform provider's generated OpenAPI client,
+#: and a sibling on the same route confirmed live. capella_replications_list answered 200
+#: and capella_replication_create answered 405 to an OPTIONS probe on 2026-09-01, so
+#: /replications exists. What is missing is one call against a real replication id, and
+#: the test organization has no replication to make one with.
+#:
+#: Every entry costs something: build_tools() appends the caveat to the tool description,
+#: so a model calling one is told the path is unconfirmed. Clear entries as evidence
+#: arrives; a name here for long is a question nobody went back to.
+SHIPPED_UNVERIFIED: dict[str, str] = {
+    "capella_alert_integration_get": (
+        "2026-09-01. Path [TF]; /alertIntegrations confirmed live the same day (list 200, "
+        "create 405 to OPTIONS). No integration exists to supply an id: creating one "
+        "requires an https endpoint that answers 2xx to a POST, because Capella calls it "
+        "synchronously before saving. Response is redacted -- it echoes the webhook URL."
+    ),
+    "capella_alert_integration_update": (
+        "2026-09-01. As capella_alert_integration_get. Body is UpdateAlertRequest from "
+        "the provider's generated client; `config` is required because an update REPLACES "
+        "the destination. Guarded: this is the egress primitive described on create."
+    ),
+    "capella_alert_integration_delete": (
+        "2026-09-01. As capella_alert_integration_get. DESTRUCTIVE and guarded, so a "
+        "wrong path fails closed -- it 404s rather than deleting the wrong object."
+    ),
+    "capella_cluster_audit_log_export_get": (
+        "2026-09-01. Path [TF]; /auditLogExports confirmed live the same day (list 200, "
+        "create 405). An export job WAS created successfully and did not persist to the "
+        "list -- audit logging needs an Enterprise plan and this cluster has Basic, so "
+        "the organization cannot produce a durable export id. Response is redacted: it "
+        "carries a signed download URL."
+    ),
+    "capella_replication_get": (
+        "Path [TF] from the provider's generated client; /replications confirmed live "
+        "2026-09-01 via its list and create siblings. No replication existed in the test "
+        "organization to supply a {replication_id}, and XDCR setup was abandoned rather "
+        "than block the customer test. Shipped deliberately on 2026-09-01."
+    ),
+    "capella_replication_delete": (
+        "2026-09-01. As capella_replication_get. DESTRUCTIVE and guarded, so a wrong "
+        "path fails "
+        "closed — it 404s rather than deleting the wrong object."
+    ),
+}
+
+
 LIVE_VERIFIED: dict[str, str] = {
+    "capella_alert_integration_create": "405",
+    "capella_alert_integration_test": "405",
+    "capella_alert_integrations_list": "200",
     "capella_allowed_cidr_create": "405",
     "capella_allowed_cidr_delete": "405",
     "capella_allowed_cidrs_list": "200",
@@ -145,11 +208,21 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_app_service_turn_off": "405",
     "capella_app_service_turn_on": "405",
     "capella_app_services_list": "200",
+    "capella_backup_create": "405",
+    "capella_backup_cycle_delete": "405",
+    "capella_backup_get": "200",
+    "capella_backup_restore": "405",
+    "capella_backups_list": "200",
     "capella_bucket_create": "405",
     "capella_bucket_delete": "405",
     "capella_bucket_flush": "405",
     "capella_bucket_get": "200",
     "capella_buckets_list": "200",
+    "capella_cluster_audit_log_config_get": "200",
+    "capella_cluster_audit_log_config_set": "422",
+    "capella_cluster_audit_log_events_list": "200",
+    "capella_cluster_audit_log_export_create": "405",
+    "capella_cluster_audit_log_exports_list": "200",
     "capella_cluster_certificate_get": "200",
     "capella_cluster_create": "405",
     "capella_cluster_delete": "405",
@@ -157,6 +230,7 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_cluster_onoff_schedule_delete": "405",
     "capella_cluster_onoff_schedule_get": "404",
     "capella_cluster_onoff_schedule_set": "405",
+    "capella_cluster_stats_get": "200",
     "capella_cluster_turn_off": "405",
     "capella_cluster_turn_on": "405",
     "capella_cluster_update": "405",
@@ -168,6 +242,16 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_database_credential_delete": "405",
     "capella_database_credential_get": "200",
     "capella_database_credentials_list": "200",
+    "capella_event_get": "200",
+    "capella_eventing_function_code_get": "200",
+    "capella_eventing_function_code_set": "405",
+    "capella_eventing_function_create": "405",
+    "capella_eventing_function_delete": "405",
+    "capella_eventing_function_get": "200",
+    "capella_eventing_function_logs_get": "200",
+    "capella_eventing_function_state_set": "405",
+    "capella_eventing_function_update": "405",
+    "capella_eventing_functions_list": "200",
     "capella_events_list": "200",
     "capella_organizations_list": "200",
     "capella_project_create": "405",
@@ -175,6 +259,12 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_project_events_list": "200",
     "capella_project_get": "200",
     "capella_projects_list": "200",
+    "capella_query_index_build_status": "200",
+    "capella_query_index_definitions_list": "200",
+    "capella_query_index_manage": "405",
+    "capella_query_index_properties_get": "200",
+    "capella_replication_create": "405",
+    "capella_replications_list": "200",
     "capella_sample_bucket_load": "405",
     "capella_scope_create": "405",
     "capella_scope_delete": "405",
@@ -206,6 +296,17 @@ class Op:
     #: JSON-schema properties for the request body.
     body: dict[str, Any] = field(default_factory=dict)
     body_required: tuple[str, ...] = ()
+    #: A COMPLETE JSON schema for a request body that is not an object.
+    #:
+    #: Almost every v4 endpoint takes a JSON object, so `body` above is a map of property
+    #: schemas and build_input_schema wraps it in {"type": "object"}. One does not:
+    #: PUT .../eventingFunctions/{name}/code takes the JavaScript source as a bare JSON
+    #: STRING. Its getter returns one, which is how this was found.
+    #:
+    #: Kept as a separate field rather than by making `body` polymorphic, so that every
+    #: existing reader of `body` — the guards, the probe, the input-schema builder —
+    #: keeps its simple contract, and the exception is visible as an exception.
+    body_scalar: dict[str, Any] = field(default_factory=dict)
     #: Response carries credential material and must be redacted before it
     #: reaches an LLM context window or the server log.
     sensitive_response: bool = False
@@ -263,6 +364,15 @@ _ID_DESCRIPTIONS: dict[str, str] = {
 }
 
 _PAGE_QUERY: tuple[str, ...] = ("sortBy", "sortDirection")
+
+#: The keyspace selectors every /queryService/ read takes. Lived in spec_pending.py while
+#: nothing shipped used it; moved here on 2026-09-01 with the query-index promotion, which
+#: is what the note there said to do.
+#:
+#: `bucket` is REQUIRED and is a NAME, not the base64 bucket id -- a keyspace is
+#: `bucket`.`scope`.`collection`, three names. Sending the id produces "Index not found in
+#: key space", which is true and unhelpful.
+_KEYSPACE_QUERY: tuple[str, ...] = ("bucket", "scope", "collection")
 
 # Cluster states used for readiness polling, mirroring the Terraform provider's
 # final-state handling. A state in neither set is treated as in-flight by the
@@ -449,6 +559,353 @@ _APP_SERVICE_CREATE_BODY: dict[str, Any] = {
 
 # ── The registry ─────────────────────────────────────────────────────────────
 
+
+# ── Request bodies for the operations promoted on 2026-09-01 ─────────────────
+#
+# Every field below is transcribed from the Terraform provider's generated OpenAPI
+# client — the same primary source that corrected the paths — and NOT from a live call.
+# The paths are [LIVE]; these shapes are [TF]. That distinction is the point: an OPTIONS
+# probe confirms a route and says nothing about what the route wants, which is how these
+# operations came to ship with body={} and tools that exposed no way to send anything.
+
+#: CreateClusterAuditSettingsRequest. All three fields are non-pointer in the provider,
+#: so all three are required — including the lists, which must be sent empty rather than
+#: omitted.
+_AUDIT_SETTINGS_BODY: dict[str, Any] = {
+    "auditEnabled": {
+        "type": "boolean",
+        "description": "Whether audit logging is enabled on the cluster.",
+    },
+    "disabledUsers": {
+        "type": "array",
+        "description": (
+            "Users whose filterable events will NOT be logged. Send [] to filter nobody."
+        ),
+        "items": {"type": "object"},
+    },
+    "enabledEventIDs": {
+        "type": "array",
+        "description": (
+            "Filterable audit event ids to record. Read the available ids from "
+            "capella_cluster_audit_log_events_list; an id absent here is an event that "
+            "will not appear in the audit trail."
+        ),
+        "items": {"type": "integer"},
+    },
+}
+
+#: CreateClusterAuditLogExportRequest.
+_AUDIT_EXPORT_BODY: dict[str, Any] = {
+    "start": {
+        "type": "string",
+        "description": "Start of the export window, RFC 3339 (e.g. 2026-09-01T00:00:00Z).",
+    },
+    "end": {
+        "type": "string",
+        "description": "End of the export window, RFC 3339.",
+    },
+}
+
+#: IndexDDLRequest. One statement, not a script.
+_INDEX_DDL_BODY: dict[str, Any] = {
+    "definition": {
+        "type": "string",
+        "description": (
+            "A single CREATE / DROP / ALTER / BUILD index statement. Multiple delimited "
+            "queries are rejected. Prefer deferred builds for large indexes, and create "
+            "in batches of 100 or fewer."
+        ),
+    },
+}
+
+#: CreateReplicationRequest. Only sourceBucket and target are non-pointer.
+_REPLICATION_CREATE_BODY: dict[str, Any] = {
+    "sourceBucket": {"type": "string", "description": "Id of the source bucket."},
+    "target": {
+        "type": "object",
+        "description": (
+            "The replication target. `bucket` and `cluster` are ids for Capella targets "
+            "and names for external ones; `type` is 'capella' or 'external'."
+        ),
+        "properties": {
+            "bucket": {"type": "string"},
+            "cluster": {"type": "string"},
+            "type": {"type": "string"},
+        },
+        "required": ["bucket", "cluster"],
+    },
+    "direction": {
+        "type": "string",
+        "description": "'oneWay' (source to target) or 'twoWay'.",
+    },
+    "mode": {"type": "string", "description": "Replication creation mode."},
+    "priority": {
+        "type": "string",
+        "description": (
+            "'low', 'medium' or 'high'. Resource allocation relative to other "
+            "replications; high is the default and applies no constraints."
+        ),
+    },
+    "networkUsageLimit": {
+        "type": "integer",
+        "description": "MiB per second. 0 means unlimited.",
+    },
+    "filter": {"type": "object", "description": "Server-side replication filter."},
+    "mappings": {
+        "type": "object",
+        "description": (
+            "Source-to-target scope and collection mappings. Only needed when "
+            "replicating specific scopes; an empty or omitted collections array means "
+            "every collection under that scope."
+        ),
+    },
+}
+
+#: RequestWebhook. This shipped as a bare {"type": "object"} — technically a schema and
+#: practically useless, since it told a caller nothing about url, method or auth. A live
+#: 422 named the gap: "The webhook config provided does not provide a valid
+#: authentication method. Please provide either basic auth credentials or a token."
+#:
+#: An opaque object is the body={} defect wearing a different hat. The guard added on
+#: 2026-09-01 checks that a body EXISTS, not that it says anything — which is why this
+#: got through it.
+_ALERT_WEBHOOK: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Where the alert is delivered. EXACTLY ONE authentication method is required — "
+        "`basicAuth` or `token` — and a config carrying neither is rejected with 422. "
+        "CREATING an integration makes Capella send a REAL request to this URL "
+        "immediately; a destination that does not answer 2xx fails the create. "
+        "Three constraints, all established from live 422s rather than from any "
+        "document: an auth method is required, the scheme must be https, and the "
+        "endpoint must answer 2xx to a POST."
+    ),
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": (
+                "Base URL of the webhook. MUST be https -- Capella rejects any other "
+                "scheme with 422 before it attempts the call."
+            ),
+        },
+        "method": {
+            "type": "string",
+            "description": "HTTP method used to deliver the alert.",
+            "enum": ["POST", "PUT"],
+        },
+        "basicAuth": {
+            "type": "object",
+            "description": (
+                "Basic credentials for the receiving endpoint. SECRET-BEARING: "
+                "handlers.shared.redact masks this whole object before it reaches a log, "
+                "an audit record or a model context — verified, not assumed."
+            ),
+            "properties": {
+                "user": {"type": "string"},
+                "password": {"type": "string"},
+            },
+            "required": ["user", "password"],
+        },
+        "token": {
+            "type": "string",
+            "description": (
+                "Bearer token for the receiving endpoint, as an alternative to "
+                "basicAuth. Masked by handlers.shared.redact."
+            ),
+        },
+        "headers": {
+            "type": "object",
+            "description": "Additional headers to send with the alert.",
+        },
+        "exclude": {"type": "object", "description": "Alert kinds to suppress."},
+    },
+    "required": ["url", "method"],
+}
+
+#: CreateAlertRequest. `config` carries a webhook object; this is the EGRESS field, and
+#: it is why the alert-integration writes are guarded.
+_ALERT_INTEGRATION_BODY: dict[str, Any] = {
+    "name": {"type": "string", "description": "Up to 1024 characters."},
+    "kind": {
+        "type": "string",
+        "description": "Integration type. Only 'webhook' is currently supported.",
+    },
+    "config": {
+        "type": "object",
+        "description": (
+            "Destination configuration. This names an OUTBOUND host, so it must clear "
+            "the egress allowlist before it is sent."
+        ),
+        "properties": {"webhook": _ALERT_WEBHOOK},
+        "required": ["webhook"],
+    },
+}
+
+#: UpdateAlertRequest. `config` is required and `name` is not -- an update REPLACES the
+#: destination, so omitting config is not "leave it alone", it is an invalid request.
+_ALERT_INTEGRATION_UPDATE_BODY: dict[str, Any] = {
+    "config": _ALERT_INTEGRATION_BODY["config"],
+    "name": _ALERT_INTEGRATION_BODY["name"],
+}
+
+#: PostTestAlertIntegrationJSONBody — the same shape minus the name, because a test
+#: sends to a destination without creating anything.
+_ALERT_INTEGRATION_TEST_BODY: dict[str, Any] = {
+    "kind": _ALERT_INTEGRATION_BODY["kind"],
+    "config": _ALERT_INTEGRATION_BODY["config"],
+}
+
+#: eventingfunction.CreateEventingFunctionRequest, from the provider's hand-written
+#: client rather than the generated one — the generated client has no eventing surface.
+_EVENTING_KEYSPACE = {
+    "type": "object",
+    "description": (
+        "A keyspace. `bucket` is required; `scope` and `collection` default to _default "
+        "server-side."
+    ),
+    "properties": {
+        "bucket": {"type": "string"},
+        "scope": {"type": "string"},
+        "collection": {"type": "string"},
+    },
+    "required": ["bucket"],
+}
+
+_EVENTING_FUNCTION_BODY: dict[str, Any] = {
+    "name": {"type": "string", "description": "Function name."},
+    "eventSource": _EVENTING_KEYSPACE,
+    "eventMetadataStorage": {
+        **_EVENTING_KEYSPACE,
+        "description": (
+            "Keyspace for function metadata. MUST differ from eventSource — pointing "
+            "both at the same collection is rejected."
+        ),
+    },
+    "code": {"type": "string", "description": "The JavaScript handler source."},
+    "description": {"type": "string"},
+    "settings": {"type": "object", "description": "Runtime settings."},
+    "bindings": {"type": "array", "items": {"type": "object"}},
+}
+
+
+#: eventingfunction.UpdateEventingFunctionRequest. EVERY field is a pointer, so every
+#: field is optional and body_required is empty — a legitimately partial update, not a
+#: gap in what we know.
+_EVENTING_FUNCTION_UPDATE_BODY: dict[str, Any] = {
+    "code": {"type": "string", "description": "Replacement JavaScript handler source."},
+    "description": {"type": "string"},
+    "eventSource": _EVENTING_KEYSPACE,
+    "eventMetadataStorage": {
+        **_EVENTING_KEYSPACE,
+        "description": "Metadata keyspace. Must differ from eventSource.",
+    },
+    "settings": {"type": "object", "description": "Runtime settings."},
+    "bindings": {"type": "array", "items": {"type": "object"}},
+}
+
+#: eventingfunction.SetFunctionStateRequest. One field, and the enum is the whole
+#: lifecycle — this is the operation that actually starts and stops a function.
+_EVENTING_FUNCTION_STATE_BODY: dict[str, Any] = {
+    "state": {
+        "type": "string",
+        "description": (
+            "The action to take: 'deploy', 'undeploy', 'pause' or 'resume'. Undeploy "
+            "discards the function's processing checkpoint; pause keeps it."
+        ),
+        "enum": ["deploy", "undeploy", "pause", "resume"],
+    },
+}
+
+
+#: CreateOnDemandRestoreRequest. THE RECORD THAT SETTLES CROSS-CLUSTER RESTORE.
+#:
+#: The parked record carried a dispute: whether managed restore is
+#: .../clusters/{id}/backup/restore with the source in the body, or
+#: .../clusters/{id}/backups/{backup_id}/restore with the target in the path. The second
+#: was chosen on the argument that a backup id in the path ALONGSIDE a cluster id is what
+#: makes cross-cluster restore a primitive rather than an orchestration problem.
+#:
+#: This body proves it, and more strongly than the path did: it carries BOTH
+#: sourceClusterID AND targetClusterID as required fields. Restoring a backup taken from
+#: one cluster into a different one is a single call, and both ends are named explicitly.
+#: That is the capability behind CBSE-23536.
+_BACKUP_RESTORE_BODY: dict[str, Any] = {
+    "backupID": {
+        "type": "string",
+        "description": "The backup record to restore FROM. From capella_backups_list.",
+    },
+    "sourceClusterID": {
+        "type": "string",
+        "description": "The cluster the backup was taken from.",
+    },
+    "targetClusterID": {
+        "type": "string",
+        "description": (
+            "The cluster to restore INTO. May differ from sourceClusterID -- that is the "
+            "cross-cluster case, and it is a single call rather than an export/import "
+            "dance. Both clusters must be on the same cloud provider."
+        ),
+    },
+    "services": {
+        "type": "array",
+        "description": "Services to restore, e.g. ['data', 'query', 'index'].",
+        "items": {"type": "string"},
+    },
+    "autoRemoveCollections": {
+        "type": "boolean",
+        "description": (
+            "Delete scopes and collections that the backup records as deleted. Off by "
+            "default, so a restore does not silently remove things the target has."
+        ),
+    },
+    "forceUpdates": {
+        "type": "boolean",
+        "description": (
+            "Overwrite documents in the target even where the target's copy is NEWER. "
+            "This is the flag that turns a restore into data loss on a live cluster."
+        ),
+    },
+    "includeData": {"type": "string", "description": "Restore only this data."},
+    "excludeData": {"type": "string", "description": "Skip this data."},
+    "filterKeys": {
+        "type": "string",
+        "description": "Restore only keys matching this regular expression.",
+    },
+    "filterValues": {
+        "type": "string",
+        "description": "Restore only values matching this regular expression.",
+    },
+    "mapData": {
+        "type": "string",
+        "description": "Restore source data into a different location.",
+    },
+    "replaceTTL": {"type": "string", "description": "How to reset expiry on restore."},
+    "replaceTTLWith": {"type": "string", "description": "The new expiry value."},
+}
+
+
+#: PUT .../eventingFunctions/{name}/code — a bare JSON STRING, not an object.
+#:
+#: There is no source for this anywhere: the Terraform provider carries no /code endpoint,
+#: and the reference does not give the shape. It was settled by CALLING THE GETTER, which
+#: answers 200 with the source as a JSON string:
+#:
+#:     "function OnUpdate(doc, meta, xattrs) {\n   log(\"Doc created/updated\", meta.id);\n}"
+#:
+#: A setter round-trips what its getter returns, so the request body is the same shape.
+#: This is the only operation in the registry whose body is not an object, and it is why
+#: Op grew a `body_scalar` field.
+_EVENTING_CODE_BODY: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "The complete JavaScript source for the function, as a bare JSON string -- NOT "
+        "wrapped in an object. Replaces the existing source outright; there is no partial "
+        "update. Read the current source with capella_eventing_function_code_get first if "
+        "you intend to amend rather than replace it."
+    ),
+}
+
+
 OPS: tuple[Op, ...] = (
     # ── Organizations ────────────────────────────────────────────────────────
     Op(
@@ -541,6 +998,12 @@ OPS: tuple[Op, ...] = (
         idempotent=True,
     ),
     Op(
+        # CBSE-23617: an empty-body POST here answers HTTP 500 rather than the 422 every
+        # sibling create returns, so --method-probe records this operation as ERROR and
+        # the run cannot report a clean pass. That is the probe being honest -- a 5xx
+        # could come from a gateway before routing, so it proves nothing about the
+        # endpoint -- and NOT a defect in this record. The path is confirmed by the
+        # OPTIONS probe recorded in LIVE_VERIFIED.
         name="capella_cluster_create",
         method="POST",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters",
@@ -571,8 +1034,20 @@ OPS: tuple[Op, ...] = (
         body={
             "name": {"type": "string"},
             "description": {"type": "string"},
-            "serviceGroups": {"type": "array", "items": {"type": "object"}},
-            "support": {"type": "object"},
+            "serviceGroups": {
+                "type": "array",
+                "description": (
+                    "Service groups to scale. Same element shape as the create body's "
+                    "serviceGroups; see _CLUSTER_CREATE_BODY."
+                ),
+                "items": {"type": "object"},
+            },
+            # Was a bare {"type": "object"}. The CREATE body has always described this
+            # field properly; the UPDATE body — the one whose summary says "change
+            # support plan" — offered no hint that `plan` was the field to send, or what
+            # values it takes. Found by test_an_opaque_object_is_not_accepted_as_a_body
+            # _schema, which was written for an unrelated defect in the alert webhook.
+            "support": _CLUSTER_CREATE_BODY["support"],
             "enableDataApi": {
                 "type": "boolean",
                 "description": (
@@ -714,13 +1189,23 @@ OPS: tuple[Op, ...] = (
     ),
     Op(
         name="capella_bucket_flush",
-        method="POST",
+        # PUT, not POST. This shipped as POST behind a [LIVE 405] tag, and the tag was
+        # honest about the wrong thing: the OPTIONS probe confirmed the ROUTE and, as
+        # test_write_operations_are_path_verified_only_and_that_is_deliberate says in so
+        # many words, says nothing about the method. The Terraform provider's generated
+        # client — generated from Couchbase's own API document — issues PUT here.
+        #
+        # The consequence of the old value was not a loud failure. A caller asking to
+        # flush a bucket got a 405 that reads like a permissions or entitlement problem,
+        # on the one operation whose whole purpose is "reset this quickly between test
+        # runs" — so it would have been retried, not investigated.
+        method="PUT",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/flush",
         summary=(
             "Delete all documents in a bucket, keeping the bucket and its "
             "indexes. The right reset between test runs — seconds instead of the "
             "minutes a reprovision costs. Requires flush enabled on the bucket. "
-            "[LIVE 405]"
+            "[LIVE 405 path; method PUT from the Terraform provider, not yet observed]"
         ),
         group="buckets",
         destructive=True,
@@ -945,6 +1430,12 @@ OPS: tuple[Op, ...] = (
         idempotent=True,
     ),
     Op(
+        # CBSE-23617: an empty-body POST here answers HTTP 500 rather than the 422 every
+        # sibling create returns, so --method-probe records this operation as ERROR and
+        # the run cannot report a clean pass. That is the probe being honest -- a 5xx
+        # could come from a gateway before routing, so it proves nothing about the
+        # endpoint -- and NOT a defect in this record. The path is confirmed by the
+        # OPTIONS probe recorded in LIVE_VERIFIED.
         name="capella_app_service_create",
         method="POST",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices",
@@ -1335,6 +1826,613 @@ OPS: tuple[Op, ...] = (
         read_only=True,
         idempotent=True,
     ),
+    # ── Promoted 2026-09-01 from spec_pending.py ────────────────────────────
+    #
+    # Seventeen operations, verified against a live organization on that date. Their
+    # paths did NOT survive the probe unchanged: /eventing/functions, /auditLogExport
+    # and /queryIndexes/* were all wrong, and were corrected against the Terraform
+    # provider's generated OpenAPI client before any of this answered.
+    #
+    # The tags mean what they have always meant here. [LIVE+METHOD 200] is a GET that
+    # was performed and returned data. [LIVE 405] is a write whose PATH was confirmed by
+    # an OPTIONS probe and whose METHOD was not — deliberately, because the alternative
+    # is performing it.
+    # ── Backups and restore ──────────────────────────────────────────────────
+    # Managed backup is the right primitive for RECOVERY and the wrong one for
+    # tagged, portable test datasets: Capella backups carry no user-defined
+    # metadata, cannot be user-named, and their bytes are retrievable only through
+    # a console download with an emailed URL and a one-hour window. For a
+    # portable, taggable artifact use capella_fixture_export.
+    Op(
+        name="capella_backup_create",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backups",
+        summary=(
+            "Take an on-demand managed backup of one bucket. ASYNCHRONOUS — returns "
+            "once the backup is scheduled, not once it completes; poll "
+            "capella_backups_list. The resulting bytes cannot be retrieved over any "
+            "API. [LIVE 405]"
+        ),
+        group="backup",
+        idempotent=False,
+        body={},
+    ),
+    Op(
+        name="capella_backups_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/backups",
+        summary=(
+            "List managed backups for a cluster. Returns timestamps and the owning "
+            "bucket, which is enough for date-based and project-based filtering "
+            "client-side. Capella backups carry NO user-defined metadata, so "
+            "filtering by scenario or version is impossible here — that is what the "
+            "fixture manifest exists for. [LIVE+METHOD 200]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+        query=_PAGE_QUERY,
+    ),
+    Op(
+        name="capella_query_index_manage",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/queryService/indexes",
+        summary=(
+            "Manage query indexes. Verb coverage UNCONFIRMED — whether this covers "
+            "create, drop, build or alter is not documented in the rendered "
+            "reference. Prefer plain CREATE INDEX / BUILD INDEX / DROP INDEX over "
+            "the Data API query passthrough, which is predictable. [LIVE 405]"
+        ),
+        group="query_index",
+        guarded=True,
+        body=_INDEX_DDL_BODY,
+        body_required=("definition",),
+    ),
+    # ── Eventing functions ───────────────────────────────────────────────────
+    # Settings and source are separate resources; a fixture must capture both.
+    Op(
+        name="capella_eventing_functions_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions",
+        summary="List eventing functions on a cluster. [LIVE+METHOD 200]",
+        group="eventing",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+    ),
+    Op(
+        name="capella_eventing_function_create",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions",
+        summary="Create an eventing function from a settings object. [LIVE 405]",
+        group="eventing",
+        guarded=True,
+        body=_EVENTING_FUNCTION_BODY,
+        body_required=("name", "eventSource", "eventMetadataStorage"),
+    ),
+    # ── Replications (XDCR) ──────────────────────────────────────────────────
+    # Needed for correctness of park and resume independently of fixtures: turning
+    # a cluster off DELETES its replications on both sides, while
+    # capella_env_park's description currently promises configuration is kept.
+    # Capture before park, replay on resume, storing the captured config in the
+    # existing mcp-env: marker rather than inventing a new home for it.
+    Op(
+        name="capella_replications_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications",
+        summary=(
+            "List XDCR replications on a cluster. Call this BEFORE "
+            "capella_cluster_turn_off or capella_env_park — turning a cluster off "
+            "deletes its replications on both the source and target side, and they "
+            "must be recreated afterwards unless captured first. [LIVE+METHOD 200]"
+        ),
+        group="replication",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+    ),
+    Op(
+        name="capella_replication_create",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications",
+        summary="Create an XDCR replication. [LIVE 405]",
+        group="replication",
+        guarded=True,
+        body=_REPLICATION_CREATE_BODY,
+        body_required=("sourceBucket", "target"),
+    ),
+    # ── Observability: the gap between what Capella exposes and what we expose ──
+    #
+    # Asked "does this server have Capella health tools?", the honest answer was three
+    # near-misses: capella_cluster_get's currentState (lifecycle, not health), the two
+    # event lists, and an App Endpoint resync status. Nothing named health, no metrics,
+    # no statistics, no alerts. Meanwhile the self-managed side has admin_stats_*,
+    # admin_node_list, admin_alerts_* and admin_logs_collect_start -- none of which work
+    # against Capella, because Capella does not expose ns_server's admin REST API to
+    # tenants. So an instance in capella mode has almost no observability surface.
+    #
+    # Part of that is the platform: v4 has no real-time metrics and no node-level
+    # diagnostics, and that is a genuine limitation worth escalating. Part of it was
+    # ours -- everything below EXISTS in the v4 reference and we simply never wired it.
+    #
+    # All [LIVE+METHOD 200]: transcribed from the reference, never confirmed against a live control
+    # plane, and therefore parked rather than shipped. Bodies are left empty where the
+    # reference does not pin the shape; --method-probe settles both.
+    Op(
+        name="capella_cluster_stats_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/stats",
+        summary=(
+            "Cluster capacity statistics. The closest thing v4 offers to a health "
+            "reading, and the first thing to reach for when the question is 'is this "
+            "cluster under pressure?' rather than 'is it deployed?'. [DOC]"
+        ),
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_event_get",
+        method="GET",
+        # The reference also appears to document an ORGANIZATION-scoped variant at
+        # /v4/organizations/{organization_id}/events/{event_id}, which would mirror
+        # capella_events_list. Two readings disagreed about whether both exist or only
+        # the project-scoped one, exactly as with the managed-backup restore path -- so
+        # the probe settles it before either ships. If both are real, add the org-scoped
+        # op alongside this one rather than replacing it.
+        path="/v4/organizations/{organization_id}/projects/{project_id}/events/{event_id}",
+        summary=(
+            "One event by id, with its full detail. capella_project_events_list gives "
+            "the summaries; this is the follow-up when a provisioning call succeeded "
+            "and the cluster never became healthy. [LIVE+METHOD 200]"
+        ),
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_cluster_audit_log_config_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/auditLog",
+        summary=(
+            "Which audit events the cluster is recording. Worth reading before trusting "
+            "an audit trail: a filter that excludes the event class you care about is "
+            "indistinguishable from that event never happening. [LIVE+METHOD 200]"
+        ),
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_cluster_audit_log_config_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/auditLog",
+        summary=(
+            "Change which audit events the cluster records. A WRITE to the audit "
+            "configuration, so it can be used to stop recording the very operations an "
+            "auditor would look for -- guarded, and it should stay that way. "
+            "[LIVE+METHOD 422 -- a real PUT, refused with 'your support package does "
+            "not include audit logging'. Path and method confirmed; the entitlement is "
+            "a property of the test cluster, not of the operation]"
+        ),
+        group="diagnostics",
+        guarded=True,
+        body=_AUDIT_SETTINGS_BODY,
+        body_required=("auditEnabled", "disabledUsers", "enabledEventIDs"),
+    ),
+    Op(
+        name="capella_cluster_audit_log_events_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/auditLogEvents",
+        summary=(
+            "The audit event types available to filter on, which is how you discover "
+            "what the configuration above can name. [LIVE+METHOD 200]"
+        ),
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+        query=_PAGE_QUERY,
+    ),
+    Op(
+        name="capella_cluster_audit_log_export_create",
+        method="POST",
+        # NOTE, and it matters beyond this op: this is the async initiate-then-poll
+        # pattern that the proposed bucket-backup export API (IDEA-1901) is explicitly
+        # modelled on. So the pattern is not a design analogy -- it is already in v4,
+        # here. That strengthens the case for a cluster-level export following the same
+        # shape rather than inventing one.
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/auditLogExports",
+        summary=(
+            "Start an audit-log export job. ASYNCHRONOUS: returns a job id, not the "
+            "log. Poll capella_cluster_audit_log_export_get for the download. [LIVE 405]"
+        ),
+        group="diagnostics",
+        body=_AUDIT_EXPORT_BODY,
+        body_required=("start", "end"),
+    ),
+    Op(
+        name="capella_cluster_audit_log_exports_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/auditLogExports",
+        summary="List audit-log export jobs for a cluster. [LIVE+METHOD 200]",
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+        query=_PAGE_QUERY,
+    ),
+    # ── Alert integrations ──────────────────────────────────────────────────
+    #
+    # The outbound half of observability: where Capella sends an alert. Reads are
+    # ordinary; the writes send data to a caller-named destination (a Slack or Teams
+    # webhook), which is the egress shape this server guards everywhere else -- so the
+    # create/update/test trio must go through the egress allowlist when it ships, not
+    # just the project allowlist.
+    Op(
+        name="capella_alert_integrations_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations",
+        summary="List alert integrations for a project. [LIVE+METHOD 200]",
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+        query=_PAGE_QUERY,
+    ),
+    Op(
+        name="capella_alert_integration_create",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations",
+        summary=(
+            "Create an alert integration. THE CREATE CALL ITSELF PERFORMS EGRESS -- "
+            "observed live: Capella immediately sent a real POST to the URL in the body, "
+            "got 405 back from https://example.com, and REFUSED the create. So this is "
+            "not 'store a destination for later'. It is a synchronous outbound HTTP "
+            "request to a caller-named host, carrying caller-supplied credentials, and "
+            "the response body comes back inside the error. An SSRF-shaped primitive: "
+            "the egress allowlist has to clear it BEFORE the call, not before the first "
+            "alert fires, and the error must be redacted before a model sees it because "
+            "it can contain whatever the probed host returned. [LIVE 405]"
+        ),
+        group="diagnostics",
+        guarded=True,
+        body=_ALERT_INTEGRATION_BODY,
+        body_required=("name", "kind", "config"),
+    ),
+    Op(
+        name="capella_alert_integration_test",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrationTest",
+        summary=(
+            "Send a test alert. Note the path is NOT under alertIntegrations/{id} -- it "
+            "is a sibling collection, so the body identifies the target. Same egress "
+            "consideration as create. [LIVE 405]"
+        ),
+        group="diagnostics",
+        # GUARDED, and this was missed at promotion. The parked record's own comment said
+        # the create/update/test trio "must go through the egress allowlist when it
+        # ships" -- create and update carried guarded=True across, test did not.
+        #
+        # It is the worst one to miss. create at least persists something an operator can
+        # later see in the console; test sends a request to a caller-named host and
+        # leaves no trace behind. Its entire purpose is the outbound call.
+        guarded=True,
+        body=_ALERT_INTEGRATION_TEST_BODY,
+        body_required=("kind", "config"),
+    ),
+    # ── Also promoted 2026-09-01, once a function existed to point at ───────
+    #
+    # These four were skipped in three earlier runs for want of a function_name, and the
+    # reason turned out to be a bug rather than an empty cluster: the eventing list uses
+    # the nested {"data":[{"data":{...}}]} shape and the discovery helper only read the
+    # flat one. Fixing that found the function immediately.
+    #
+    # Two of them — code_get and logs_get — had been written off as unsourced, because
+    # the Terraform provider carries no /code or /logs endpoint. Calling them returned
+    # 200. An absent source is not evidence of an absent route.
+    #
+    # Their siblings that WRITE (update, state_set, code_set) stay parked: their paths
+    # are confirmed and their request bodies are not, and a write tool with no body
+    # schema is a tool that cannot work. See
+    # test_no_shipped_write_tool_is_missing_its_body_schema.
+    Op(
+        name="capella_eventing_function_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}",
+        summary=(
+            "Fetch one eventing function's settings and bindings. Whether this "
+            "response is directly re-postable to capella_eventing_function_create "
+            "without rewriting bucket and keyspace references for a different "
+            "cluster is UNCONFIRMED — assume a transform is needed. [LIVE+METHOD 200]"
+        ),
+        group="eventing",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_eventing_function_code_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}/code",
+        summary="Fetch an eventing function's JavaScript source. [LIVE+METHOD 200] The Terraform provider does not carry this sub-resource -- only the function, its activationState and the list. It was parked as unsourced on that basis and then the 2026-09-01 probe simply CALLED it and got 200, which is better evidence than any source: the segment is real",
+        group="eventing",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_eventing_function_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}",
+        summary="Delete an eventing function. IRREVERSIBLE. [LIVE 405]",
+        group="eventing",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_eventing_function_logs_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}/logs",
+        summary="Fetch an eventing function's logs. [LIVE+METHOD 200] The Terraform provider does not carry this sub-resource -- only the function, its activationState and the list. It was parked as unsourced on that basis and then the 2026-09-01 probe simply CALLED it and got 200, which is better evidence than any source: the segment is real",
+        group="eventing",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_eventing_function_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}",
+        summary="Replace an eventing function's settings. [LIVE 405]",
+        group="eventing",
+        guarded=True,
+        idempotent=True,
+        body=_EVENTING_FUNCTION_UPDATE_BODY,
+        body_required=(),
+    ),
+    Op(
+        name="capella_eventing_function_state_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}/activationState",
+        summary=(
+            "Deploy, undeploy, pause or resume an eventing function. A function "
+            "created from a fixture is NOT running until its state is set. [LIVE 405]"
+        ),
+        group="eventing",
+        guarded=True,
+        idempotent=True,
+        body=_EVENTING_FUNCTION_STATE_BODY,
+        body_required=("state",),
+    ),
+    # ── Shipped 2026-09-01 WITHOUT live verification — see SHIPPED_UNVERIFIED ──
+    #
+    # A deliberate exception, recorded rather than disguised. /replications is confirmed;
+    # these two need a {replication_id} the test organization cannot supply.
+    Op(
+        name="capella_replication_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications/{replication_id}",
+        summary="Fetch one XDCR replication's configuration. [TF -- see SHIPPED_UNVERIFIED]",
+        group="replication",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_replication_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications/{replication_id}",
+        summary="Delete an XDCR replication. [TF -- see SHIPPED_UNVERIFIED]",
+        group="replication",
+        destructive=True,
+        guarded=True,
+    ),
+    # ── Promoted 2026-09-01 (final batch) ───────────────────────────────────
+    #
+    # These six waited on objects the test organization did not have, and on one bug of
+    # mine: the index sweep reported the decoded bucket NAME while sending the base64 id,
+    # so it asked for a keyspace that does not exist and got an accurate "Index not found
+    # in key space" twelve times over. With the name actually sent, ix_trial_count turned
+    # up in harvester.governance.trial_signals immediately.
+    #
+    # capella_query_index_definitions_list was HELD BACK in the first batch because its
+    # only evidence was a 404 without a Capella domain code, and this repository's rule is
+    # that such a 404 proves nothing. It now answers 200. The rule did not have to move.
+    Op(
+        name="capella_backup_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/backups/{backup_id}",
+        summary="Fetch one managed backup record by id. [LIVE+METHOD 200]",
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_backup_cycle_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/backups/{backup_id}",
+        summary=(
+            "Delete the backup CYCLE for a bucket. This removes the bucket's managed "
+            "backup history, not a single backup. IRREVERSIBLE. [LIVE 405]"
+        ),
+        group="backup",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_backup_restore",
+        method="POST",
+        # WARNING — DISPUTED PATH. Two reads of the v4 reference disagreed:
+        #   (a) .../clusters/{cluster_id}/backup/restore              (no backup id)
+        #   (b) .../clusters/{cluster_id}/backups/{backup_id}/restore
+        # Shape (b) is used here because a backup id in the path ALONGSIDE the
+        # target cluster id is what makes cross-cluster restore a primitive: the
+        # path is the TARGET, the body names the SOURCE. If (a) is correct the body
+        # must carry both and cross-cluster becomes an orchestration problem.
+        # --method-probe with an empty body returns 422 naming the required fields,
+        # settling path and body together. DO NOT SHIP UNTIL PROBED.
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/backups/{backup_id}/restore",
+        summary=(
+            "Restore a managed backup. The cluster in the path is the TARGET. "
+            "Documented as able to restore into the same cluster or another cluster "
+            "in the same organization, provided both are on the same cloud provider "
+            "— Azure to Azure is fine, Azure to AWS is not. DESTRUCTIVE: overwrites "
+            "data in the target. Indexes come back DEFERRED, so the target is not "
+            "performance-comparable to its source until builds complete — trigger "
+            "them and poll capella_query_index_build_status before treating it as "
+            "ready. [LIVE 405]"
+        ),
+        group="backup",
+        destructive=True,
+        guarded=True,
+        body=_BACKUP_RESTORE_BODY,
+        body_required=("backupID", "sourceClusterID", "targetClusterID", "services"),
+    ),
+    # ── Query indexes ────────────────────────────────────────────────────────
+    # /definitions is the read-back that system:indexes does NOT provide: the
+    # documented system:indexes metadata object carries only last_scan_time,
+    # num_replica and stats, with no definition field.
+    Op(
+        name="capella_query_index_definitions_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/queryService/indexes",
+        summary=(
+            "Read back the index definition statements for a cluster's GSI indexes. "
+            "This is the CREATE-statement source for a fixture manifest. Response "
+            "shape UNCONFIRMED — the rendered v4 reference truncates before the "
+            "schema. [LIVE+METHOD 200]"
+            # HELD BACK on 2026-09-01, and not because it failed. The run performed this
+            # GET against bucket=harvester, scope=_default, collection=_default and got:
+            #
+            #     404 {'code': 404,
+            #          'hint': 'Please review your request and ensure that all required
+            #                   parameters are correctly provided.',
+            #          'httpStatusCode': 404,
+            #          'message': 'Index not found in key space'}
+            #
+            # The message names a domain object and a keyspace, which only the
+            # query-index handler could have produced, so the route DID match. But
+            # `code` is the HTTP status echoed back, not a Capella domain code, and this
+            # repository's rule — test_the_recorded_statuses_are_ones_that_prove_a_route
+            # _matched — is that a 404 without a domain code is not proof.
+            #
+            # Admitting this one record by relaxing that rule would be settling the
+            # question by moving the bar. Point the probe at a keyspace that HAS an index
+            # and it answers 200; promote on that.
+        ),
+        group="query_index",
+        read_only=True,
+        idempotent=True,
+        # KEYSPACE QUERY PARAMETERS, from the provider's ListIndexDefinitionsParams /
+        # IndexDefinitionParams / IndexBuildStatusParams. `bucket` is REQUIRED -- a call
+        # without it answers 400 with Capella code 1000, which is how this was found.
+        # `scope` and `collection` default to _default when omitted.
+        query=_KEYSPACE_QUERY,
+    ),
+    Op(
+        name="capella_query_index_properties_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/queryService/indexes/{index_name}",
+        summary="Index properties for a cluster. [LIVE+METHOD 200]",
+        group="query_index",
+        read_only=True,
+        idempotent=True,
+        # KEYSPACE QUERY PARAMETERS, from the provider's ListIndexDefinitionsParams /
+        # IndexDefinitionParams / IndexBuildStatusParams. `bucket` is REQUIRED -- a call
+        # without it answers 400 with Capella code 1000, which is how this was found.
+        # `scope` and `collection` default to _default when omitted.
+        query=_KEYSPACE_QUERY,
+    ),
+    Op(
+        name="capella_query_index_build_status",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/queryService/indexBuildStatus/{index_name}",
+        summary=(
+            "Build status for a cluster's GSI indexes. This is the gate that makes a "
+            "restored or imported environment honest: an index whose definition "
+            "exists but is not ONLINE means the cluster is not yet "
+            "performance-comparable to its source, and a load test started against "
+            "it produces numbers that read as a Couchbase performance problem. Poll "
+            "this before reporting ready. [LIVE+METHOD 200]"
+        ),
+        group="query_index",
+        read_only=True,
+        idempotent=True,
+        # KEYSPACE QUERY PARAMETERS, from the provider's ListIndexDefinitionsParams /
+        # IndexDefinitionParams / IndexBuildStatusParams. `bucket` is REQUIRED -- a call
+        # without it answers 400 with Capella code 1000, which is how this was found.
+        # `scope` and `collection` default to _default when omitted.
+        query=_KEYSPACE_QUERY,
+    ),
+    # ── Shipped 2026-09-01 WITHOUT live verification — see SHIPPED_UNVERIFIED ──
+    #
+    # The alert-integration trio and the audit-log export getter. Their collection paths
+    # are confirmed live; each needs an object id the test organization cannot produce —
+    # creating an alert integration requires an https endpoint that answers 2xx, and
+    # audit-log export retention requires an Enterprise plan.
+    Op(
+        name="capella_cluster_audit_log_export_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/auditLogExports/{export_id}",
+        summary=(
+            "One audit-log export job: its status and, once ready, the download. The "
+            "response carries a signed URL, so it is redacted before it reaches a "
+            "model context or the log. [TF -- see SHIPPED_UNVERIFIED]"
+        ),
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+        sensitive_response=True,
+    ),
+    Op(
+        name="capella_alert_integration_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
+        summary=(
+            "One alert integration. The response may echo the configured webhook URL, "
+            "which is a credential in URL form. [TF -- see SHIPPED_UNVERIFIED]"
+        ),
+        group="diagnostics",
+        read_only=True,
+        idempotent=True,
+        sensitive_response=True,
+    ),
+    Op(
+        name="capella_alert_integration_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
+        summary="Update an alert integration. Same egress consideration as create. [TF -- see SHIPPED_UNVERIFIED]",
+        group="diagnostics",
+        guarded=True,
+        body=_ALERT_INTEGRATION_UPDATE_BODY,
+        body_required=("config",),
+    ),
+    Op(
+        name="capella_alert_integration_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
+        summary=(
+            "Delete an alert integration. Destructive in the way that matters for "
+            "monitoring: afterwards the alerts simply stop arriving, silently. [TF -- see SHIPPED_UNVERIFIED]"
+        ),
+        group="diagnostics",
+        destructive=True,
+        guarded=True,
+    ),
+    # ── Promoted 2026-09-01, the last parked operation ──────────────────────
+    #
+    # Held back because its request body had no source: the Terraform provider carries no
+    # /code endpoint and the reference does not give the shape. Settled by calling the
+    # GETTER, which returns the source as a bare JSON string — so the setter takes one.
+    # The only operation here whose body is not an object.
+    Op(
+        name="capella_eventing_function_code_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/eventingFunctions/{function_name}/code",
+        summary="Replace an eventing function's JavaScript source. [LIVE 405] Base path corrected to /eventingFunctions, but THIS sub-resource appears nowhere in the Terraform provider's generated client -- only the function, its activationState and the list do. So the segment is still unsourced and this stays parked even if its siblings promote",
+        group="eventing",
+        guarded=True,
+        idempotent=True,
+        body_scalar=_EVENTING_CODE_BODY,
+    ),
 )
 
 
@@ -1392,7 +2490,12 @@ def build_input_schema(op: Op) -> dict:
             ),
         }
 
-    if op.body:
+    if op.body_scalar:
+        # A non-object body. Required whenever declared: there is no partial form of
+        # "the request body IS this value".
+        properties["body"] = dict(op.body_scalar)
+        required.append("body")
+    elif op.body:
         properties["body"] = {
             "type": "object",
             "description": (
@@ -1423,11 +2526,36 @@ def build_input_schema(op: Op) -> dict:
     return schema
 
 
+#: Prefix added to the description of anything in SHIPPED_UNVERIFIED. A caller deciding
+#: whether to trust a result needs this at the point of use, not in a register it will
+#: never read.
+#
+# The wording here is load-bearing. `_is_inferred` in scripts/verify_capella_paths.py
+# detects the inferred-path provenance tag by substring, deliberately, so that qualified
+# forms of it are caught as well as the bare one. The first draft of this notice opened
+# with a bracket followed by the letters P-A-T-H, which that detector matched — so every
+# unverified operation would have been reported as an inferred path too, conflating two
+# states that mean different things.
+#
+# Caught by test_no_operation_in_the_spec_is_still_inferred, which scans this file's
+# SOURCE. That is also why this comment spells the letters out rather than quoting the
+# tag: a comment describing the collision was itself enough to trip the same check.
+_UNVERIFIED_NOTICE = (
+    "[UNVERIFIED PATH — not confirmed against a live control plane. Shipped deliberately "
+    "so it can be exercised; a 404 here may mean the path is wrong rather than the object "
+    "absent. Report one rather than working around it.] "
+)
+
+
 def build_tools() -> list[Tool]:
     return [
         Tool(
             name=op.name,
-            description=op.summary,
+            description=(
+                _UNVERIFIED_NOTICE + op.summary
+                if op.name in SHIPPED_UNVERIFIED
+                else op.summary
+            ),
             inputSchema=build_input_schema(op),
             annotations=op.annotations,
         )

@@ -23,6 +23,21 @@ import pytest
 from handlers.capella.spec import OPS, OPS_BY_NAME, build_tools
 from handlers.capella.spec_pending import PENDING_OPS
 
+#: Provenance tags a PARKED record may carry. Both mean "sourced but not observed":
+#:
+#:   [DOC]  transcribed from Couchbase's published API reference
+#:   [TF]   read out of the official Terraform provider's generated OpenAPI client
+#:
+#: [TF] joined this set when a live probe found 19 of the 36 parked paths were simply
+#: wrong — /eventing/functions for /eventingFunctions, /queryIndexes/definitions for
+#: /queryService/indexes, /auditLogExport for /auditLogExports. They were corrected
+#: against the provider, which is generated from Couchbase's own API document and is a
+#: better source than a rendered reference page. It is still not a live observation.
+#:
+#: [LIVE] and [LIVE+METHOD] are deliberately ABSENT: a record carrying either belongs in
+#: spec.py, and one sitting here would be a half-finished promotion.
+_UNVERIFIED_TAGS = ("[DOC", "[TF")
+
 
 def test_every_pending_op_is_tagged_as_unverified():
     """The tag is how a reader knows a path was transcribed rather than observed.
@@ -31,10 +46,23 @@ def test_every_pending_op_is_tagged_as_unverified():
     `[DOC — path disputed, ...]`, and a qualified tag is more informative than the bare
     one, so the convention allows it.
     """
-    untagged = [o.name for o in PENDING_OPS if "[DOC" not in o.summary]
+    untagged = [
+        o.name for o in PENDING_OPS if not any(t in o.summary for t in _UNVERIFIED_TAGS)
+    ]
     assert not untagged, (
-        f"pending ops with no [DOC...] tag: {untagged}. An untagged record reads as "
-        "verified, which is the one thing it is not."
+        f"pending ops with no {_UNVERIFIED_TAGS} tag: {untagged}. An untagged record "
+        "reads as verified, which is the one thing it is not."
+    )
+
+
+def test_no_pending_op_claims_live_verification():
+    """The failure this guards is a promotion that edited the tag and forgot to move the
+    record. It would then read as verified while sitting in the registry that cannot
+    reach a caller — verified and unreachable, the worst of both."""
+    claiming = [o.name for o in PENDING_OPS if "[LIVE" in o.summary]
+    assert not claiming, (
+        f"parked records claiming live verification: {claiming}. A [LIVE] record belongs "
+        "in OPS in spec.py; one here is a promotion that was started and not finished."
     )
 
 

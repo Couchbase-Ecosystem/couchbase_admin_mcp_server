@@ -2218,7 +2218,7 @@ OPS: tuple[Op, ...] = (
         name="capella_replication_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications/{replication_id}",
-        summary="Delete an XDCR replication. [LIVE 405]",
+        summary="Delete an XDCR replication. [LIVE 405 + METHOD additionally confirmed on 2026-09-02 by a deliberate operator DELETE against a disposable object, which returned 204. That is NOT recorded in LIVE_VERIFIED: a write carrying a 2xx there would mean the PROBE performed it, and the probe did not -- it OPTIONS-probed this, as it must for anything destructive. Provenance belongs here; the probe's record stays the probe's.]",
         group="replication",
         destructive=True,
         guarded=True,
@@ -2417,7 +2417,7 @@ OPS: tuple[Op, ...] = (
         path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
         summary=(
             "Delete an alert integration. Destructive in the way that matters for "
-            "monitoring: afterwards the alerts simply stop arriving, silently. [LIVE 405]"
+            "monitoring: afterwards the alerts simply stop arriving, silently. [LIVE 405 + METHOD additionally confirmed on 2026-09-02 by a deliberate operator DELETE against a disposable object, which returned 204. That is NOT recorded in LIVE_VERIFIED: a write carrying a 2xx there would mean the PROBE performed it, and the probe did not -- it OPTIONS-probed this, as it must for anything destructive. Provenance belongs here; the probe's record stays the probe's.]"
         ),
         group="diagnostics",
         destructive=True,

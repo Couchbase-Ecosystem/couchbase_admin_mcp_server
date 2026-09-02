@@ -1264,3 +1264,50 @@ def test_the_destructive_exclusion_shows_up_in_the_record():
 
     assert spec.LIVE_VERIFIED["capella_replication_delete"] == "405"
     assert spec.OPS_BY_NAME["capella_replication_delete"].destructive
+
+
+def test_a_base64_path_id_survives_encoding():
+    """XDCR replication ids are not UUIDs. Capella returns them base64-encoded, padding
+    included: NTYyNmM0ZTc4...aGFydmVzdGVy== decodes to
+    "5626c4e78606fd10b8b61c19197a8218/harvester/harvester" — a value containing BOTH '='
+    and, once decoded, '/'.
+
+    An unencoded '=' in a path segment is merely rude; an unencoded '/' would address a
+    different resource entirely. quote_segment handles both, and this pins it: the id
+    shape was only observed for the first time on 2026-09-02, and every other v4 path
+    parameter in the registry is a UUID or a plain name, so nothing else would catch a
+    regression here.
+    """
+    from handlers.capella.client import build_path
+
+    replication_id = (
+        "NTYyNmM0ZTc4NjA2ZmQxMGI4YjYxYzE5MTk3YTgyMTgvaGFydmVzdGVyL2hhcnZlc3Rlcg=="
+    )
+    rendered = build_path(
+        OPS_BY_NAME["capella_replication_get"].path,
+        {
+            "organization_id": "O",
+            "project_id": "P",
+            "cluster_id": "C",
+            "replication_id": replication_id,
+        },
+    )
+    assert rendered.endswith("/replications/" + replication_id.replace("=", "%3D"))
+    assert "==" not in rendered
+
+    # And the decoded form, in case Capella ever hands back the un-encoded value.
+    decoded = "5626c4e78606fd10b8b61c19197a8218/harvester/harvester"
+    rendered = build_path(
+        OPS_BY_NAME["capella_replication_get"].path,
+        {
+            "organization_id": "O",
+            "project_id": "P",
+            "cluster_id": "C",
+            "replication_id": decoded,
+        },
+    )
+    assert rendered.count("/replications/") == 1
+    assert "%2F" in rendered, (
+        "a decoded replication id contains slashes; leaving them unencoded would address "
+        "a different resource"
+    )

@@ -1556,9 +1556,18 @@ def _is_destructive(op) -> bool:
 def _has_required_body(op) -> bool:
     """Whether an empty-body probe is guaranteed to be rejected.
 
-    Also fails closed: unknown means "cannot prove an empty body would be refused", so
-    --method-probe skips rather than risk a request that succeeds and mutates.
+    Fails closed: unknown means "cannot prove an empty body would be refused", so
+    --method-probe falls back to OPTIONS rather than risk a request that mutates.
+
+    AND fails closed on observation. `body_required` is a claim about what a caller must
+    send; it is NOT a promise about what the server refuses, and this function treated the
+    two as the same thing. capella_alert_integration_update declares `config` required --
+    correctly, the provider's type has it non-optional -- and the live API answers 200 to
+    a PUT with {}. The probe sent it. The operation was performed on a real object.
+    `empty_body_accepted` records that observation and overrides the inference.
     """
+    if getattr(op, "empty_body_accepted", False):
+        return False
     value = getattr(op, "body_required", _UNKNOWN)
     if value is _UNKNOWN or value is None:
         return False
@@ -1673,14 +1682,18 @@ def probe(
         # A flag that means "confirm more" must never confirm less. So the method is left
         # unconfirmed and the path is checked exactly as the default mode would.
         if mode == "method":
-            reason = (
-                "it is DESTRUCTIVE"
-                if _is_destructive(op)
-                else "it declares no required body fields"
-            )
+            if _is_destructive(op):
+                reason = "it is DESTRUCTIVE"
+            elif getattr(op, "empty_body_accepted", False):
+                reason = (
+                    "the API is KNOWN to accept an empty body here, so the empty-body "
+                    "probe would PERFORM the operation rather than be refused by it"
+                )
+            else:
+                reason = "it declares no required body fields"
             method_note = (
-                f" — METHOD NOT CONFIRMED: {reason}, so sending the real method could "
-                "have changed something. The PATH was checked with OPTIONS instead; use "
+                f" — METHOD NOT CONFIRMED: {reason}. Sending the real method could have "
+                "changed something, so the PATH was checked with OPTIONS instead; use "
                 "--write-probe deliberately to settle the method."
             )
         status, body = _request("OPTIONS", path, token)
@@ -1804,6 +1817,7 @@ CONSULTED_FIELDS = (
     # fallback the attribute would be absent, getattr(..., False) would answer "not
     # sensitive", and the one guard stopping a signed URL reaching the report would be
     # inert on the only configuration anyone runs.
+    "empty_body_accepted",
     "sensitive_response",
     "summary",
 )
@@ -1950,6 +1964,14 @@ def _ops_by_static_parse(spec_path: str) -> list:
                 sensitive_response=bool(
                     literal(fields.get("sensitive_response"))
                     if "sensitive_response" in fields
+                    else False
+                ),
+                # Registered because the alternative is a guard that works only with the
+                # SDK installed — the mistake `query` made, on a field whose absence lets
+                # the probe perform a write.
+                empty_body_accepted=bool(
+                    literal(fields.get("empty_body_accepted"))
+                    if "empty_body_accepted" in fields
                     else False
                 ),
                 # These two drive the SAFETY decisions, so they are read explicitly.

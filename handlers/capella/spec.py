@@ -141,21 +141,6 @@ LIVE_VERIFIED_ON = "2026-09-01"
 #: so a model calling one is told the path is unconfirmed. Clear entries as evidence
 #: arrives; a name here for long is a question nobody went back to.
 SHIPPED_UNVERIFIED: dict[str, str] = {
-    "capella_alert_integration_get": (
-        "2026-09-01. Path [TF]; /alertIntegrations confirmed live the same day (list 200, "
-        "create 405 to OPTIONS). No integration exists to supply an id: creating one "
-        "requires an https endpoint that answers 2xx to a POST, because Capella calls it "
-        "synchronously before saving. Response is redacted -- it echoes the webhook URL."
-    ),
-    "capella_alert_integration_update": (
-        "2026-09-01. As capella_alert_integration_get. Body is UpdateAlertRequest from "
-        "the provider's generated client; `config` is required because an update REPLACES "
-        "the destination. Guarded: this is the egress primitive described on create."
-    ),
-    "capella_alert_integration_delete": (
-        "2026-09-01. As capella_alert_integration_get. DESTRUCTIVE and guarded, so a "
-        "wrong path fails closed -- it 404s rather than deleting the wrong object."
-    ),
     "capella_cluster_audit_log_export_get": (
         "2026-09-01. Path [TF]; /auditLogExports confirmed live the same day (list 200, "
         "create 405). An export job WAS created successfully and did not persist to the "
@@ -163,23 +148,15 @@ SHIPPED_UNVERIFIED: dict[str, str] = {
         "the organization cannot produce a durable export id. Response is redacted: it "
         "carries a signed download URL."
     ),
-    "capella_replication_get": (
-        "Path [TF] from the provider's generated client; /replications confirmed live "
-        "2026-09-01 via its list and create siblings. No replication existed in the test "
-        "organization to supply a {replication_id}, and XDCR setup was abandoned rather "
-        "than block the customer test. Shipped deliberately on 2026-09-01."
-    ),
-    "capella_replication_delete": (
-        "2026-09-01. As capella_replication_get. DESTRUCTIVE and guarded, so a wrong "
-        "path fails "
-        "closed — it 404s rather than deleting the wrong object."
-    ),
 }
 
 
 LIVE_VERIFIED: dict[str, str] = {
-    "capella_alert_integration_create": "405",
-    "capella_alert_integration_test": "405",
+    "capella_alert_integration_create": "422",
+    "capella_alert_integration_delete": "405",
+    "capella_alert_integration_get": "200",
+    "capella_alert_integration_test": "422",
+    "capella_alert_integration_update": "405",
     "capella_alert_integrations_list": "200",
     "capella_allowed_cidr_create": "405",
     "capella_allowed_cidr_delete": "405",
@@ -263,7 +240,9 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_query_index_definitions_list": "200",
     "capella_query_index_manage": "405",
     "capella_query_index_properties_get": "200",
-    "capella_replication_create": "405",
+    "capella_replication_create": "422",
+    "capella_replication_delete": "405",
+    "capella_replication_get": "200",
     "capella_replications_list": "200",
     "capella_sample_bucket_load": "405",
     "capella_scope_create": "405",
@@ -296,6 +275,25 @@ class Op:
     #: JSON-schema properties for the request body.
     body: dict[str, Any] = field(default_factory=dict)
     body_required: tuple[str, ...] = ()
+    #: The API ACCEPTS an empty body here, observed live. Blocks the empty-body probe.
+    #:
+    #: `body_required` was doing two jobs and they are not the same claim:
+    #:
+    #:   1. "a caller must send these fields for the request to make sense" -- a schema
+    #:      statement, and what body_required is for;
+    #:   2. "the API is guaranteed to REJECT an empty body" -- a statement about the
+    #:      server, which --method-probe relies on to send a real write safely.
+    #:
+    #: capella_alert_integration_update declares config as required, because the
+    #: provider's UpdateAlertRequest has it as a non-pointer field. The live API does not
+    #: agree: PUT with {} answered 200 on 2026-09-01, and the probe -- reading
+    #: body_required as claim (2) -- had already sent it. The operation was performed.
+    #:
+    #: Conflating a type definition with a server guarantee is how a verification tool
+    #: comes to modify the thing it is verifying. This field separates them: the schema
+    #: keeps saying config is required, and the probe stops assuming that protects it.
+    empty_body_accepted: bool = False
+
     #: A COMPLETE JSON schema for a request body that is not an object.
     #:
     #: Almost every v4 endpoint takes a JSON object, so `body` above is a map of property
@@ -1936,7 +1934,7 @@ OPS: tuple[Op, ...] = (
         name="capella_replication_create",
         method="POST",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications",
-        summary="Create an XDCR replication. [LIVE 405]",
+        summary="Create an XDCR replication. [LIVE+METHOD 422 -- a real POST with an empty body, refused on its contents. Upgraded from [LIVE 405] once the body schema existed: --method-probe can only send the real method for an operation that declares required fields, so filling in the schema is what made the stronger check possible]",
         group="replication",
         guarded=True,
         body=_REPLICATION_CREATE_BODY,
@@ -2094,7 +2092,7 @@ OPS: tuple[Op, ...] = (
             "the response body comes back inside the error. An SSRF-shaped primitive: "
             "the egress allowlist has to clear it BEFORE the call, not before the first "
             "alert fires, and the error must be redacted before a model sees it because "
-            "it can contain whatever the probed host returned. [LIVE 405]"
+            "it can contain whatever the probed host returned. [LIVE+METHOD 422 -- a real POST, refused on its contents. Upgraded from [LIVE 405] once the body schema existed]"
         ),
         group="diagnostics",
         guarded=True,
@@ -2108,7 +2106,7 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Send a test alert. Note the path is NOT under alertIntegrations/{id} -- it "
             "is a sibling collection, so the body identifies the target. Same egress "
-            "consideration as create. [LIVE 405]"
+            "consideration as create. [LIVE+METHOD 422 -- a real POST, refused on its contents. Upgraded from [LIVE 405] once the body schema existed]"
         ),
         group="diagnostics",
         # GUARDED, and this was missed at promotion. The parked record's own comment said
@@ -2211,7 +2209,7 @@ OPS: tuple[Op, ...] = (
         name="capella_replication_get",
         method="GET",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications/{replication_id}",
-        summary="Fetch one XDCR replication's configuration. [TF -- see SHIPPED_UNVERIFIED]",
+        summary="Fetch one XDCR replication's configuration. [LIVE+METHOD 200]",
         group="replication",
         read_only=True,
         idempotent=True,
@@ -2220,7 +2218,7 @@ OPS: tuple[Op, ...] = (
         name="capella_replication_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications/{replication_id}",
-        summary="Delete an XDCR replication. [TF -- see SHIPPED_UNVERIFIED]",
+        summary="Delete an XDCR replication. [LIVE 405]",
         group="replication",
         destructive=True,
         guarded=True,
@@ -2388,7 +2386,7 @@ OPS: tuple[Op, ...] = (
         path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
         summary=(
             "One alert integration. The response may echo the configured webhook URL, "
-            "which is a credential in URL form. [TF -- see SHIPPED_UNVERIFIED]"
+            "which is a credential in URL form. [LIVE+METHOD 200]"
         ),
         group="diagnostics",
         read_only=True,
@@ -2399,9 +2397,17 @@ OPS: tuple[Op, ...] = (
         name="capella_alert_integration_update",
         method="PUT",
         path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
-        summary="Update an alert integration. Same egress consideration as create. [TF -- see SHIPPED_UNVERIFIED]",
+        summary="Update an alert integration. Same egress consideration as create. [LIVE 405 -- OPTIONS-probed on purpose: the API accepts an empty body here, so the empty-body probe would PERFORM this rather than be refused. See empty_body_accepted]",
         group="diagnostics",
         guarded=True,
+        # Observed live 2026-09-01: PUT with an empty body answers 200 -- and, read back,
+        # had changed nothing (version still 1, modifiedAt == createdAt). Capella accepts
+        # the empty body and ignores it.
+        #
+        # The flag stays regardless. "It happened to be a no-op" is not a property the
+        # probe can check BEFORE sending, and nothing promises it holds for the next
+        # field, endpoint or API version. See Op.empty_body_accepted.
+        empty_body_accepted=True,
         body=_ALERT_INTEGRATION_UPDATE_BODY,
         body_required=("config",),
     ),
@@ -2411,7 +2417,7 @@ OPS: tuple[Op, ...] = (
         path="/v4/organizations/{organization_id}/projects/{project_id}/alertIntegrations/{alert_integration_id}",
         summary=(
             "Delete an alert integration. Destructive in the way that matters for "
-            "monitoring: afterwards the alerts simply stop arriving, silently. [TF -- see SHIPPED_UNVERIFIED]"
+            "monitoring: afterwards the alerts simply stop arriving, silently. [LIVE 405]"
         ),
         group="diagnostics",
         destructive=True,

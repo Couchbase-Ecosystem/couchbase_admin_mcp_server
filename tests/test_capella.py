@@ -1228,3 +1228,39 @@ def test_the_only_scalar_body_is_the_one_that_needs_to_be():
     schema = build_input_schema(op)
     assert schema["properties"]["body"]["type"] == "string"
     assert "body" in schema["required"]
+
+
+def test_replication_create_records_the_stronger_evidence():
+    """It was [LIVE 405] — path only — and became [LIVE+METHOD 422] without a single new
+    API call being designed for it.
+
+    --method-probe can only send an operation's real method where the operation declares
+    required body fields, because that is what guarantees an empty body is refused. So
+    filling in the request-body schema is what made the stronger check possible: the next
+    run sent a real POST and got 422, proving the method is accepted and nothing was
+    created.
+
+    Worth pinning because the causal direction is easy to get backwards. Schemas are not
+    only documentation for callers — they are what lets the verifier do more than knock on
+    the door.
+    """
+    from handlers.capella import spec
+
+    assert spec.LIVE_VERIFIED["capella_replication_create"] == "422"
+    op = spec.OPS_BY_NAME["capella_replication_create"]
+    assert op.body_required, (
+        "the 422 evidence depends on this operation declaring required body fields; "
+        "clearing them silently downgrades the check to an OPTIONS probe"
+    )
+    assert "LIVE+METHOD" in op.summary
+
+
+def test_the_destructive_exclusion_shows_up_in_the_record():
+    """capella_replication_delete sat next to a live replication and was STILL probed with
+    OPTIONS, because it is destructive. That is the exclusion added earlier working on a
+    real object rather than in a test double — with a real id available, the empty-body
+    probe was the one thing that could have deleted it."""
+    from handlers.capella import spec
+
+    assert spec.LIVE_VERIFIED["capella_replication_delete"] == "405"
+    assert spec.OPS_BY_NAME["capella_replication_delete"].destructive

@@ -3377,3 +3377,63 @@ def test_the_sweep_asks_for_exactly_what_it_reports(script):
     assert "aGFydmVzdGVy" not in asked[0], (
         "the sweep sent the base64 id while reporting the name"
     )
+
+
+def test_a_known_accepted_empty_body_is_never_sent(script):
+    """The failure this exists for HAPPENED, on a live object.
+
+    `body_required` says what a CALLER must send. It is not a promise about what the
+    SERVER refuses, and _has_required_body treated the two as one claim.
+    capella_alert_integration_update declares `config` required — correctly, the
+    provider's UpdateAlertRequest has it non-optional — and the live API answered 200 to a
+    PUT with {}. The probe had already sent it, so a verification run modified the
+    integration it was verifying.
+
+    `empty_body_accepted` records the observation and overrides the inference.
+    """
+    sent = []
+
+    def _capture(method, path, token, *a, **k):
+        sent.append(method)
+        return 405, "{}"
+
+    op = _Op("cb_update", "PUT", "/v4/organizations/{organization_id}/projects")
+    op.body_required = ("config",)
+    op.empty_body_accepted = True
+
+    original = script._request
+    script._request = _capture
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k", mode="method")
+    finally:
+        script._request = original
+
+    assert sent == ["OPTIONS"], f"the real method was sent anyway: {sent}"
+    assert "accept an empty body" in result.detail
+    assert not script._has_required_body(op)
+
+
+def test_the_static_parse_reads_the_empty_body_flag(script):
+    """A guard that only works with the SDK installed is the mistake `query` made — and
+    this one's absence lets the probe perform a write on the configuration everyone runs.
+    """
+    static = {
+        o.name: o for o in script._ops_by_static_parse("handlers/capella/spec.py")
+    }
+    assert static["capella_alert_integration_update"].empty_body_accepted is True
+    assert static["capella_alert_integration_create"].empty_body_accepted is False
+
+
+def test_an_accepted_empty_body_is_still_reported_loudly(script):
+    """The ERROR branch is what caught this in the first place, and it must stay. Silence
+    here would have meant a write with no record of it."""
+    op = _Op("cb_thing", "POST", "/v4/organizations/{organization_id}/projects")
+    op.body_required = ("name",)
+    original = script._request
+    script._request = lambda *a, **k: (200, "{}")
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k", mode="method")
+    finally:
+        script._request = original
+    assert result.verdict == "ERROR"
+    assert "may have just been performed" in result.detail

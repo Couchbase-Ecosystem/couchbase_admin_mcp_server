@@ -3437,3 +3437,68 @@ def test_an_accepted_empty_body_is_still_reported_loudly(script):
         script._request = original
     assert result.verdict == "ERROR"
     assert "may have just been performed" in result.detail
+
+
+# ── Edge rejections are not evidence ─────────────────────────────────────────
+
+
+def test_a_proxy_403_is_not_treated_as_proof_of_a_route(script):
+    """_PATH_EXISTS admits 403 on the reasoning that a 403 "requires authentication to
+    have succeeded first, which requires routing". True of a 403 the API emits. False of
+    one the EDGE emits.
+
+    Found live on 2026-09-02: a POST to .../cloudsnapshotbackups/{id}/clone came back as
+    an nginx HTML error page — no Capella envelope, no domain code, no JSON. That request
+    never reached the API, and this set would have recorded it VERIFIED.
+    """
+    op = _Op("cb_clone", "POST", "/v4/organizations/{organization_id}/projects")
+    original = script._request
+    script._request = lambda *a, **k: (
+        403,
+        "<html>\r\n<head><title>403 Forbidden</title></head>\r\n"
+        "<body>\r\n<center><h1>403 Forbidden</h1></center>\r\n"
+        "<hr><center>nginx</center>\r\n</body>\r\n</html>",
+    )
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k")
+    finally:
+        script._request = original
+
+    assert result.verdict == "ERROR", (
+        "an edge rejection is inconclusive; recording it VERIFIED claims a route exists "
+        "on the strength of a response the API never saw"
+    )
+    assert "PROXY" in result.detail
+    assert "nginx" in result.detail
+
+
+def test_an_api_403_is_still_proof(script):
+    """The narrowing must not throw away the case the rule was written for: Capella's own
+    403 does require routing, and remains evidence."""
+    op = _Op("cb_thing", "GET", "/v4/organizations/{organization_id}/projects")
+    original = script._request
+    script._request = lambda *a, **k: (
+        403,
+        '{"code":4025,"hint":"Check your role.","httpStatusCode":403,'
+        '"message":"Access Denied."}',
+    )
+    try:
+        result = script.probe(op, {"organization_id": "ORG"}, "k")
+    finally:
+        script._request = original
+    assert result.verdict == "VERIFIED"
+
+
+def test_the_edge_detector_is_narrow(script):
+    """ "Not JSON" would be far too broad — an empty body on a 204 is normal and proves
+    plenty. Only the shape of a proxy error page counts."""
+    assert script._looks_like_an_edge_rejection("<html><body>403</body></html>")
+    assert script._looks_like_an_edge_rejection(
+        "<!DOCTYPE html><title>Forbidden</title>"
+    )
+    assert script._looks_like_an_edge_rejection("403 Forbidden\nnginx\n")
+    # Not edge rejections:
+    assert not script._looks_like_an_edge_rejection("")
+    assert not script._looks_like_an_edge_rejection('{"code":403,"message":"denied"}')
+    assert not script._looks_like_an_edge_rejection('[{"id":"x"}]')
+    assert not script._looks_like_an_edge_rejection("Index not found in key space")

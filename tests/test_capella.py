@@ -1311,3 +1311,51 @@ def test_a_base64_path_id_survives_encoding():
         "a decoded replication id contains slashes; leaving them unencoded would address "
         "a different resource"
     )
+
+
+# ── Mutation anchors ─────────────────────────────────────────────────────────
+
+
+def test_every_mutation_anchor_still_matches_its_target():
+    """A mutation whose anchor no longer matches tests NOTHING, and the guard it was
+    written for silently becomes unverified.
+
+    The harness gets this right — it reports ANCHOR-GONE and fails the run rather than
+    counting it as a pass. What it cannot do is be quick about it: the anchors are checked
+    while applying 173 mutations across a matrix of Python versions, so a one-character
+    drift costs a nine-minute CI round trip to discover.
+
+    This is the same check, done in milliseconds, on the same data. It went in after
+    `LIVE_VERIFIED_ON = "2026-07-30"` was anchored by its literal value and the date moved
+    the moment 36 operations were verified against a live organization — which is to say,
+    the anchor broke on exactly the event the mutation exists to protect.
+    """
+    import importlib.util
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    scripts = sorted(root.glob("scripts/mutation*.py"))
+    assert scripts, "no mutation scripts found; this test has gone stale"
+
+    stale: list[str] = []
+    checked = 0
+    for script in scripts:
+        spec = importlib.util.spec_from_file_location(script.stem, script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        mutations = getattr(module, "MUTATIONS", None)
+        assert mutations, f"{script.name} defines no MUTATIONS"
+
+        for entry in mutations:
+            label, relpath, old = entry[0], entry[1], entry[2]
+            text = (root / relpath).read_text(encoding="utf-8")
+            for anchor in old if isinstance(old, list) else [old]:
+                checked += 1
+                if anchor not in text:
+                    stale.append(f"{script.name}: {label} — {relpath}")
+
+    assert not stale, (
+        f"{len(stale)} mutation anchor(s) no longer match their target file, so those "
+        "mutations test nothing:\n  " + "\n  ".join(stale)
+    )
+    assert checked > 100, f"only {checked} anchors checked; suspiciously few"

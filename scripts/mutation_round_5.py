@@ -663,8 +663,17 @@ MUTATIONS = [
     (
         "capella: the verification date is dropped",
         "handlers/capella/spec.py",
-        'LIVE_VERIFIED_ON = "2026-07-30"',
-        'LIVE_VERIFIED_ON = "recently"',
+        # The DATE MOVES. It moved on 2026-09-01 when 36 operations were verified
+        # against a live organization, and the anchor did not -- so this mutation
+        # stopped applying and CI reported ANCHOR-GONE. That is the harness telling
+        # the truth: it could no longer prove the check it was written to prove.
+        #
+        # Now anchored on the assignment and the century rather than the whole date,
+        # so the next verification run does not break it again. The mutation still
+        # does what it must -- replace a real date with prose and watch
+        # test_the_verification_date_is_recorded fail.
+        'LIVE_VERIFIED_ON = "20',
+        'LIVE_VERIFIED_ON = "recently',
         CAPELLA,
     ),
     # ── The authorization decision itself ───────────────────────────────────

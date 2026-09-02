@@ -164,7 +164,44 @@ TIMEOUT = 30
 #: relevant, so counting it as proof of existence meant a rate-limited run reported
 #: every path VERIFIED and exited 0 -- and adding 500/502/503 to this set survived the
 #: whole suite, so nothing pinned its upper bound either.
+#:
+#: THE 403 REASONING ABOVE HAS A HOLE, found live on 2026-09-02. It says a 403 "requires
+#: authentication to have succeeded first, which requires routing" — true of a 403 the
+#: API emits, and false of one the EDGE emits. A POST to
+#: /v4/.../cloudsnapshotbackups/{id}/clone came back as an nginx HTML error page:
+#:
+#:     403 Forbidden
+#:     403 Forbidden
+#:     nginx
+#:
+#: No Capella error envelope, no domain code, no JSON at all. That request never reached
+#: the API, so it says nothing about whether the route exists — and this set would have
+#: recorded it VERIFIED. See _looks_like_an_edge_rejection.
 _PATH_EXISTS = {200, 201, 202, 204, 400, 403, 405, 409, 422}
+
+
+#: A response that did not come from the API at all.
+#:
+#: Capella answers errors with a JSON envelope carrying `code`, `hint`, `httpStatusCode`
+#: and `message`. A reverse proxy in front of it answers with HTML. The distinction
+#: matters for exactly one purpose and it is the purpose of this whole script: an edge
+#: rejection is not evidence about a route.
+def _looks_like_an_edge_rejection(body: str) -> bool:
+    """Whether a response body came from a proxy rather than from Capella.
+
+    Deliberately narrow. It is not "the body is not JSON" — an empty body on a 204 is
+    normal and proves plenty. It is specifically the shape of a proxy error page.
+    """
+    if not body:
+        return False
+    sample = body.strip()[:400].lower()
+    if sample.startswith(("{", "[")):
+        return False  # a JSON body, whoever produced it
+    return any(
+        marker in sample
+        for marker in ("<html", "<!doctype", "nginx", "<head>", "<title>", "cloudfront")
+    )
+
 
 #: 401 is deliberately ABSENT, and this was established live rather than assumed:
 #: Capella answers 401 for a bad secret AND for an IP-allowlist rejection, on any path,
@@ -1761,6 +1798,19 @@ def probe(
             "rate limited (429); no conclusion about this path. Re-run more slowly.",
         )
     if status in _PATH_EXISTS:
+        # An EDGE rejection is inconclusive, not a pass. A 403 from the API means the
+        # request was routed and then refused; a 403 from nginx means it never arrived.
+        # Only the first says anything about whether the path is real.
+        if _looks_like_an_edge_rejection(body):
+            return Result(
+                op,
+                "ERROR",
+                status,
+                f"HTTP {status} from a PROXY, not from Capella — no error envelope, so "
+                "the request never reached the API and this says nothing about the "
+                f"route. Body: {body.strip()[:120]!r}",
+                method_sent=method_sent,
+            )
         return Result(
             op,
             "VERIFIED",

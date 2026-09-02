@@ -329,13 +329,24 @@ TOOL_NAMES = frozenset(t.name for t in TOOLS)
 #: success, because a fixture that reports success with no documents in it is the
 #: worst outcome available here.
 _BLOCKED = (
-    "capella_fixture_* is defined but not yet implemented. It depends on two v4 "
-    "response shapes that the rendered API reference truncates: the "
-    "queryIndexes/definitions payload, and the disputed backup restore path "
-    "(.../clusters/{cluster_id}/backup/restore versus "
-    ".../clusters/{cluster_id}/backups/{backup_id}/restore). Settle both with "
-    "scripts/verify_capella_paths.py --method-probe, then implement. Refusing "
-    "rather than guessing — see docs/FIXTURE_DESIGN.md."
+    "capella_fixture_* is defined but not yet implemented. This is now IMPLEMENTATION "
+    "WORK, not an unknown: both v4 questions it was waiting on were settled against a "
+    "live control plane on 2026-09-01.\n"
+    "\n"
+    "  * The index-definition payload is at GET .../clusters/{id}/queryService/indexes "
+    "    (NOT /queryIndexes/definitions, which does not exist), takes a required "
+    "    `bucket` NAME plus optional scope and collection, and answers 200 with a "
+    "    `definitions` key. Shipped as capella_query_index_definitions_list.\n"
+    "  * The restore path dispute is settled in favour of "
+    "    POST .../clusters/{cluster_id}/backups/{backup_id}/restore, and more strongly "
+    "    than the path alone showed: the body requires BOTH sourceClusterID and "
+    "    targetClusterID, so cross-cluster restore is a single call with both ends "
+    "    named. Shipped as capella_backup_restore.\n"
+    "\n"
+    "What remains is writing the export/import/verify logic against those two, plus the "
+    "eventing and search definitions -- see the per-handler docstrings below and "
+    "docs/FIXTURE_DESIGN.md. Still refusing rather than half-implementing: a fixture "
+    "that reports success with no documents in it is the worst outcome available here."
 )
 
 

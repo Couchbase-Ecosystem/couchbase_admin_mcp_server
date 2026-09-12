@@ -43,9 +43,41 @@ def _restore_environ():
     reason the random-order run is worth keeping in CI.
     """
     snapshot = dict(os.environ)
+    for name in AMBIENT_CREDENTIALS:
+        os.environ.pop(name, None)
     yield
     os.environ.clear()
     os.environ.update(snapshot)
+
+
+#: Variables a developer with working Capella credentials has EXPORTED, and which
+#: unit tests must not see.
+#:
+#: Seven tests in this suite passed in CI and failed on the machine of the person
+#: who had just used the tools for real. ``verify_capella_paths.py`` defaults its
+#: ``--org`` argument from CB_CAPELLA_ORG_ID and reads CB_CAPELLA_API_KEY at call
+#: time; ``verify_mcp_surface.py`` reads CAPELLA_ORG_ID and CB_BUCKET. Tests that
+#: assert on the org-DISCOVERY path -- "no organization visible names the likely
+#: cause", "several visible organizations refuse to guess" -- can only exercise it
+#: when no organization is supplied, so an exported one silently converted them
+#: into tests of a different branch, and the failure named a real org id, which
+#: reads like a fixture bug rather than a leak.
+#:
+#: Removed before every test rather than fixed test by test: a test that wants one
+#: of these sets it with monkeypatch, which runs after this fixture and therefore
+#: still wins. Deliberately NOT including CB_CONNECTION_STRING, CB_USERNAME or
+#: CB_PASSWORD -- nothing has been observed leaking through those, and clearing
+#: them on no evidence is the kind of change that turns a green suite red for a
+#: reason nobody can reconstruct later.
+AMBIENT_CREDENTIALS = (
+    "CAPELLA_ORG_ID",
+    "CAPELLA_API_KEY_SECRET",
+    "CAPELLA_ACCESS_KEY_ID",
+    "CB_CAPELLA_ORG_ID",
+    "CB_CAPELLA_API_KEY",
+    "CB_CAPELLA_API_URL",
+    "CB_BUCKET",
+)
 
 
 # ── Shared, PRUNING repository walk ──────────────────────────────────────────

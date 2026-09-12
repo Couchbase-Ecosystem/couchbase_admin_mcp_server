@@ -461,3 +461,16 @@ def test_every_tool_schema_is_valid_json_schema():
 
     for tool in mcp_status.TOOLS:
         jsonschema.Draft7Validator.check_schema(mcp_compat.input_schema(tool))
+
+
+# ── Nothing here may pass vacuously ──────────────────────────────────────────
+#
+# Every test above asserts inside a `for` over one of these collections, so an
+# empty one is a green tick rather than a failure. `test_no_vacuous_coverage.py`
+# enforces that this guard exists; the floors below are what it cannot know.
+
+def test_there_is_something_to_test():
+    """`mcp_status.TOOLS` is what the two loops above iterate."""
+    from handlers import mcp_status as _live
+
+    assert _live.TOOLS, "mcp_status advertises no tools"

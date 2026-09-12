@@ -111,6 +111,36 @@ def edge(monkeypatch):
 # ── A valid token passes through ─────────────────────────────────────────────
 
 
+
+def _a_dispatchable_tool_name() -> str:
+    """A tool that this posture actually LOADS, not merely one that is registered.
+
+    `server._HANDLERS` is the full registry; `server._TOOLS` is what survived the
+    deployment, read-only and disabled-tools filters. Three tests here took
+    `next(iter(server._HANDLERS))` and got `admin_bucket_list`, which is gated out
+    whenever `detect_mode()` resolves to `capella` -- so on any machine with a
+    Capella API key and no connection string, dispatch refused before reaching the
+    stand-in handler and the test failed with an assertion about an empty list
+    that said nothing about the property under test.
+
+    Picking from the FILTERED list makes these tests independent of the machine's
+    deployment posture, which is what they were always about: they are testing the
+    transport, not the gate.
+    """
+    loaded = [getattr(t, "name", "") for t in server._TOOLS]
+    assert loaded, (
+        "no tools survived filtering, so every dispatch test below would be "
+        "asserting against a refusal rather than a handler"
+    )
+    for name in loaded:
+        if name in server._HANDLERS:
+            return name
+    raise AssertionError(
+        f"none of the {len(loaded)} loaded tools has a handler in _HANDLERS; "
+        "the tool list and the dispatch table disagree"
+    )
+
+
 def test_a_valid_token_reaches_the_application(edge, monkeypatch):
     downstream, failures, build = edge
     monkeypatch.setattr("auth.oidc.validate_token", lambda _t: {"sub": "u"})
@@ -386,7 +416,7 @@ def test_a_handler_that_raises_becomes_an_error_response_and_an_audit_record(
         server.audit, "emit_tool_call", lambda **kw: records.append(kw), raising=False
     )
 
-    name = next(iter(server._HANDLERS))
+    name = _a_dispatchable_tool_name()
     # A module-like stand-in: `_HANDLERS` maps a name to a MODULE and dispatch calls
     # `handler.handle(name, args)`, so a bare callable is an AttributeError rather than the
     # KeyError under test.
@@ -413,7 +443,7 @@ def test_a_successful_call_is_audited_as_allowed_with_a_duration(monkeypatch):
         server.audit, "emit_tool_call", lambda **kw: records.append(kw), raising=False
     )
 
-    name = next(iter(server._HANDLERS))
+    name = _a_dispatchable_tool_name()
     from mcp.types import TextContent
 
     monkeypatch.setitem(
@@ -441,7 +471,7 @@ def test_the_correlation_id_is_stripped_before_the_handler_sees_it(monkeypatch):
     seen: list[dict] = []
     from mcp.types import TextContent
 
-    name = next(iter(server._HANDLERS))
+    name = _a_dispatchable_tool_name()
     monkeypatch.setitem(
         server._HANDLERS,
         name,
@@ -466,7 +496,7 @@ def test_the_correlation_id_reaches_the_audit_record(monkeypatch):
     monkeypatch.setattr(
         server.audit, "emit_tool_call", lambda **kw: records.append(kw), raising=False
     )
-    name = next(iter(server._HANDLERS))
+    name = _a_dispatchable_tool_name()
     monkeypatch.setitem(
         server._HANDLERS,
         name,

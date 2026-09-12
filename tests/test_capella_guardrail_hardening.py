@@ -1329,3 +1329,20 @@ def test_s5_admin_request_does_not_retry_mutating_methods_on_5xx():
     assert _retryable(503, "DELETE") is True
     assert _retryable(429, "POST") is True
     assert _retryable(404, "GET") is False
+
+
+# ── Nothing here may pass vacuously ──────────────────────────────────────────
+#
+# Every test above asserts inside a `for` over one of these collections, so an
+# empty one is a green tick rather than a failure. `test_no_vacuous_coverage.py`
+# enforces that this guard exists; the floors below are what it cannot know.
+
+def test_there_is_something_to_test():
+    """These four drive every guardrail parametrisation in this file."""
+    assert _ALL_OPS, "the Capella operation registry is empty"
+    assert CHILD_DESTRUCTIVE, "no destructive child operations to refuse"
+    assert CHILD_MUTATING, "no mutating child operations to refuse"
+    assert GUARDED_CLUSTER_OPS, (
+        "no guarded cluster operations; the unmanaged-cluster and allowlist "
+        "refusals are both parametrising over an empty list"
+    )

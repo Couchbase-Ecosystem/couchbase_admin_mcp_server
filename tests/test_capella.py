@@ -1359,3 +1359,123 @@ def test_every_mutation_anchor_still_matches_its_target():
         "mutations test nothing:\n  " + "\n  ".join(stale)
     )
     assert checked > 100, f"only {checked} anchors checked; suspiciously few"
+
+
+# ── Nothing here may pass vacuously ──────────────────────────────────────────
+#
+# Every test above asserts inside a `for` over one of these collections, so an
+# empty one is a green tick rather than a failure. `test_no_vacuous_coverage.py`
+# enforces that this guard exists; the floors below are what it cannot know.
+
+def test_there_is_something_to_test():
+    """Non-emptiness, and the relationship between the two registries.
+
+    NOT a minimum count. A floor here would have to be measured, and a guessed
+    one is worse than none: it fails for a reason unrelated to the property, and
+    the fix people reach for is to edit the number rather than read why. The
+    question this guards is "did the registry load at all", which has an exact
+    answer that needs no magic number.
+    """
+    assert OPS, "the Capella operation registry is empty"
+    assert TOOLS, "the Capella surface advertises no tools"
+    assert len(TOOLS) >= len(OPS), (
+        f"{len(TOOLS)} tools built from {len(OPS)} operations; every operation "
+        "should yield at least one tool"
+    )
+    assert AUTHORITATIVE_APP_SERVICE_PATHS, (
+        "the App Services path table is empty, so the OpenAPI cross-check "
+        "parametrises over nothing and reports a skip"
+    )
+
+
+# ── The bootstrap trap ───────────────────────────────────────────────────────
+
+
+def test_listing_organizations_does_not_require_an_organization_id():
+    """The first call on a new deployment must not need the answer it returns.
+
+    `_handle_primitive` resolved the organization for EVERY primitive, and
+    `capella_organizations_list` has no {organization_id} in its path. So a
+    server holding only an API key was refused with "No Capella organization id
+    available", whose hint says `capella_organizations_list` will show which
+    organizations the key can see -- naming the tool it had just refused.
+
+    Every unit test passed an organization id, because anyone writing one
+    already has it. It took calling the tool from a container with only a key to
+    see it.
+    """
+    op = OPS_BY_NAME["capella_organizations_list"]
+    assert "{organization_id}" not in op.path
+
+    import inspect
+
+    from handlers import capella
+
+    source = inspect.getsource(capella._handle_primitive)
+    assert "{organization_id}\" in op.path" in source or \
+           "'{organization_id}' in op.path" in source, (
+        "_handle_primitive resolves the organization unconditionally again, so "
+        "capella_organizations_list is refused for want of an id it never uses"
+    )
+
+
+def test_every_op_that_interpolates_an_organization_still_gets_one():
+    """The fix must not make the guard optional for operations that need it.
+
+    Skipping resolution where the path HAS {organization_id} would substitute an
+    empty string into a URL and turn a refusal into a 404 against a nonsense
+    path.
+    """
+    needing = [o for o in OPS if "{organization_id}" in o.path]
+    assert needing, "no operation interpolates an organization id; this is stale"
+    assert len(needing) == len(OPS) - 1, (
+        "exactly one operation (capella_organizations_list) should be exempt; "
+        f"found {len(OPS) - len(needing)}"
+    )
+
+
+def test_a_performed_write_is_recorded_out_of_band_not_in_live_verified():
+    """The one time a write in this registry was actually PERFORMED.
+
+    `capella_backup_create` was executed for real on 2026-09-12 to settle whether
+    its empty `body={}` was correct. It answered 202 and the backup appeared in
+    the list. That is the strongest evidence this file holds about a request
+    body, and it must NOT sit in LIVE_VERIFIED.
+
+    LIVE_VERIFIED records what the NON-MUTATING probe observed. A 2xx there means
+    either the probe performed a write or someone edited by hand -- and
+    test_no_write_is_recorded_with_a_success_status caught exactly that when the
+    202 was first put there. It was the second case, which is why the rule earns
+    its keep: it fired on a deliberate, carefully-run, entirely well-intentioned
+    edit that would still have corrupted the meaning of the register.
+
+    The tag vocabulary carries the same distinction. [LIVE+METHOD] is earned by a
+    422 -- method sent, refused, nothing created. A 202 is stronger about the
+    body and weaker about safety. They are not the same claim and do not share a
+    label.
+    """
+    from handlers.capella import spec
+
+    assert spec.LIVE_VERIFIED["capella_backup_create"] == "405", (
+        "a performed write leaked back into the probe's register"
+    )
+    assert "capella_backup_create" in spec.LIVE_VERIFIED_OUT_OF_BAND
+    provenance = spec.LIVE_VERIFIED_OUT_OF_BAND["capella_backup_create"]
+    assert "202" in provenance and "capella_backup_cycle" in provenance, (
+        "the performed run must name its status and the tool that performed it"
+    )
+
+    op = spec.OPS_BY_NAME["capella_backup_create"]
+    assert "LIVE+METHOD" not in op.summary, (
+        "a performed write is not method-probe evidence"
+    )
+
+
+def test_out_of_band_entries_name_a_date_and_a_tool():
+    """A register whose entries say only 'verified' is the thing this file exists
+    to prevent, one level up."""
+    from handlers.capella import spec
+
+    for name, provenance in spec.LIVE_VERIFIED_OUT_OF_BAND.items():
+        assert "2026-" in provenance, f"{name}: no date"
+        assert "scripts/" in provenance, f"{name}: no tool named"

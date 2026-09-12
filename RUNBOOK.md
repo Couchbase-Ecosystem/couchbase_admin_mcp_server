@@ -386,6 +386,8 @@ successes — a refused call is the more interesting half.
 - [ ] `CB_ADMIN_AUDIT_FILE` points somewhere durable, and a record appears after one call
 - [ ] The automation scope is issued only to principals that should act unattended
 - [ ] `python scripts/verify_capella_paths.py` reports `MISSING=0`
+- [ ] `uv run python scripts/verify_mcp_surface.py` reports no PROTOCOL failures — see section 10.
+      A verified path is not a callable tool; this is the check that a client can reach it.
 - [ ] Optional, but this is how the 61/61 result was produced. Re-run it if Capella's control
       plane has changed since `spec.LIVE_VERIFIED_ON`:
       `python scripts/verify_capella_paths.py --bootstrap-app-service --bootstrap-child-objects --yes-really-mutate`.
@@ -408,3 +410,95 @@ successes — a refused call is the more interesting half.
       The App Service is the only billable part; budget several minutes for it to provision.
 - [ ] A teardown step runs with `if: always()`, and a scheduled reaper exists
 - [ ] One environment has been created and torn down by hand before CI is pointed at it
+
+---
+
+## 10. Proving the surface from an MCP client
+
+`scripts/verify_capella_paths.py` speaks HTTP to Capella directly. It answers
+"does this path exist", and it answers it well — but it never starts this server,
+never loads a tool, and never passes through a line of dispatch. Ninety-seven
+verified paths say nothing about whether a client can call them.
+
+`scripts/verify_mcp_surface.py` drives the server over stdio with the official
+`mcp` client — the same library Claude Desktop and Claude Code use — and reports
+which tools answered. It covers everything the path checker cannot see: startup
+under a profile, the advertised tool list, deployment gating, the read-only
+filter, the scope gate, the hard ceiling, the confirmation gate, dry-run
+interception, argument marshalling, response redaction, and the audit record each
+call emits.
+
+```powershell
+cd C:\Work\Development\CB-Admin-MCP
+uv run python scripts\verify_mcp_surface.py --verbose
+```
+
+Reads only. Nothing is created and nothing is modified.
+
+### The write surface, without writing
+
+```powershell
+uv run python scripts\verify_mcp_surface.py --write-preview --verbose
+```
+
+This starts a second server with writes loaded and `CB_ADMIN_DRY_RUN=true`, then
+calls every write tool twice: once without `confirm`, which must be refused, and
+once with it, which must come back as a preview. It is safe because of where the
+dry-run interception sits — after every gate, before the handler — and because
+`CB_ADMIN_DRY_RUN` is an operator control a caller cannot override.
+
+One exception, and the phase refuses to run rather than guess at it: a tool that
+implements `dry_run` in its own handler is deliberately *not* intercepted.
+`capella_env_reap` is one of those, and it reaps clusters. The set cannot be read
+off the advertised schemas — `dry_run` is injected into nearly every write tool's
+schema — so it is read from `cb_mcp_status`, and a server that does not report it
+gets no write phase at all.
+
+### Capturing it as evidence
+
+```powershell
+powershell -File scripts\run-mcp-evidence.ps1 -IncludeWrites
+```
+
+Writes `evidence-mcp-read-<date>.txt` and `evidence-mcp-write-<date>.txt`:
+PowerShell transcripts carrying the commit, the posture and the timestamps, which
+is what makes them attachable to a ticket. The same pattern
+`mcp-crud-couchbase\run-capella-evidence2.ps1` uses for the KV pull requests.
+
+### Reading the result
+
+| Outcome | Meaning |
+|---|---|
+| `ok` / `ok (empty)` | The handler ran. An empty listing is a real answer, not a gap. |
+| `gated` | Refused for want of `confirm: true`. The confirmation gate working. |
+| `guarded` | Refused by Capella guardrail policy. Also a pass. |
+| `preview` | A write withheld by the dry run, as intended. |
+| `UPSTREAM` | The handler ran and the API refused it. Often environmental — `capella_cluster_audit_log_export_get` needs an Enterprise plan. Fails the run only under `--strict`. |
+| `skipped` | Arguments could not be resolved; nothing was sent. **Never counted as a pass.** |
+| `TIMEOUT` | The call never came back. Only the `cb_*` SDK tools do this. The detail line names the cluster the server is pointed at — check that before reading anything into it. Says nothing about the surface; fails only under `--strict`. |
+| `PROTOCOL FAILURE` | The MCP layer itself failed — an advertised tool that will not dispatch. Always a defect. |
+| `*** PERFORMED ***` | A write ran in a phase where nothing should have. Reported first, fails the run. |
+
+Exit 0 is clean, 1 is a defect in the surface, and 2 and 3 are reachable only
+with `--strict` (upstream errors or timeouts, unresolvable arguments).
+
+The `cb_*` diagnostics tools are the only ones here that touch the data plane —
+they run SQL++ over the SDK rather than going to the control plane over 443. They
+are also the only ones that can hang rather than fail, and the read phase stops
+after three consecutive timeouts and names the cluster the server is pointed at.
+
+Read that line before concluding anything about the network. `CB_CONNECTION_STRING`
+defaults to `couchbase://localhost`, so with it unset these tools block trying to
+reach a cluster that is not there — which is indistinguishable from a firewalled
+one, and has twice been mistaken for one. `--only capella_` skips them outright
+when you want the control-plane surface on its own.
+
+### Where the network fits
+
+The Capella tools here reach the v4 control plane at `cloudapi.cloud.couchbase.com`
+over 443 with the organization API key. That is **not** gated by the per-cluster
+IP allowlist, so this run works with the VPN up and a failure is a credential or a
+server problem rather than a network one. The allowlist gates the data plane —
+the SDK's 11207 connection and the Data API, and therefore the fixture tools.
+`CAPELLA-CONNECTIVITY.md` has the full account of the data-plane side, including
+which parts of it are measured and which are still hypothesis.

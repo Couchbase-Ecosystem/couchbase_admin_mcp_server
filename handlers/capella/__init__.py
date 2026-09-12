@@ -350,9 +350,32 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
     op = OPS_BY_NAME[name]
     policy = guardrails.load_policy()
 
-    # Resolve the organization, refusing a mismatched caller override.
+    # Resolve the organization -- but ONLY for operations whose path contains
+    # {organization_id}.
+    #
+    # THE BOOTSTRAP TRAP. This used to run for every primitive, including
+    # `capella_organizations_list`, whose path is /v4/organizations and takes no
+    # organization id at all. So a deployment holding nothing but an API key was
+    # refused with:
+    #
+    #     No Capella organization id available.
+    #     hint: ... capella_organizations_list will show which organizations the
+    #           API key can see.
+    #
+    # The hint names the tool being refused. That is the FIRST call anyone makes
+    # on a new deployment, and the only way through was to already know the
+    # answer it would have given. Found by calling the tool from inside a
+    # container rather than by reading the code -- the unit tests all supplied an
+    # organization id, because everyone who writes one already has it to hand.
     args = dict(args)
-    args["organization_id"] = guardrails.resolve_org(args, policy)
+    if "{organization_id}" in op.path:
+        args["organization_id"] = guardrails.resolve_org(args, policy)
+    elif args.get("organization_id"):
+        # The path does not use it, but a caller passing an id that contradicts
+        # the server's pin is still making a mistake worth surfacing -- an agent
+        # that believes it is talking to a different organization should be told
+        # it is not, even on a call where the value is inert.
+        guardrails.resolve_org(args, policy)
 
     if op.guarded:
         _apply_guardrails(name, op, args, policy)

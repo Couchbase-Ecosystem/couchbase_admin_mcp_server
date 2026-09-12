@@ -101,11 +101,57 @@ from mcp.types import Tool, ToolAnnotations
 # rest on the July evidence.
 LIVE_VERIFIED_ON = "2026-09-01"
 
+#: Entries observed OUTSIDE the 2026-09-01 sweep, with what produced them.
+#:
+#: Provenance matters as much as the status. This file's own rule is that a
+#: verification claim nobody made is worse than an admitted gap, so an entry
+#: recorded by a different tool on a different day says so rather than sitting
+#: silently under the LIVE_VERIFIED_ON banner and inheriting a provenance it
+#: does not have.
+LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
+    "capella_cloud_snapshot_backups_list": (
+        "2026-09-12, scripts/capella_backup_readiness.py. Real GET, 200, cursor "
+        "envelope, one snapshot present."
+    ),
+    "capella_cloud_snapshot_regions_list": (
+        "2026-09-12, scripts/capella_backup_readiness.py. Real GET, 200, returns "
+        "a bare JSON array of provider regions rather than a cursor envelope."
+    ),
+    # NOT IN LIVE_VERIFIED, DELIBERATELY. That register holds what the
+    # NON-MUTATING probe observed, and a 2xx there would mean the verification
+    # run performed a write -- which is the one thing
+    # test_no_write_is_recorded_with_a_success_status exists to catch. It caught
+    # this entry when the 202 was put there by hand, correctly: "either the probe
+    # performed them, or someone recorded a status by hand", and it was the
+    # second.
+    #
+    # The distinction the tag vocabulary draws is worth keeping. [LIVE+METHOD] is
+    # earned by a 422 -- the method was SENT and REFUSED, so the method is
+    # accepted and nothing was created. A 202 is stronger evidence about the body
+    # and weaker evidence about safety: something happened. Those do not belong
+    # under one label.
+    "capella_backup_create": (
+        "2026-09-12, scripts/capella_backup_cycle.py --perform. A real POST "
+        "through an MCP client against bucket travel-sample answered 202 "
+        "Accepted with an EMPTY body, and the backup subsequently appeared in "
+        "capella_backups_list (3 -> 4). This SETTLES body={} as an observation "
+        "rather than an omission. LIVE_VERIFIED keeps 405, which is what the "
+        "non-mutating path probe saw and all it is entitled to claim."
+    ),
+    "capella_cloud_snapshot_restores_list": (
+        "2026-09-12, scripts/capella_backup_readiness.py. Real GET, 200, cursor "
+        "envelope, empty."
+    ),
+}
+
 #: Every operation, and the HTTP status the control plane answered when its path was last
 #: exercised for real by scripts/verify_capella_paths.py.
 #:
-#: ALL 61 ARE PRESENT, and a test asserts that — so "every path is verified" is a checkable
-#: property of this file rather than a claim in a commit message. Closing the last of them
+#: EVERY OPERATION IS PRESENT, and a test asserts that — so "every path is verified" is a
+#: checkable property of this file rather than a claim in a commit message. The count used
+#: to be written here as a number and went stale every time an operation was added, which
+#: teaches the next reader to edit the number rather than ask why it moved. The test counts;
+#: this comment does not. Closing the last of them
 #: needed an App Service, an App Endpoint, a database credential, two allowlist entries and
 #: an App Services admin user to exist, which the script now creates and removes per run.
 #:
@@ -190,6 +236,9 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_backup_get": "200",
     "capella_backup_restore": "405",
     "capella_backups_list": "200",
+    "capella_cloud_snapshot_backups_list": "200",
+    "capella_cloud_snapshot_regions_list": "200",
+    "capella_cloud_snapshot_restores_list": "200",
     "capella_bucket_create": "405",
     "capella_bucket_delete": "405",
     "capella_bucket_flush": "405",
@@ -1849,10 +1898,20 @@ OPS: tuple[Op, ...] = (
             "Take an on-demand managed backup of one bucket. ASYNCHRONOUS — returns "
             "once the backup is scheduled, not once it completes; poll "
             "capella_backups_list. The resulting bytes cannot be retrieved over any "
-            "API. [LIVE 405]"
+            "API. [LIVE 405] — and the BODY is separately confirmed: a real "
+            "create performed on 2026-09-12 sent an empty body and answered 202 "
+            "Accepted. See LIVE_VERIFIED_OUT_OF_BAND."
         ),
         group="backup",
         idempotent=False,
+        # EMPTY BY OBSERVATION, not by omission. Until 2026-09-12 this `{}` meant
+        # "nobody has checked" -- the operation's 405 came from an OPTIONS probe,
+        # and OPTIONS never sends a body. Three bodies in this registry were
+        # wrong while their paths were 405-verified, so the distinction is not
+        # academic.
+        #
+        # A real POST with no body answered 202 Accepted. The bucket is named by
+        # the PATH, so there is nothing left for a body to carry.
         body={},
     ),
     Op(
@@ -2234,6 +2293,72 @@ OPS: tuple[Op, ...] = (
     # capella_query_index_definitions_list was HELD BACK in the first batch because its
     # only evidence was a 404 without a Capella domain code, and this repository's rule is
     # that such a 404 proves nothing. It now answers 200. The rule did not have to move.
+    # ── Cloud snapshot backups ───────────────────────────────────────────────
+    #
+    # A SECOND, SEPARATE backup subsystem, live on Capella and implemented
+    # nowhere in this server until now. spec_pending.py flagged it on
+    # 2026-09-01 as an unexamined gap and argued it may be the better primitive
+    # for "give me a restorable environment on demand"; a live sweep on
+    # 2026-09-12 confirmed all six of its routes exist.
+    #
+    # Why it is a different shape from the managed backups above:
+    #
+    #   * /restores is a LISTABLE COLLECTION, so a restore is a first-class
+    #     object that can be found and tracked afterwards. Managed backup has
+    #     no equivalent -- you fire a restore and watch the cluster.
+    #   * /regions returns the provider regions, which implies the subsystem
+    #     understands cross-REGION placement, not only cross-cluster.
+    #
+    # ONLY THE READS ARE HERE. The write routes answered 405 to a GET, which
+    # proves the route exists and says nothing about which method or body they
+    # take. Shipping a create or a restore on that would be inventing a schema.
+    Op(
+        name="capella_cloud_snapshot_backups_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/cloudsnapshotbackups",
+        summary=(
+            "List cloud snapshot backups for a cluster. A different subsystem "
+            "from capella_backups_list: snapshots are cluster-level rather than "
+            "per-bucket, and their restores are trackable objects. Observed "
+            "returning a standard cursor envelope. [LIVE 200]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+        query=_PAGE_QUERY,
+    ),
+    Op(
+        name="capella_cloud_snapshot_regions_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/cloudsnapshotbackups/regions",
+        summary=(
+            "List the provider regions a cloud snapshot can be placed in. "
+            "Returns a bare JSON ARRAY of region names, not a cursor envelope -- "
+            "v4 list responses are not uniform and this one is the plain-array "
+            "shape. [LIVE 200]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_cloud_snapshot_restores_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/cloudsnapshotbackups/restores",
+        summary=(
+            "List cloud snapshot RESTORES. The managed-backup family has no "
+            "counterpart: this is what makes a restore auditable after the fact "
+            "rather than a fire-and-watch operation, which is the difference "
+            "that matters for an automated environment-refresh workflow. "
+            "[LIVE 200]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+        paginated=True,
+        query=_PAGE_QUERY,
+    ),
     Op(
         name="capella_backup_get",
         method="GET",
@@ -2258,15 +2383,25 @@ OPS: tuple[Op, ...] = (
     Op(
         name="capella_backup_restore",
         method="POST",
-        # WARNING — DISPUTED PATH. Two reads of the v4 reference disagreed:
+        # DISPUTE SETTLED 2026-09-12 — shape (b), which is what is written here.
+        # Two reads of the v4 reference had disagreed:
         #   (a) .../clusters/{cluster_id}/backup/restore              (no backup id)
         #   (b) .../clusters/{cluster_id}/backups/{backup_id}/restore
-        # Shape (b) is used here because a backup id in the path ALONGSIDE the
-        # target cluster id is what makes cross-cluster restore a primitive: the
-        # path is the TARGET, the body names the SOURCE. If (a) is correct the body
-        # must carry both and cross-cluster becomes an orchestration problem.
-        # --method-probe with an empty body returns 422 naming the required fields,
-        # settling path and body together. DO NOT SHIP UNTIL PROBED.
+        # Two independent sources now agree on (b): the published Operational
+        # Management API reference lists
+        #   POST /v4/organizations/{organizationId}/projects/{projectId}
+        #        /clusters/{clusterId}/backups/{backupId}/restore
+        # and LIVE_VERIFIED records 405 for this operation, which only an OPTIONS
+        # probe of a MATCHED route returns -- a wrong path answers 404.
+        #
+        # So the design question the dispute raised is also answered: the backup
+        # id is in the path alongside the target cluster id, which makes
+        # cross-cluster restore a primitive rather than an orchestration problem
+        # -- the path names the TARGET, the body names the SOURCE.
+        #
+        # The BODY is still unprobed. --method-probe with an empty body returns
+        # 422 naming the required fields; until then the declared body is the
+        # reference's, not an observation.
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/backups/{backup_id}/restore",
         summary=(
             "Restore a managed backup. The cluster in the path is the TARGET. "

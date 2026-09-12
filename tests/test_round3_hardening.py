@@ -16,6 +16,7 @@ import sys
 import threading
 
 import pytest
+from tests._platform import FILE_MODES_AVAILABLE, requires_symlinks
 
 # ── H5 / M6: the JWKS refresh budget and its concurrency safety ──────────────
 
@@ -279,11 +280,15 @@ def test_a_record_reaches_the_dedicated_audit_file(tmp_path, monkeypatch):
         assert "admin_bucket_delete" in body
         assert "gh-run-991" in body, "correlation id missing from the durable record"
         assert "hunter2" not in body, "a credential reached the audit file"
-        assert oct(path.stat().st_mode & 0o777) == "0o600"
+        if FILE_MODES_AVAILABLE:
+            # POSIX-only claim. The record reaching the file, and the credential
+            # not reaching it, are the assertions that hold everywhere.
+            assert oct(path.stat().st_mode & 0o777) == "0o600"
     finally:
         audit.reset_audit_sink()
 
 
+@requires_symlinks
 def test_an_unusable_audit_path_is_reported_as_fatal(tmp_path, monkeypatch):
     """Silent degradation is what made this a phantom in the first place. An audit sink
     that was asked for and cannot be opened must stop startup, not log a line into the
@@ -737,6 +742,7 @@ def test_the_ceiling_applies_to_a_read_only_tool_named_in_it(monkeypatch):
 # place the control actually takes effect — was uncovered.
 
 
+@requires_symlinks
 def test_an_unusable_audit_sink_stops_the_server_from_starting(tmp_path, monkeypatch):
     """Closes: `sink_problem = None` in server._enforce_profile.
 
@@ -839,6 +845,7 @@ def test_the_gui_configures_logging_in_its_own_process(monkeypatch):
     )
 
 
+@requires_symlinks
 def test_the_gui_refuses_to_start_on_an_unusable_audit_sink(tmp_path, monkeypatch):
     """Closes: `_sink_problem = None` in gui._enforce_gui_posture.
 

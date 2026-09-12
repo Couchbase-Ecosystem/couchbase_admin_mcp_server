@@ -177,6 +177,52 @@ class PrivateRotatingFileHandler(RotatingFileHandler):
     # control and is not.
 
 
+#: ``os.fchmod`` is POSIX-only: on Windows the attribute does not exist at all.
+#: The AttributeError that raised is NOT an OSError, so it flew straight past the
+#: handler at the bottom of ``_ensure_private_logfile`` -- whose whole job is to
+#: turn "this path cannot be prepared" into a ``False`` return. A requested audit
+#: sink therefore raised on Windows instead of reporting itself unusable, and
+#: because ``server._enforce_profile()`` and ``gui._enforce_gui_posture()`` both
+#: read ``audit.audit_sink_error()`` at startup, every process that set
+#: CB_ADMIN_AUDIT_FILE died on that platform before serving anything.
+_CAN_FCHMOD = hasattr(os, "fchmod")
+
+#: One-shot, because this runs once per handler per process and a warning
+#: repeated for every log file reads as breakage rather than as a notice.
+_WARNED_NO_FILE_MODES = False
+
+
+def _restrict_to_owner(fd: int, path: str) -> None:
+    """Make an open file owner-only, where the platform expresses that as a mode.
+
+    POSIX: ``fchmod`` on the descriptor we opened, never ``chmod`` on the path --
+    the point of holding the descriptor is that it cannot be swapped for a
+    symlink between the check and the change.
+
+    Windows: there is no mode to set. ``os.chmod`` there toggles the read-only
+    attribute and nothing else, so calling it would not remove read access from
+    any other local account; it would only make this function LOOK like the
+    control is in force. Permissions on that platform come from the ACL the
+    containing directory hands down, so the file is left alone and the operator
+    is told once. The symlink refusal and the hard-link warning that bracket
+    this call are platform independent and still apply.
+    """
+    global _WARNED_NO_FILE_MODES
+    if _CAN_FCHMOD:
+        os.fchmod(fd, 0o600)
+        return
+    if not _WARNED_NO_FILE_MODES:
+        _WARNED_NO_FILE_MODES = True
+        print(
+            "[couchbase-admin-mcp] NOTE: file modes are not available on this "
+            f"platform, so {path!r} cannot be set owner-only. It inherits the "
+            "containing directory's ACL -- place it under a directory only the "
+            "service account can read.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def _ensure_private_logfile(path: str) -> bool:
     """Guarantee a log file is 0600 before anything is written to it.
 
@@ -218,7 +264,7 @@ def _ensure_private_logfile(path: str) -> bool:
             )
             fd = os.open(path, flags, 0o600)
             try:
-                os.fchmod(fd, 0o600)
+                _restrict_to_owner(fd, path)
             finally:
                 os.close(fd)
         else:
@@ -231,10 +277,10 @@ def _ensure_private_logfile(path: str) -> bool:
                     file=sys.stderr,
                     flush=True,
                 )
-            # fchmod on an fd we opened without following links, not chmod on a path.
+            # On an fd we opened without following links, not chmod on a path.
             fd = os.open(path, os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
             try:
-                os.fchmod(fd, 0o600)
+                _restrict_to_owner(fd, path)
             finally:
                 os.close(fd)
         return True

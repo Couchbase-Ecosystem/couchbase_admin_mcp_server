@@ -1164,10 +1164,10 @@ MUTATIONS = [
         # there is a no-op — and that version of this mutation "survived" for that reason.
         "logging: an existing log file is left at whatever mode it had",
         "logging_config.py",
-        "            # fchmod on an fd we opened without following links, not chmod on a path.\n"
+        "            # On an fd we opened without following links, not chmod on a path.\n"
         '            fd = os.open(path, os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))\n'
         "            try:\n"
-        "                os.fchmod(fd, 0o600)",
+        "                _restrict_to_owner(fd, path)",
         '            fd = os.open(path, os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))\n'
         "            try:\n"
         "                pass",

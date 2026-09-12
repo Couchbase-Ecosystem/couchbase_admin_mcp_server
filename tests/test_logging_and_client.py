@@ -26,6 +26,7 @@ import os
 import pytest
 
 import logging_config
+from tests._platform import FILE_MODES_AVAILABLE, requires_symlinks
 
 # ── Log file preparation ─────────────────────────────────────────────────────
 
@@ -36,7 +37,10 @@ def test_a_new_log_file_is_created_private(tmp_path):
     path = tmp_path / "audit.log"
     assert logging_config._ensure_private_logfile(str(path)) is True
     assert path.exists()
-    assert oct(path.stat().st_mode)[-3:] == "600"
+    if FILE_MODES_AVAILABLE:
+        # The mode is the claim only where a mode exists. Windows has none to
+        # set, and logging_config._restrict_to_owner refuses to fake one.
+        assert oct(path.stat().st_mode)[-3:] == "600"
 
 
 def test_an_existing_log_file_is_tightened(tmp_path):
@@ -47,7 +51,10 @@ def test_an_existing_log_file_is_tightened(tmp_path):
     path.chmod(0o644)
 
     assert logging_config._ensure_private_logfile(str(path)) is True
-    assert oct(path.stat().st_mode)[-3:] == "600"
+    if FILE_MODES_AVAILABLE:
+        # The mode is the claim only where a mode exists. Windows has none to
+        # set, and logging_config._restrict_to_owner refuses to fake one.
+        assert oct(path.stat().st_mode)[-3:] == "600"
     # And the existing content is not truncated — it is an append-only record.
     assert path.read_text() == "earlier content\n"
 
@@ -79,7 +86,10 @@ def test_a_missing_directory_is_created_rather_than_refused(tmp_path):
     path = tmp_path / "new" / "deeper" / "audit.log"
     assert logging_config._ensure_private_logfile(str(path)) is True
     assert path.exists()
-    assert oct(path.stat().st_mode)[-3:] == "600"
+    if FILE_MODES_AVAILABLE:
+        # The mode is the claim only where a mode exists. Windows has none to
+        # set, and logging_config._restrict_to_owner refuses to fake one.
+        assert oct(path.stat().st_mode)[-3:] == "600"
 
 
 def test_a_genuinely_unusable_path_is_reported_rather_than_raising(tmp_path):
@@ -102,6 +112,7 @@ def test_a_directory_where_a_file_belongs_is_reported(tmp_path):
 @pytest.mark.skipif(
     not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW is not available on this platform"
 )
+@requires_symlinks
 def test_a_symlinked_log_path_does_not_follow_the_link(tmp_path):
     """THE symlink race. `chmod` on a path follows the link, so an attacker who can create
     `audit.log -> /etc/shadow` in a writable directory would have the server chmod their
@@ -135,17 +146,31 @@ def test_the_mode_is_set_on_a_descriptor_not_a_path():
     import ast
     import inspect
 
-    tree = ast.parse(inspect.getsource(logging_config._ensure_private_logfile).strip())
-    called = {
-        f"{node.func.value.id}.{node.func.attr}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-    }
-    assert "os.fchmod" in called
-    assert "os.chmod" not in called, (
+    def calls_in(function):
+        tree = ast.parse(inspect.getsource(function).strip())
+        return {
+            f"{node.func.value.id}.{node.func.attr}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+        }
+
+    # The mode change moved into _restrict_to_owner when os.fchmod turned out not
+    # to exist on Windows, so the property is now split across two functions and
+    # both halves have to hold: the caller must delegate rather than chmod a path,
+    # and the delegate must use the descriptor it is handed.
+    outer = calls_in(logging_config._ensure_private_logfile)
+    assert "os.chmod" not in outer, (
         "chmod on a path follows symlinks; use fchmod on an O_NOFOLLOW descriptor"
+    )
+
+    inner = calls_in(logging_config._restrict_to_owner)
+    assert "os.fchmod" in inner
+    assert "os.chmod" not in inner, (
+        "os.chmod on Windows only toggles the read-only attribute; it would not "
+        "remove read access from another local account, so calling it there would "
+        "make this control look enforced while doing nothing"
     )
 
 

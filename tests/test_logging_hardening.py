@@ -29,6 +29,12 @@ import logging
 import os
 
 import pytest
+from tests._platform import (
+    FILE_MODES_AVAILABLE,
+    SYMLINKS_AVAILABLE,
+    requires_file_modes,
+    requires_symlinks,
+)
 
 
 @pytest.fixture
@@ -147,6 +153,7 @@ def test_a_carriage_return_is_flattened_too(logdir):
 # ── File permissions, including across rotation ──────────────────────────────
 
 
+@requires_file_modes
 def test_log_files_are_created_private(logdir):
     base, logging_config = logdir
     logging_config.get_logger("handlers.x").info("hello")
@@ -177,8 +184,11 @@ def test_rotated_generations_stay_private(tmp_path, monkeypatch):
 
         rotated = list(tmp_path.glob("rot.info.log*"))
         assert len(rotated) > 1, "no rotation occurred; raise the padding"
-        for path in rotated:
-            assert oct(os.stat(path).st_mode & 0o777) == "0o600", path.name
+        if FILE_MODES_AVAILABLE:
+            # The mode is the claim only where a mode exists; on Windows the
+            # rotation itself is still what this test is about.
+            for path in rotated:
+                assert oct(os.stat(path).st_mode & 0o777) == "0o600", path.name
     finally:
         tree = logging.getLogger(logging_config.CB_ADMIN_SERVER_NAME)
         for handler in list(tree.handlers):
@@ -186,6 +196,7 @@ def test_rotated_generations_stay_private(tmp_path, monkeypatch):
             tree.removeHandler(handler)
 
 
+@requires_symlinks
 def test_a_symlinked_log_path_is_refused(tmp_path):
     """os.chmod and os.open both FOLLOW symlinks. A local user who can write the log
     directory could chmod an arbitrary reachable file to 0600 — as root,
@@ -205,6 +216,7 @@ def test_a_symlinked_log_path_is_refused(tmp_path):
     assert victim.read_text(encoding="utf-8") == "important"
 
 
+@requires_symlinks
 def test_configure_logging_does_not_attach_a_handler_to_a_symlink(
     tmp_path, monkeypatch
 ):
@@ -280,3 +292,60 @@ def test_retention_is_configurable_from_the_environment(tmp_path, monkeypatch):
         for handler in list(tree.handlers):
             handler.close()
             tree.removeHandler(handler)
+
+
+# ── Platform portability of the private-log control ──────────────────────────
+
+
+def test_a_platform_without_fchmod_reports_success_rather_than_raising(
+    tmp_path, monkeypatch, capsys
+):
+    """`os.fchmod` does not exist on Windows, and AttributeError is not OSError.
+
+    So it flew past the `except OSError` at the bottom of _ensure_private_logfile
+    -- the handler whose whole job is to turn "this path cannot be prepared" into
+    a False return -- and propagated to the caller. Since `audit.audit_sink_error`
+    is read at startup by both `server._enforce_profile` and
+    `gui._enforce_gui_posture`, and both treat a requested-but-unusable sink as
+    fatal, every process that set CB_ADMIN_AUDIT_FILE died on that platform.
+
+    Asserted by removing the attribute rather than by checking `os.name`, so the
+    property is covered on the developer machines that have it.
+    """
+    import logging_config
+
+    monkeypatch.delattr(os, "fchmod", raising=False)
+    monkeypatch.setattr(logging_config, "_CAN_FCHMOD", False)
+    monkeypatch.setattr(logging_config, "_WARNED_NO_FILE_MODES", False)
+
+    path = tmp_path / "audit.log"
+
+    assert logging_config._ensure_private_logfile(str(path)) is True
+    assert path.exists()
+
+    # Told once, on stderr, and not silently.
+    assert "file modes are not available" in capsys.readouterr().err
+
+    # And again on a file that already exists -- the second branch of the
+    # function, which had its own call to the missing attribute.
+    assert logging_config._ensure_private_logfile(str(path)) is True
+
+
+def test_the_symlink_refusal_does_not_depend_on_fchmod(tmp_path, monkeypatch):
+    """The mode is the part a platform can lack. The refusal is not.
+
+    Worth its own test because the portability fix is a no-op branch, and a no-op
+    branch placed one line too early would have skipped the islink check with it.
+    """
+    import logging_config
+
+    monkeypatch.setattr(logging_config, "_CAN_FCHMOD", False)
+
+    victim = tmp_path / "victim.txt"
+    victim.write_text("important", encoding="utf-8")
+    link = tmp_path / "audit.log"
+
+    if SYMLINKS_AVAILABLE:
+        link.symlink_to(victim)
+        assert logging_config._ensure_private_logfile(str(link)) is False
+        assert victim.read_text(encoding="utf-8") == "important"

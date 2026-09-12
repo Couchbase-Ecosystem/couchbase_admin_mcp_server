@@ -342,6 +342,30 @@ def _boot(extra_env, port, root):
         "CB_PASSWORD": "p",
         **extra_env,
     }
+
+    # The stripped environment is the point of this helper: it proves the server
+    # reads its configuration from what it is handed rather than from whatever
+    # the developer's shell happens to export. Windows, though, has a floor that
+    # POSIX does not -- without SystemRoot the CRT cannot load Winsock, so
+    # `import asyncio` in the child dies with
+    # `OSError: [WinError 10106] The requested service provider could not be
+    # loaded or initialized` before server.py executes a single line, and the
+    # test reads as a TLS failure. Pass through the platform minimum and nothing
+    # more; extra_env still wins, because a test that sets one of these means it.
+    for name in (
+        "SystemRoot",
+        "SystemDrive",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+    ):
+        if name in os.environ and name not in env:
+            env[name] = os.environ[name]
+
     proc = subprocess.Popen(
         [sys.executable, "server.py"],
         cwd=str(root),

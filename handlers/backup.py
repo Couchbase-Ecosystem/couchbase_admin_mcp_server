@@ -6,6 +6,62 @@ stay in the CRUD server; only the ``admin_backup_*`` tools live here.
 
 Wraps the backup service REST endpoints at ``/_p/backup/api/v1/...`` on the
 cluster manager. Requires the backup service to be running on at least one node.
+
+THE REPOSITORY STATE SEGMENT
+============================
+Every path here is ``/cluster/self/repository/<state>/...`` where state is one
+of ``active``, ``imported`` or ``archived``. It is NOT optional, and omitting it
+was why all five of these tools returned 404 against a cluster that was running
+the Backup service perfectly well:
+
+  * the listing was ``/repository`` -- a path the service does not serve at all;
+  * ``admin_backup_repository_get`` sent ``/repository/<repository_id>``, so the
+    repository id landed in the slot the service reads as the STATE, and any id
+    that was not literally the word "active" was rejected as an unknown state;
+  * ``admin_backup_list`` used ``/<id>/backups``, which does not exist -- the
+    individual backups come back inside the repository INFO response, so the
+    endpoint is ``/<state>/<id>/info``.
+
+CONFIRMED AGAINST A RUNNING SERVICE, 2026-09-12
+-----------------------------------------------
+The correction came from the service's API reference, which is a source and not
+an observation. It was then measured, once the Backup service was actually added
+to the cluster -- every earlier sweep had 404'd for the mundane reason that no
+node was running it, which proves nothing about a path:
+
+    OLD  /cluster/self/repository                  -> 404  no such route
+    NEW  /cluster/self/repository/active           -> 200  answered
+         /cluster/self/repository/imported         -> 200  answered
+         /cluster/self/repository/archived         -> 200  answered
+
+And the diagnosis for the worst of the five confirmed itself:
+
+    OLD  /cluster/self/repository/<repository_id>  -> 400, NOT 404
+
+Only a handler that ran can call a request malformed. A 400 there is the service
+saying "<repository_id> is not one of active, imported, archived" -- the id in
+the state slot, exactly as described above.
+
+THE PLAN ENDPOINT IS ANOTHER ONE THE REFERENCE GETS WRONG
+---------------------------------------------------------
+The reference gives `/api/v1/cluster/plan` for listing plans. Measured
+2026-09-12:
+
+    /api/v1/plan          -> 200, the built-in plans
+    /api/v1/cluster/plan  -> 400 {"msg":"Remote cluster not supported",
+                                  "extras":"Invalid cluster: plan"}
+    /api/v1/plans         -> 404
+
+The 400 explains itself: `/cluster/<name>` takes a cluster name and "self" is
+the only valid one, so the service read "plan" as a cluster. That is a matched
+route rejecting its argument, not a missing route -- which is why a probe that
+treats 400 as inconclusive throws away its best evidence.
+
+Four candidate paths were tried against a live cluster before the reference
+settled it. Recorded here rather than silently corrected, because "the Backup
+service is broken" was the working theory for a while and it was wrong.
+
+Reference: https://docs.couchbase.com/server/current/rest-api/backup-rest-api.html
 """
 
 from __future__ import annotations
@@ -14,6 +70,49 @@ from mcp.types import TextContent, Tool, ToolAnnotations
 
 from .egress import guard_nested_host_fields
 from .shared import admin_request, arg_truthy, err, ok, quote_path
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+
+#: The Backup service behind ns_server's proxy. Direct, the service listens on
+#: 8097; through the cluster manager on 8091/18091 it is reached under this
+#: prefix, which is what lets one credential and one port serve every tool here.
+_BACKUP = "/_p/backup/api/v1"
+
+#: The repository states the service recognises. A repository moves between
+#: them, so the same id can exist under more than one.
+_STATES = ("active", "imported", "archived")
+
+
+def _repository_path(args: dict, *, suffix: str = "") -> str:
+    """`/cluster/self/repository/<state>/<id>`, with the state segment REQUIRED.
+
+    `state` defaults to "active" because that is the state a repository is in
+    while it is being backed up to, and therefore the only one most callers ever
+    name. It is still declared on every tool: an archived repository is exactly
+    what someone restoring from last quarter needs, and there is no other way to
+    address one.
+    """
+    state = (args.get("state") or "active").strip().lower()
+    if state not in _STATES:
+        raise ValueError(
+            f"state must be one of {', '.join(_STATES)}, not {state!r}"
+        )
+    rid = quote_path(args["repository_id"])
+    return f"{_BACKUP}/cluster/self/repository/{state}/{rid}{suffix}"
+
+
+#: Declared on every repository-addressed tool, so the schema carries the same
+#: vocabulary the service does.
+_STATE_PROPERTY = {
+    "type": "string",
+    "enum": list(_STATES),
+    "default": "active",
+    "description": (
+        "Which repository state to address. Defaults to 'active'; use "
+        "'archived' to reach a repository that has been archived, or "
+        "'imported' for one imported from another cluster."
+    ),
+}
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -24,6 +123,24 @@ TOOLS: list[Tool] = [
             "List active backup repositories on the backup service. Requires "
             "the backup service to be running on at least one node."
         ),
+        inputSchema={
+            "type": "object",
+            "properties": {"state": _STATE_PROPERTY},
+        },
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+        ),
+    ),
+    Tool(
+        name="admin_backup_plans_list",
+        description=(
+            "List the backup PLANS the service knows: the schedules a "
+            "repository can be created against. Couchbase ships built-ins such "
+            "as _daily_backups and _hourly_backups. A repository must name one, "
+            "so this is the first call when creating one."
+        ),
         inputSchema={"type": "object", "properties": {}},
         annotations=ToolAnnotations(
             readOnlyHint=True,
@@ -32,11 +149,65 @@ TOOLS: list[Tool] = [
         ),
     ),
     Tool(
+        name="admin_backup_repository_create",
+        description=(
+            "Create a backup repository. Without one, every other backup tool "
+            "here has nothing to act on -- listing, running and restoring all "
+            "address a repository. Needs a plan name (admin_backup_plans_list) "
+            "and an archive path the BACKUP SERVICE can write, which is a path "
+            "inside the service's own filesystem, not the caller's."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "repository_id": {
+                    "type": "string",
+                    "description": "Name for the new repository.",
+                },
+                "plan": {
+                    "type": "string",
+                    "description": (
+                        "A plan name from admin_backup_plans_list, e.g. "
+                        "'_daily_backups'."
+                    ),
+                },
+                "archive": {
+                    "type": "string",
+                    "description": (
+                        "Where the backup data is written. A filesystem path as "
+                        "the SERVICE sees it (in a container deployment, a path "
+                        "inside that container), or a cloud URI such as "
+                        "s3://bucket/prefix. A cloud destination is subject to "
+                        "the egress allowlist."
+                    ),
+                },
+                "bucket_name": {
+                    "type": "string",
+                    "description": (
+                        "Restrict the repository to one bucket. Omit to back up "
+                        "every bucket -- which is the default and is rarely what "
+                        "is wanted for a test repository."
+                    ),
+                },
+                "confirm": {"type": "boolean"},
+            },
+            "required": ["repository_id", "plan", "archive"],
+        },
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+        ),
+    ),
+    Tool(
         name="admin_backup_repository_get",
         description="Get details of a specific backup repository.",
         inputSchema={
             "type": "object",
-            "properties": {"repository_id": {"type": "string"}},
+            "properties": {
+                "repository_id": {"type": "string"},
+                "state": _STATE_PROPERTY,
+            },
             "required": ["repository_id"],
         },
         annotations=ToolAnnotations(
@@ -50,7 +221,10 @@ TOOLS: list[Tool] = [
         description="List all backups stored in a repository.",
         inputSchema={
             "type": "object",
-            "properties": {"repository_id": {"type": "string"}},
+            "properties": {
+                "repository_id": {"type": "string"},
+                "state": _STATE_PROPERTY,
+            },
             "required": ["repository_id"],
         },
         annotations=ToolAnnotations(
@@ -69,6 +243,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "repository_id": {"type": "string"},
+                "state": _STATE_PROPERTY,
                 "full_backup": {
                     "type": "boolean",
                     "description": "Default false (incremental); true = full backup",
@@ -92,6 +267,7 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "repository_id": {"type": "string"},
+                "state": _STATE_PROPERTY,
                 "target": {
                     "type": "object",
                     "description": (
@@ -116,24 +292,66 @@ TOOLS: list[Tool] = [
 def handle(name: str, args: dict) -> list[TextContent]:
     try:
         if name == "admin_backup_repository_list":
-            return ok(admin_request("GET", "/_p/backup/api/v1/cluster/self/repository"))
-
-        if name == "admin_backup_repository_get":
-            rid = quote_path(args["repository_id"])
-            return ok(
-                admin_request("GET", f"/_p/backup/api/v1/cluster/self/repository/{rid}")
-            )
-
-        if name == "admin_backup_list":
-            rid = quote_path(args["repository_id"])
+            state = (args.get("state") or "active").strip().lower()
+            if state not in _STATES:
+                return err(
+                    f"state must be one of {', '.join(_STATES)}, not {state!r}",
+                    tool=name,
+                )
             return ok(
                 admin_request(
-                    "GET", f"/_p/backup/api/v1/cluster/self/repository/{rid}/backups"
+                    "GET", f"{_BACKUP}/cluster/self/repository/{state}"
                 )
             )
 
-        if name == "admin_backup_run":
+        if name == "admin_backup_plans_list":
+            # `/plan`, NOT `/cluster/plan`. The published reference says the
+            # latter; the service reads that segment as a CLUSTER NAME and
+            # answers 400 "Invalid cluster: plan", because /cluster/<name> takes
+            # only "self". Measured 2026-09-12: /plan -> 200 with the built-in
+            # plans, /cluster/plan -> 400, /plans -> 404.
+            return ok(admin_request("GET", f"{_BACKUP}/plan"))
+
+        if name == "admin_backup_repository_create":
+            # A repository is always created in the ACTIVE state -- imported and
+            # archived are states a repository REACHES, not ones it starts in --
+            # so this path is fixed rather than taking the state argument the
+            # other tools accept.
             rid = quote_path(args["repository_id"])
+
+            body: dict = {
+                "plan": args["plan"],
+                "archive": args["archive"],
+            }
+            if args.get("bucket_name"):
+                body["bucket_name"] = args["bucket_name"]
+
+            # `archive` can be a cloud URI (s3://, az://, gs://), which makes it
+            # a destination this server is about to send cluster data to. The
+            # same guard the restore target gets applies: an archive pointing at
+            # an unallowlisted host is exfiltration with a backup's name on it.
+            guard_nested_host_fields(body, tool=name, path="archive")
+
+            return ok(
+                admin_request(
+                    "POST",
+                    f"{_BACKUP}/cluster/self/repository/active/{rid}",
+                    data=body,
+                    json_body=True,
+                )
+            )
+
+        if name == "admin_backup_repository_get":
+            return ok(admin_request("GET", _repository_path(args)))
+
+        if name == "admin_backup_list":
+            # `/info`, not `/backups`. The service has no endpoint that returns
+            # backups on their own; the repository info response carries them in
+            # a "backups" array alongside the buckets, item counts and mutation
+            # counts, which is why a path built from the tool's own name 404s.
+            return ok(admin_request("GET", _repository_path(args, suffix="/info")))
+
+        if name == "admin_backup_run":
             payload: dict = {}
             # arg_truthy: "false" is a non-empty string, so raw truthiness ran a
             # FULL backup -- hours of I/O and repository growth -- when the caller
@@ -143,14 +361,13 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(
                 admin_request(
                     "POST",
-                    f"/_p/backup/api/v1/cluster/self/repository/{rid}/backup",
+                    _repository_path(args, suffix="/backup"),
                     data=payload if payload else None,
                     json_body=True,
                 )
             )
 
         if name == "admin_backup_restore_run":
-            rid = quote_path(args["repository_id"])
             # `target` is a free-form object forwarded verbatim to the Backup Service,
             # and this module had no egress guard of any kind. A restore target can
             # name remote locations and credentials, so the same walk the eventing
@@ -160,7 +377,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(
                 admin_request(
                     "POST",
-                    f"/_p/backup/api/v1/cluster/self/repository/{rid}/restore",
+                    _repository_path(args, suffix="/restore"),
                     data=args["target"],
                     json_body=True,
                 )

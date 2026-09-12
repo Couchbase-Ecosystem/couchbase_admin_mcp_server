@@ -138,6 +138,39 @@ def _node() -> str | None:
     return shutil.which("node")
 
 
+def _node_prefix() -> str:
+    """Where `npm install --prefix` should put react for this platform.
+
+    CI installs into /tmp because CI is Linux. That path was also hard-coded into
+    NODE_PATH, so on Windows the test could not find react however it was
+    installed -- and the skip message told the developer to run a command that
+    would not have helped. `tempfile.gettempdir()` gives the equivalent location
+    on whatever this is; CB_ADMIN_NODE_PREFIX overrides it for anyone who keeps
+    their modules elsewhere.
+    """
+    import os
+    import tempfile
+
+    override = (os.environ.get("CB_ADMIN_NODE_PREFIX") or "").strip()
+    return override or tempfile.gettempdir()
+
+
+def _node_path_candidates() -> list[str]:
+    """Every place react might be, newest-intent first.
+
+    A LIST, joined with os.pathsep, because NODE_PATH takes several roots. Keeping
+    the literal /tmp/node_modules at the end means this change cannot alter what
+    CI resolves -- it only adds somewhere for a non-Linux machine to look.
+    """
+    import os
+
+    seen: list[str] = []
+    for root in (os.path.join(_node_prefix(), "node_modules"), "/tmp/node_modules"):
+        if root not in seen:
+            seen.append(root)
+    return seen
+
+
 @pytest.mark.skipif(_node() is None, reason="node is not available")
 def test_the_vendored_babel_compiles_the_app(tmp_path):
     """Compile the actual JSX with the actual vendored Babel.
@@ -210,8 +243,9 @@ def test_the_compiled_app_renders_markup(tmp_path):
         """,
         encoding="utf-8",
     )
-    env = {"NODE_PATH": "/tmp/node_modules"}
     import os
+
+    env = {"NODE_PATH": os.pathsep.join(_node_path_candidates())}
 
     result = subprocess.run(
         [_node(), str(script)],
@@ -248,8 +282,8 @@ def test_the_compiled_app_renders_markup(tmp_path):
             )
         pytest.skip(
             "react not resolvable locally; compile + App definition verified. "
-            "Run `npm install --prefix /tmp react react-dom` to exercise the render "
-            "assertions, which CI does."
+            f"Run `npm install --prefix {_node_prefix()} react react-dom` to "
+            "exercise the render assertions, which CI does."
         )
     assert out.startswith("RENDERED "), out
     _, size, hasdiv = out.split()

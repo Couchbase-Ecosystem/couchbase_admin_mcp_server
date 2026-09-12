@@ -39,6 +39,22 @@ def _writes_loaded():
     os.environ["CB_ADMIN_PROFILE"] = "workstation"
     os.environ["CB_ADMIN_READ_ONLY_MODE"] = "false"
 
+    # Pin the deployment mode. Without this, `deployment.detect_mode()` INFERS it,
+    # and on a developer machine with CAPELLA_API_KEY_SECRET exported and no
+    # CB_CONNECTION_STRING it infers `capella` -- which unloads every ns_server
+    # admin_* tool, so `test_gating_still_comes_first` skipped itself and the
+    # gating-before-dry-run property went unchecked on exactly the machine where
+    # someone was most likely to be changing it.
+    #
+    # conftest's credential scrub cannot save this one: it is function-scoped and
+    # this fixture is module-scoped, so server is reloaded -- and _TOOLS built --
+    # before the first test's scrub runs.
+    #
+    # `both` rather than `self_managed` because this module is about the dry-run
+    # policy applying to EVERY tool, so the widest surface is the right one to
+    # load; explicit CB_DEPLOYMENT always beats inference.
+    os.environ["CB_DEPLOYMENT"] = "both"
+
     import handlers.shared
     import profile_config
 
@@ -233,8 +249,13 @@ def test_a_dry_run_is_its_own_audit_decision(a_write_tool, audited, executed):
 def test_gating_still_comes_first(executed, monkeypatch):
     """A dry run of a tool you may not call is a refusal, not a preview."""
     monkeypatch.setattr(server, "_CONFIRMATION_REQUIRED", {"admin_bucket_delete"})
-    if not any(t.name == "admin_bucket_delete" for t in server._TOOLS):
-        pytest.skip("admin_bucket_delete is not loaded in this deployment mode")
+    # An assertion, not a skip. The mode is pinned to `both` by _writes_loaded, so
+    # this tool missing is a defect in tool loading -- not a property of the
+    # machine the suite happens to be running on.
+    assert any(t.name == "admin_bucket_delete" for t in server._TOOLS), (
+        "admin_bucket_delete is not loaded under CB_DEPLOYMENT=both; the gating "
+        "test cannot run and previously skipped itself silently"
+    )
     payload = call("admin_bucket_delete", {"dry_run": True, "name": "b"})
     assert payload.get("requires_confirmation") is True
     assert payload.get("dry_run") is not True

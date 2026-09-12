@@ -23,6 +23,7 @@ import sys
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+import dryrun
 import mcp_compat
 
 from .shared import (
@@ -161,6 +162,31 @@ def _status_payload(server_module) -> dict:
             "disabled_tools_count": len(DISABLED_TOOLS),
             "disabled_tools": sorted(DISABLED_TOOLS) if DISABLED_TOOLS else [],
             "confirmation_required_count": len(confirmation_required),
+            # Preview mode, and the exception to it.
+            #
+            # CB_ADMIN_DRY_RUN is an operator control in the same family as
+            # CB_ADMIN_READ_ONLY_MODE, and it was the only one of the family a
+            # client could not observe. That asymmetry matters twice over. An
+            # operator who turns preview mode on has no way to confirm it took,
+            # and the status tool is precisely where they would look. And a
+            # client that wants to exercise the write surface without performing
+            # a write has to KNOW the posture rather than assume it.
+            #
+            # `handler_owned` is the load-bearing half. Those tools implement
+            # dry_run themselves, so the dispatch deliberately does not intercept
+            # them -- a write to one of them runs whatever CB_ADMIN_DRY_RUN says.
+            # capella_env_reap is on that list and it reaps clusters. The set
+            # cannot be inferred from the advertised schemas, because
+            # mcp_compat.with_control_fields injects `dry_run` into nearly every
+            # write tool's schema, so "declares dry_run" is true of almost
+            # everything. Reporting it here is the only way a client can tell
+            # the difference, and scripts/verify_mcp_surface.py refuses to run
+            # its write phase against a server that does not.
+            "dry_run": {
+                "server_wide": dryrun.server_wide(),
+                "environment_variable": dryrun.ENV,
+                "handler_owned": sorted(dryrun.handler_owned_tools()),
+            },
         },
         "tools": {
             "registered": len(raw_tools),

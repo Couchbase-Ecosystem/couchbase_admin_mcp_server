@@ -36,6 +36,30 @@ def _text(payload: dict) -> list[TextContent]:
 # ── Audit classification ─────────────────────────────────────────────────────
 
 
+def _a_registered_tool_name() -> str:
+    """A tool the server KNOWS ABOUT, whether or not this posture loads it.
+
+    The opposite of what `test_transport_edge` needs, and the distinction is the
+    subject of every test that uses this one: `server._HANDLERS` is the full
+    dispatch registry, `server._TOOLS` is what survived the deployment,
+    read-only and disabled-tools filters. These tests empty `_TOOLS` on purpose to
+    prove that a registered-but-unloaded tool is refused with a reason -- "not
+    enabled", naming the variable -- rather than with "unknown tool", which would
+    send the operator hunting for a typo.
+
+    So reading from `_TOOLS` here is wrong twice over: it is empty by the time the
+    assertion runs, and a tool found there is by definition not the case under
+    test. Reading from `_HANDLERS` also makes these independent of WHERE in the
+    test body the lookup happens, which is what made two of the three pass by
+    accident while the third failed.
+    """
+    assert server._HANDLERS, (
+        "the dispatch registry is empty, so these refusal tests would be "
+        "asserting about a server that knows no tools at all"
+    )
+    return next(iter(server._HANDLERS))
+
+
 def test_a_plain_success_is_allowed():
     verdict, reason = server._classify_result(_text({"buckets": ["a"]}))
     assert verdict == "allowed"
@@ -177,7 +201,7 @@ def test_a_registered_but_unloaded_tool_names_the_reason(dispatch, monkeypatch):
     loaded because of configuration. Saying "unknown tool" would send them looking for a
     typo."""
     call, _records = dispatch
-    name = next(iter(server._HANDLERS))
+    name = _a_registered_tool_name()
     monkeypatch.setattr(server, "_TOOLS", [], raising=False)
 
     body = json.loads(call(name)[0].text)
@@ -188,7 +212,7 @@ def test_a_registered_but_unloaded_tool_names_the_reason(dispatch, monkeypatch):
 
 def test_an_unloaded_tool_refusal_is_audited(dispatch, monkeypatch):
     call, records = dispatch
-    name = next(iter(server._HANDLERS))
+    name = _a_registered_tool_name()
     monkeypatch.setattr(server, "_TOOLS", [], raising=False)
     call(name)
     assert [r for r in records if r["decision"] == "denied_read_only"]
@@ -211,7 +235,7 @@ def test_a_deployment_gated_tool_says_so_specifically(dispatch, monkeypatch):
         raising=False,
     )
 
-    name = next(iter(server._HANDLERS))
+    name = _a_registered_tool_name()
     body = json.loads(call(name)[0].text)
     assert "capella" in body["error"]
     assert body["deployment_mode"] == "capella"

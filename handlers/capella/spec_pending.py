@@ -94,4 +94,34 @@ from .spec import Op
 
 __all__ = ["PENDING_OPS"]
 
+#: RETRACTED 2026-09-12 — the per-bucket backup SCHEDULE endpoint does not exist.
+#:
+#: Four operations were parked here against
+#:     /v4/.../clusters/{cluster_id}/buckets/{bucket_id}/backupSchedule
+#: transcribed from the rendered Operational Management API reference. A live
+#: sweep on 2026-09-12 returned Go's default ``404 page not found`` -- the body an
+#: HTTP mux emits when NOTHING matched -- for that path and for six other
+#: spellings of it, including the cluster-level forms.
+#:
+#: The verdict is sound because the discriminator was proved first rather than
+#: assumed. A known-good route with a bogus id returns JSON:
+#:     {"code": 5017, "hint": "Returned when the requested backup record could
+#:      not be found.", "httpStatusCode": 404}
+#: so a JSON body means the route matched and the object is missing, while plain
+#: text means no route of that shape exists at all.
+#:
+#: The lesson is one this file already recorded and I did not follow: a rendered
+#: docs page is a weaker source than the provider's generated client, and 19 of
+#: the paths parked here were wrong for exactly that reason. The records are
+#: DELETED rather than left parked -- a parked record implies "written, awaiting
+#: confirmation", and these were disconfirmed.
+#:
+#: WHAT IS ACTUALLY THERE, observed live on the same sweep:
+#:     GET /v4/.../clusters/{cluster_id}/cloudsnapshotbackups        -> 200
+#:     GET /v4/.../clusters/{cluster_id}/cloudsnapshotbackupschedule -> 204
+#: Both are routes. Neither is implemented anywhere in this server. See the
+#: CLOUD SNAPSHOT section in the module docstring above, which called this out
+#: as an unexamined subsystem before anyone had probed it -- it is not
+#: hypothetical any more.
+
 PENDING_OPS: tuple[Op, ...] = ()

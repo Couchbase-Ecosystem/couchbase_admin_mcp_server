@@ -717,6 +717,15 @@ def _enforce_profile() -> None:
     if sink_problem:
         problems.append(sink_problem)
 
+    # One container, one control plane. A deployment that DECLARES its surface
+    # must get that surface: `detect_mode()` infers, and the inference that
+    # matters resolves to 'both' -- which switches capability gating off -- the
+    # moment a Capella key and any non-Capella connection string are both
+    # present. That happens by inheriting an env file, not by decision.
+    mode_problem = deployment.declared_mode_error(_DEPLOYMENT_MODE)
+    if mode_problem:
+        problems.append(mode_problem)
+
     # Transport encryption. A non-loopback HTTP bind with neither a certificate nor an
     # explicit "something in front handles it" is fatal: cleartext bearer tokens are
     # the one exposure that defeats every other control at once, and the two situations

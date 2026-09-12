@@ -51,6 +51,84 @@ RUN apt-get update \
         libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Corporate TLS interception ────────────────────────────────────────────────
+#
+# A proxy that re-signs outbound TLS breaks `pip` here, and it breaks it in a
+# way that reads as a broken package index:
+#
+#     certificate verify failed: self-signed certificate in certificate chain
+#     Could not fetch URL https://pypi.org/simple/mcp/
+#     ERROR: No matching distribution found for mcp<2.0,>=1.10
+#
+# python:3.12-slim carries its own CA set and has never heard of the
+# organization's root, so it refuses -- correctly. The fix is to ADD that root,
+# never to pass --trusted-host, which turns the proxy into an unauthenticated
+# man in the middle for every package this image installs.
+#
+# deploy/ca/ is committed EMPTY and copying it always succeeds. On a network
+# with no interception, update-ca-certificates finds nothing new and this is a
+# no-op. See deploy/ca/README.md for how to export the certificates.
+COPY deploy/ca/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates 2>/dev/null || true
+
+# pip bundles its own certifi and does not read the system store unless told.
+ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+# Fail EARLY and legibly if the trust store still cannot reach PyPI.
+#
+# Without this the first symptom is forty lines of pip retry noise ending in
+# "No matching distribution found for mcp", which reads as a broken package
+# index rather than a certificate problem -- and that misreading is exactly what
+# this project lost an afternoon to. One request, one clear message.
+#
+# It is a NETWORK check, deliberately: whether a certificate happens to sit in
+# deploy/ca/ is not the question. The question is whether this image can
+# establish a verified connection to the index it is about to install from.
+RUN python - <<'PREFLIGHT' || exit 1
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+try:
+    urllib.request.urlopen("https://pypi.org/simple/", timeout=30)
+    print("[preflight] TLS to pypi.org verified.")
+except urllib.error.URLError as exc:
+    reason = getattr(exc, "reason", exc)
+    if not (isinstance(reason, ssl.SSLError) or "CERTIFICATE" in str(reason).upper()):
+        print(f"[preflight] pypi.org unreachable: {reason}")
+        print("[preflight] That is a network problem, not a certificate one.")
+        sys.exit(1)
+    print()
+    print("=" * 70)
+    print("BUILD STOPPED: this image does not trust your TLS proxy.")
+    print("=" * 70)
+    print()
+    print(f"  {reason}")
+    print()
+    print("  A proxy on this network re-signs outbound TLS. python:3.12-slim")
+    print("  carries its own CA set and has never heard of your organization's")
+    print("  root, so it refuses -- correctly. pip has not run yet; if it had,")
+    print("  this would look like a broken package index instead.")
+    print()
+    print("  FIX: put your roots in deploy/ca/ as .crt files, then rebuild.")
+    print("  On Windows:")
+    print()
+    print("    Get-ChildItem Cert:\\LocalMachine\\Root, Cert:\\LocalMachine\\CA |")
+    print("      ForEach-Object {")
+    print('        "-----BEGIN CERTIFICATE-----"')
+    print("        [Convert]::ToBase64String($_.RawData, 'InsertLineBreaks')")
+    print('        "-----END CERTIFICATE-----"')
+    print("      } | Set-Content -Encoding ascii deploy\\ca\\corp-roots.crt")
+    print()
+    print("  See deploy/ca/README.md. Do NOT use --trusted-host: it removes")
+    print("  verification for every package this image installs.")
+    print()
+    sys.exit(1)
+PREFLIGHT
+
 COPY pyproject.toml ./
 
 # Install runtime deps + the HTTP transport extras.

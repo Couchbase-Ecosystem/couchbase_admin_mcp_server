@@ -1,0 +1,72 @@
+# Capella ONLY. One container, one control plane.
+#
+#   docker compose -f deploy/docker-compose.capella.yml up -d
+#
+# This container talks to the Capella v4 control plane at
+# cloudapi.cloud.couchbase.com and has NO ROUTE to any cluster network. That
+# absence is the containment: a misconfiguration here cannot reach a
+# self-managed cluster, because there is no path to one.
+#
+# NOTE WHAT IS NOT HERE
+# ---------------------
+# There is no CB_CONNECTION_STRING. That is deliberate and it is load-bearing:
+# a Capella API key plus any non-Capella connection string is what
+# `deployment.detect_mode()` reads as 'both', which switches capability gating
+# off and loads every ns_server tool alongside the Capella ones. Adding one
+# here does not extend this container's reach -- it removes its gate.
+#
+# CB_ADMIN_REQUIRE_DEPLOYMENT makes that a startup refusal rather than a silent
+# widening, so if a connection string arrives through an env file or an
+# inherited stanza, this container stops instead of quietly becoming both.
+
+services:
+  mcp-capella:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: cb-admin-mcp:capella
+    container_name: cb-admin-mcp-capella
+    restart: unless-stopped
+
+    environment:
+      CB_ADMIN_REQUIRE_DEPLOYMENT: capella
+      CB_DEPLOYMENT: capella
+
+      # The organization API key SECRET, not the access key id. They are
+      # different values, and the 401 Capella returns for the wrong one blames
+      # the IP allowlist -- which sends you debugging the network instead.
+      CAPELLA_API_KEY_SECRET: ${CAPELLA_API_KEY_SECRET:?required}
+      CB_CAPELLA_ORG_ID: ${CB_CAPELLA_ORG_ID:-}
+
+      CB_ADMIN_PROFILE: ${CB_ADMIN_PROFILE:-enterprise}
+      CB_ADMIN_TRANSPORT: ${CB_ADMIN_TRANSPORT:-http}
+      CB_ADMIN_HOST: 0.0.0.0
+      CB_ADMIN_PORT: 8000
+      CB_ADMIN_READ_ONLY_MODE: ${CB_ADMIN_READ_ONLY_MODE:-true}
+      CB_ADMIN_AUDIT_FILE: /var/log/couchbase-admin-mcp/audit.log
+
+      # See the EE file: Python trusts its bundled CA set, so a re-signing proxy
+      # makes cloudapi.cloud.couchbase.com look like an outage. This is the most
+      # likely first failure in a corporate network.
+      REQUESTS_CA_BUNDLE: ${CORP_CA_IN_CONTAINER:-}
+      SSL_CERT_FILE: ${CORP_CA_IN_CONTAINER:-}
+
+    volumes:
+      - mcp-capella-audit:/var/log/couchbase-admin-mcp
+      - ${CORP_CA_FILE:-/dev/null}:${CORP_CA_IN_CONTAINER:-/dev/null}:ro
+
+    ports:
+      - "${MCP_CAPELLA_PORT:-8001}:8000"
+
+    # Its own isolated bridge. NOT the cluster network, and not `external`:
+    # compose creates a network used by this file alone, so there is nothing to
+    # accidentally attach to.
+    networks:
+      - capella-only
+
+networks:
+  capella-only:
+    driver: bridge
+
+volumes:
+  mcp-capella-audit:

@@ -1,0 +1,77 @@
+# Enterprise Edition ONLY. One container, one control plane.
+#
+#   docker compose -f deploy/docker-compose.ee.yml up -d
+#
+# This container talks to ns_server on a self-managed cluster and NOTHING else.
+# It carries no Capella credentials, and there is deliberately no compose file in
+# this repository that starts it alongside the Capella container.
+#
+# WHY SEPARATE FILES RATHER THAN TWO SERVICES IN ONE
+# --------------------------------------------------
+# Two services in one file share a default network and come up together on a
+# bare `docker compose up`. The separation is the control; a file that can
+# start both with one command is not a separation, it is a naming convention.
+#
+# THE NETWORK IS THE CONTAINMENT
+# ------------------------------
+# Being on the cluster's network is what lets this container reach ns_server at
+# all -- and it is exactly what the Capella container must not have. Set the
+# network name to your cluster's; `scripts/run-docker-verification.ps1`
+# discovers it from the running containers.
+
+services:
+  mcp-ee:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: cb-admin-mcp:ee
+    container_name: cb-admin-mcp-ee
+    restart: unless-stopped
+
+    environment:
+      # DECLARED, not inferred. The server refuses to start if the configuration
+      # it is actually given resolves to anything else -- in particular 'both',
+      # which a stray CAPELLA_API_KEY_SECRET would silently produce and which
+      # switches capability gating off.
+      CB_ADMIN_REQUIRE_DEPLOYMENT: self_managed
+      CB_DEPLOYMENT: self_managed
+
+      # The cluster, by CONTAINER NAME on the shared network. This is the point
+      # of running here: the cluster map advertises its internal addresses, and
+      # on this network those addresses are correct. Reaching the same cluster
+      # from the host needs alternate addresses configured; from here it does not.
+      CB_CONNECTION_STRING: ${CB_CONNECTION_STRING:?set this to couchbase://<cluster-container-name>}
+      CB_USERNAME: ${CB_USERNAME:?required}
+      CB_PASSWORD: ${CB_PASSWORD:?required}
+
+      CB_ADMIN_PROFILE: ${CB_ADMIN_PROFILE:-enterprise}
+      CB_ADMIN_TRANSPORT: ${CB_ADMIN_TRANSPORT:-http}
+      CB_ADMIN_HOST: 0.0.0.0
+      CB_ADMIN_PORT: 8000
+      CB_ADMIN_READ_ONLY_MODE: ${CB_ADMIN_READ_ONLY_MODE:-true}
+      CB_ADMIN_AUDIT_FILE: /var/log/couchbase-admin-mcp/audit.log
+
+      # Corporate TLS interception: the image is python:3.12-slim and Python
+      # trusts its own bundled CA set, not the machine's. Where a proxy re-signs
+      # outbound TLS, an untrusted re-signed certificate reads as the cluster
+      # being unreachable. Mount the corporate roots and point Python at them.
+      REQUESTS_CA_BUNDLE: ${CORP_CA_IN_CONTAINER:-}
+      SSL_CERT_FILE: ${CORP_CA_IN_CONTAINER:-}
+
+    volumes:
+      - mcp-ee-audit:/var/log/couchbase-admin-mcp
+      - ${CORP_CA_FILE:-/dev/null}:${CORP_CA_IN_CONTAINER:-/dev/null}:ro
+
+    ports:
+      - "${MCP_EE_PORT:-8000}:8000"
+
+    networks:
+      - cluster
+
+networks:
+  cluster:
+    external: true
+    name: ${COUCHBASE_NETWORK:?set to the docker network your Couchbase containers are on}
+
+volumes:
+  mcp-ee-audit:

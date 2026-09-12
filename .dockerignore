@@ -12,6 +12,17 @@
 *.p12
 *.pfx
 *.crt
+
+# EXCEPT the corporate CA roots for the build. Without this the rules above
+# strip deploy/ca/ out of the build context, `COPY deploy/ca/` finds an empty
+# directory, and the build fails with the SAME certificate error it was meant to
+# fix -- which reads as "the fix does not work" rather than "the file never
+# arrived".
+#
+# These are public certificates, not secrets: a CA root is what a client is
+# meant to already have. The rules above exist to keep PRIVATE keys and client
+# certificates out of a layer, and none of those live here.
+!deploy/ca/*.crt
 .git
 .gitignore
 __pycache__/

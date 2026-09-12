@@ -279,7 +279,24 @@ def _guard_eventing_definition(definition: object, tool: str) -> object:
 def handle(name: str, args: dict) -> list[TextContent]:
     try:
         if name == "admin_eventing_list":
-            return ok(admin_request("GET", _evt_path("/list")))
+            # "/list/functions", not "/list".
+            #
+            # /list alone is not an endpoint and answers 404 page not found. Its
+            # neighbours prove the base path was never the problem: /stats and
+            # /status answer, and /functions/{name} is used by get, update and
+            # delete in this same file. One suffix was wrong.
+            #
+            # Measured on Enterprise 8.0.1, 2026-09-12:
+            #   GET /_p/event/api/v1/list             404
+            #   GET /_p/event/api/v1/list/functions   200  {"functions": []}
+            #   GET /_p/event/api/v1/functions        200  []
+            #
+            # Both of the working forms are real endpoints and they return
+            # different things: /list/functions returns NAMES, /functions returns
+            # every full definition. A list tool wants names -- on a cluster with
+            # many functions the second is a large response to answer "what is
+            # here", and admin_eventing_get already exists for the detail.
+            return ok(admin_request("GET", _evt_path("/list/functions")))
 
         if name == "admin_eventing_get":
             fn = _fn_name(args)

@@ -77,6 +77,12 @@ dev = [
     # Same reasoning for the HTTP transport's live tests.
     "uvicorn>=0.27",
     "starlette>=0.35",
+    # The deployment artifacts under deploy/ are ASSERTED ON, not just shipped:
+    # tests/test_one_container_one_surface.py parses the compose files and fails
+    # if the Capella one ever gains a CB_CONNECTION_STRING (which would resolve
+    # the mode to 'both' and switch capability gating off). Without pyyaml those
+    # tests error on import, and an erroring guard is an absent guard.
+    "pyyaml>=6.0",
     # tomllib is stdlib on 3.11+; tomli is the same library, used as a fallback on 3.10
     "tomli>=2.0.0 ; python_version < '3.11'",
     # DECLARED, not inherited transitively. jsonschema, PyJWT and cryptography reached

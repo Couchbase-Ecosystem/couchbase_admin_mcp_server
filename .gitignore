@@ -62,6 +62,34 @@ ENV/
 .env
 .env.*
 !.env.example
+# Per-surface deployment templates under deploy/ -- .env.ee.example,
+# .env.capella.example. `.env.*` above swallows them and `!.env.example` does
+# NOT bring them back: it matches that exact basename only. Without this line
+# they sit on disk looking committed and never reach the repository, which is
+# the worst shape for a file whose whole job is to be copied by someone else.
+!.env.*.example
+
+# ── Run artifacts ────────────────────────────────────────────────────────────
+# Output written INTO the repository root by a verification run. They are worth
+# attaching to a ticket and are not worth versioning: evidence transcripts carry
+# a cluster's topology, node names and account names, and suite.txt is simply
+# whatever pytest printed last. Committing them also guarantees a conflict on
+# every branch, since every run rewrites them.
+suite.txt
+skips.txt
+evidence-mcp-*.txt
+
+# Corporate CA certificates dropped in for the image build. The DIRECTORY is
+# tracked (the Dockerfile copies it unconditionally); the certificates are not.
+# They are not secret, but they are site-specific -- committing one means every
+# other site builds an image trusting an authority unrelated to them.
+deploy/ca/*.crt
+deploy/ca/*.pem
+!deploy/ca/README.md
+!deploy/ca/.gitkeep
+verify-*.json
+pass2.txt
+probe.txt
 
 # The operator env-script pattern (cbenv.ps1 / cbenv.bat / cbenv.sh). These hold
 # live Capella API key SECRETS and cluster passwords in plain text.

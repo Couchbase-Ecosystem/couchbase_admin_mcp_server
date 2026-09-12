@@ -1,0 +1,108 @@
+# Enterprise Edition — Kubernetes. One workload, one control plane.
+#
+#   kubectl apply -f deploy/k8s/ee.yaml
+#
+# Deliberately its own NAMESPACE, not just its own Deployment. The containment
+# this buys is a NetworkPolicy boundary: the Capella workload lives in a
+# different namespace with a policy that denies it everything except egress to
+# the Capella control plane, so it has no path to a cluster even if someone
+# later adds a connection string to its config.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cb-admin-mcp-ee
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-credentials
+  namespace: cb-admin-mcp-ee
+type: Opaque
+stringData:
+  # Replace before applying. Do not commit a filled-in copy of this file.
+  CB_USERNAME: "Administrator"
+  CB_PASSWORD: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-config
+  namespace: cb-admin-mcp-ee
+data:
+  # DECLARED. The server refuses to start if what it is actually given resolves
+  # to anything else — in particular 'both', which a stray Capella key would
+  # silently produce and which switches capability gating off.
+  CB_ADMIN_REQUIRE_DEPLOYMENT: "self_managed"
+  CB_DEPLOYMENT: "self_managed"
+
+  # In-cluster service address for Couchbase. Replace with your Service name.
+  CB_CONNECTION_STRING: "couchbase://couchbase.couchbase.svc.cluster.local"
+
+  CB_ADMIN_PROFILE: "enterprise"
+  CB_ADMIN_TRANSPORT: "http"
+  CB_ADMIN_HOST: "0.0.0.0"
+  CB_ADMIN_PORT: "8000"
+  CB_ADMIN_READ_ONLY_MODE: "true"
+  CB_ADMIN_AUDIT_FILE: "/var/log/couchbase-admin-mcp/audit.log"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cb-admin-mcp-ee
+  namespace: cb-admin-mcp-ee
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cb-admin-mcp-ee }
+  template:
+    metadata:
+      labels: { app: cb-admin-mcp-ee }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: mcp
+          image: cb-admin-mcp:ee
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: mcp-config }
+            - secretRef: { name: cluster-credentials }
+          ports:
+            - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: audit
+              mountPath: /var/log/couchbase-admin-mcp
+            - name: tmp
+              mountPath: /tmp
+          # The audit sink is fatal if it cannot be opened, so a wedged volume
+          # shows up as CrashLoopBackOff at start rather than as silently
+          # missing accountability records.
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+      volumes:
+        - name: audit
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cb-admin-mcp-ee
+  namespace: cb-admin-mcp-ee
+spec:
+  selector: { app: cb-admin-mcp-ee }
+  ports:
+    - port: 8000
+      targetPort: 8000

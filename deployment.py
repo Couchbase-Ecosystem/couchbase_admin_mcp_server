@@ -204,6 +204,69 @@ def tool_is_available(tool_name: str, mode: str) -> bool:
     return True
 
 
+#: Environment variable by which a deployment DECLARES the surface it is for.
+#:
+#: Set it and the server refuses to start unless `detect_mode()` resolves to the
+#: same thing. Unset, nothing changes -- inference behaves exactly as before.
+REQUIRE_ENV = "CB_ADMIN_REQUIRE_DEPLOYMENT"
+
+
+def declared_mode_error(resolved: str) -> str | None:
+    """Why this process must not start, or None if the declaration is satisfied.
+
+    ONE CONTAINER, ONE SURFACE
+    ==========================
+    `detect_mode()` infers, and inference is fine for a developer laptop and
+    wrong for a deployment. The specific way it goes wrong: a container built to
+    talk to Capella, carrying `CAPELLA_API_KEY_SECRET`, also inherits a
+    `CB_CONNECTION_STRING` -- from `.env.example`, from a shared env file, from a
+    copied compose stanza -- and `detect_mode()` reads that pair as `both`.
+
+    `both` disables capability gating entirely. So a container intended to reach
+    exactly one control plane silently loads the tools for both, and the operator
+    sees no error until a tool acts somewhere nobody meant it to. That is the
+    blast radius a per-surface container exists to contain, removed by an
+    environment variable nobody set on purpose.
+
+    Declaring the mode turns that from a silent widening into a startup refusal.
+    The check is deliberately on the RESOLVED mode rather than on CB_DEPLOYMENT,
+    so it also catches the case where CB_DEPLOYMENT is absent entirely and
+    inference quietly supplies something else.
+    """
+    declared = _env(REQUIRE_ENV).strip().lower()
+    if not declared:
+        return None
+
+    if declared not in _VALID_MODES:
+        return (
+            f"{REQUIRE_ENV}={declared!r} is not one of {list(_VALID_MODES)}. "
+            "It declares the single surface this deployment is for; remove it to "
+            "fall back on inference."
+        )
+
+    if declared != resolved:
+        detail = (
+            f"{REQUIRE_ENV} declares {declared!r} but this configuration "
+            f"resolves to {resolved!r}."
+        )
+        if resolved == BOTH:
+            detail += (
+                " Resolving to 'both' means BOTH a Capella API key and a "
+                "non-Capella connection string are set, which switches "
+                "capability gating off and loads every tool for both control "
+                "planes. Unset whichever of CAPELLA_API_KEY_SECRET or "
+                "CB_CONNECTION_STRING does not belong to this deployment."
+            )
+        else:
+            detail += (
+                " Set CB_DEPLOYMENT explicitly, or correct the credentials and "
+                "connection string this process was given."
+            )
+        return detail
+
+    return None
+
+
 def gating_enabled() -> bool:
     return _env_bool("CB_DEPLOYMENT_GATE", True)
 

@@ -1,0 +1,136 @@
+# Capella — Kubernetes. One workload, one control plane.
+#
+#   kubectl apply -f deploy/k8s/capella.yaml
+#
+# THE NETWORKPOLICY IS THE CONTAINMENT, not the configuration. Egress is denied
+# by default and re-opened only for DNS and HTTPS. Even if someone later adds a
+# CB_CONNECTION_STRING to the ConfigMap, this workload has no route to a
+# cluster — and the server refuses to start anyway, because the declared mode
+# would no longer match what the configuration resolves to.
+#
+# There is deliberately NO CB_CONNECTION_STRING below. Adding one does not
+# extend reach; it removes the capability gate.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cb-admin-mcp-capella
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: capella-credentials
+  namespace: cb-admin-mcp-capella
+type: Opaque
+stringData:
+  # The organization API key SECRET, not the access key id.
+  CAPELLA_API_KEY_SECRET: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-config
+  namespace: cb-admin-mcp-capella
+data:
+  CB_ADMIN_REQUIRE_DEPLOYMENT: "capella"
+  CB_DEPLOYMENT: "capella"
+  CB_CAPELLA_ORG_ID: ""
+  CB_ADMIN_PROFILE: "enterprise"
+  CB_ADMIN_TRANSPORT: "http"
+  CB_ADMIN_HOST: "0.0.0.0"
+  CB_ADMIN_PORT: "8000"
+  CB_ADMIN_READ_ONLY_MODE: "true"
+  CB_ADMIN_AUDIT_FILE: "/var/log/couchbase-admin-mcp/audit.log"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: capella-egress-only
+  namespace: cb-admin-mcp-capella
+spec:
+  podSelector:
+    matchLabels: { app: cb-admin-mcp-capella }
+  policyTypes: [Egress]
+  egress:
+    # DNS, or nothing resolves.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to the public internet, which is how cloudapi.cloud.couchbase.com is
+    # reached. Narrowed to exclude RFC1918 space: this workload has no business
+    # talking to anything inside the cluster network, and that exclusion is what
+    # makes this a containment rather than a comment.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cb-admin-mcp-capella
+  namespace: cb-admin-mcp-capella
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cb-admin-mcp-capella }
+  template:
+    metadata:
+      labels: { app: cb-admin-mcp-capella }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: mcp
+          image: cb-admin-mcp:capella
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: mcp-config }
+            - secretRef: { name: capella-credentials }
+          ports:
+            - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: audit
+              mountPath: /var/log/couchbase-admin-mcp
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+      volumes:
+        - name: audit
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cb-admin-mcp-capella
+  namespace: cb-admin-mcp-capella
+spec:
+  selector: { app: cb-admin-mcp-capella }
+  ports:
+    - port: 8000
+      targetPort: 8000

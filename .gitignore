@@ -76,8 +76,13 @@ ENV/
 # whatever pytest printed last. Committing them also guarantees a conflict on
 # every branch, since every run rewrites them.
 suite.txt
-skips.txt
+# `skips.txt` alone did not match `surface-skips.txt`, which is what
+# verify_mcp_surface.py --out actually writes, so the commit script correctly
+# refused to commit a session containing an unclaimed artifact. Match the shape
+# rather than one filename: any *skips.txt is a transcript of a run.
+*skips.txt
 evidence-mcp-*.txt
+junit-*.xml
 
 # Corporate CA certificates dropped in for the image build. The DIRECTORY is
 # tracked (the Dockerfile copies it unconditionally); the certificates are not.

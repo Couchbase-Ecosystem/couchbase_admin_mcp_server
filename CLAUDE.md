@@ -190,6 +190,52 @@ nothing there rather than calling `os.chmod` and looking enforced.
 
 ## 6. Known open
 
+### Restore: DONE on Enterprise Edition, NOT on Capella
+
+`admin_backup_restore_run` was performed on 2026-09-12 against the `mcptest`
+repository and answered `{"task_name": "RESTORE-dd7647a6-..."}`. Run twice, both
+accepted. `scripts/restore_cycle_test.py` reproduces it.
+
+It settled a disagreement that mattered: this server's schema described the
+`target` object as a FILTER BLOCK ("filter_keys, filter_values, mappings,
+include, exclude") and the service wants a FLAT object whose `target` is the
+DESTINATION CLUSTER URL with `user` and `password` beside it. A model following
+the shipped description would have built a body the service rejects. The schema
+is corrected from what was accepted.
+
+**`capella_backup_restore` has still never been executed.** Not same-cluster,
+not cross-cluster. It is destructive and the only Capella cluster available
+holds `harvester` and `supportal` alongside `travel-sample`, so it needs a
+deliberate decision rather than a spare five minutes.
+
+### The 244/244 target was set and not met
+
+The last full `verify_mcp_surface.py` run: OK 60, EMPTY 20, PREVIEW 61, GATED
+61, GUARDED 1, UPSTREAM 7, **SKIPPED 95**.
+
+Those 95 are tools whose arguments the harness could not synthesise. That is a
+limit of the measurement and NOT a defect in the tools — reporting it the other
+way round is its own failure, and this repository has done it before. But it is
+still 95 tools nobody has called, against an explicit instruction that nothing
+should be skipped.
+
+### Capella write bodies are mostly unproven
+
+One write of roughly 45 has been performed (`capella_backup_create`, 202). The
+rest carry `[LIVE 405]`: path confirmed by an OPTIONS probe, body taken from the
+reference. This registry has already shipped three wrong bodies behind verified
+paths — `access` missing from both credential creates, and `deltaSync` for
+`deltaSyncEnabled`. A path probe cannot catch that, because it never sends a
+body.
+
+### Never exercised at all
+
+  * the HTTP transport. Everything has been driven over stdio.
+  * the GUI's `POST /api/call` parity with MCP dispatch.
+  * `deploy/k8s/*.yaml` — written, asserted by tests, never applied.
+  * `deploy/docker-compose.*.yml` — never brought up. The container verification
+    uses `docker run` probes, which exercise the image but not the compose files.
+
 ### Cross-cluster restore: DESIGNED IN, UNVERIFIED
 
 `capella_backup_restore` takes `sourceClusterID` and `targetClusterID` as

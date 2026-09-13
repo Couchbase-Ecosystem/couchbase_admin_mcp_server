@@ -29,6 +29,9 @@ WHAT IT CREATES
     backup       of the named bucket         -> capella_backup_create
     replication  to the other cluster        -> capella_replication_create
     eventing fn  mcptest-fn                  -> capella_eventing_function_create
+    query index  mcptest_idx_<collection>     -> capella_query_index_manage
+                 (deferred, one per collection)
+    audit export one past hour               -> capella_cluster_audit_log_export_create
 
 Two collections rather than one is not padding: an Eventing function's
 `eventMetadataStorage` MUST be a different keyspace from its `eventSource`, and
@@ -134,6 +137,25 @@ def _matches(cluster: dict, needle: str) -> bool:
                for k in ("id", "name", "connectionString"))
 
 
+def _is_already_exists(result: dict) -> bool:
+    """Does this error say the object is already there?
+
+    Capella's 409 covers two unrelated situations with one status code:
+
+        {"code": 409, "message": "An eventing function with the requested
+         name already exists."}                      -> fixture already built
+        {"code": 409, ... cluster is deploying/scaling/rebalancing ...}
+                                                     -> create did NOT happen
+
+    Only the first is a success. Matching on status alone would swallow the
+    second and report a cluster that refused every write as fully populated.
+    """
+    if result.get("status") != 409 and "409" not in str(result.get("error", "")):
+        return False
+    text = f"{result.get('error', '')} {result.get('message', '')}".lower()
+    return "already exists" in text or "duplicate" in text
+
+
 class Populate:
     def __init__(self, args) -> None:
         self.args = args
@@ -194,6 +216,22 @@ class Populate:
             return result
 
         if result.get(ERROR_MARKER) is True:
+            # A 409 that says the object already exists is the DESIRED END STATE
+            # reached by an earlier run, not a failure. Reporting it as one is
+            # what the second Capella run did on 2026-09-13: every check passed
+            # except `eventing function mcptest-fn created`, which "failed"
+            # because it had succeeded an hour earlier.
+            #
+            # Narrow on purpose. Capella also answers 409 when the cluster is
+            # mid-operation (deploying, scaling, rebalancing, turning on/off),
+            # and THAT 409 is a real failure to report — the create did not
+            # happen and will not happen until the cluster is healthy. The two
+            # are distinguished by the message, not by the status, so match the
+            # message and let every other 409 fail.
+            if _is_already_exists(result):
+                self.say(f"   {label} is already present (409 from the create)")
+                self.present.append(label)
+                return result
             # The message is the finding. A 422 that names a field is the schema
             # this registry has been carrying on faith; record it rather than
             # calling the tool broken.
@@ -328,7 +366,59 @@ class Populate:
             f"eventing function {PREFIX}-fn",
         )
 
-        # 7. Alert integration, only with a real endpoint. See the module docstring.
+        # 7. A query index, so index_name resolves.
+        #
+        # capella_query_index_manage takes ONE statement -- the tool's own schema
+        # says multiple delimited queries are rejected -- and a deferred build,
+        # because building on a 63k-document bucket during a fixture run is time
+        # nobody asked for. capella_query_index_build_status then has something
+        # real to report, which is the point.
+        # ONE INDEX PER COLLECTION, and that is not belt-and-braces.
+        #
+        # Every /queryService/ read takes bucket+scope+collection as REQUIRED
+        # query parameters, and answers 404 "Index not found in key space" for a
+        # keyspace that holds no index. The surface harness resolves `collection`
+        # from whichever entry the scope listing hands back first, which on
+        # 2026-09-13 was `meta` while the only index sat on `events`. Result: a
+        # correct tool, a correct spec and a 404, reported as an UPSTREAM defect.
+        #
+        # Indexing both collections removes the ordering dependency instead of
+        # teaching the harness to prefer one, which would only move the guess.
+        index_names = []
+        for collection in ("events", "meta"):
+            index_name = f"{PREFIX}_idx_{collection}"
+            index_names.append(index_name)
+            await self.create(
+                session, "capella_query_index_manage",
+                {**ids, "body": {
+                    "definition": (
+                        f"CREATE INDEX `{index_name}` ON "
+                        f"`{self.args.bucket}`.`{PREFIX}`.`{collection}`(`id`) "
+                        "WITH {\"defer_build\": true}"
+                    ),
+                }},
+                f"query index {index_name}",
+            )
+
+        # 8. An audit-log export, so export_id resolves.
+        #
+        # The window is in the PAST and one hour wide. An export of a future
+        # window is rejected, and a wide one is a large job on somebody's cluster
+        # for no benefit -- this exists so an id exists.
+        from datetime import datetime, timedelta, timezone
+
+        end = datetime.now(timezone.utc).replace(microsecond=0)
+        start = end - timedelta(hours=1)
+        await self.create(
+            session, "capella_cluster_audit_log_export_create",
+            {**ids, "body": {
+                "start": start.isoformat().replace("+00:00", "Z"),
+                "end": end.isoformat().replace("+00:00", "Z"),
+            }},
+            "audit log export",
+        )
+
+        # 9. Alert integration, only with a real endpoint. See the module docstring.
         if self.args.webhook_url:
             await self.create(
                 session, "capella_alert_integration_create",

@@ -253,6 +253,10 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
     # the confirmation gate in front, so they are previewed and never performed
     # -- but it is worth saying out loud that this line is what lets a failover
     # tool be aimed at a real node id.
+    # The FTS index and the eventing function BOTH EXIST on a populated
+    # cluster; nothing was looking for either. See _ROWS_READER for why their
+    # responses needed a reader rather than a field name.
+    ("admin_fts_index_list", "index_name", "name"),
     ("admin_node_list", "otpNode", "otpNode"),
     ("admin_server_groups_get", "uuid", "uuid"),
 )
@@ -415,6 +419,35 @@ def _is_error(payload: Any) -> bool:
 _ENVELOPE_KEY: dict[str, str] = {
     "admin_node_list": "nodes",
     "admin_server_groups_get": "groups",
+}
+
+#: Responses that are not a list of objects at all.
+#:
+#: Two endpoints answer in shapes nothing generic can read:
+#:
+#:   /_p/fts/api/index   -> {"indexDefs": {"indexDefs": {"<name>": {...}}}}
+#:                          a MAP KEYED BY NAME, twice nested, no list anywhere
+#:   /_p/event/.../list/functions
+#:                       -> {"functions": ["<name>", ...]}
+#:                          a list of STRINGS, which is why discovery reported
+#:                          "1 row(s), none of them an object" on a cluster that
+#:                          demonstrably had a function
+#:
+#: Both were read as "no such object" when the object existed. A reader turns
+#: each into the {field: value} rows the rest of this file expects, so the
+#: special case is one line of shape-handling rather than a special case in
+#: every consumer.
+_ROWS_READER: dict[str, Any] = {
+    "admin_fts_index_list": lambda payload: [
+        {"name": name}
+        for name in (
+            ((payload or {}).get("indexDefs") or {}).get("indexDefs") or {}
+        )
+    ],
+    "admin_eventing_list": lambda payload: [
+        {"appname": item} if isinstance(item, str) else item
+        for item in ((payload or {}).get("functions") or [])
+    ],
 }
 
 #: Ids that are not a field but a SUBSTRING of one.
@@ -1146,8 +1179,11 @@ class Run:
             )
             if result.outcome not in _SUCCESSFUL:
                 continue
+            reader = _ROWS_READER.get(tool)
             envelope = _ENVELOPE_KEY.get(tool)
-            if envelope and isinstance(payload, dict) and isinstance(
+            if reader is not None and isinstance(payload, dict):
+                raw_rows = reader(payload)
+            elif envelope and isinstance(payload, dict) and isinstance(
                 payload.get(envelope), list
             ):
                 raw_rows = payload[envelope]
@@ -1631,8 +1667,10 @@ class Run:
             schema = _input_schema(tool)
             arguments, missing = resolve_arguments(schema, self.context_for(tool.name))
 
-            # A missing BODY is synthesised; a missing ID is not. See the note on
-            # synthesise_body: payload is never routed, targets always are.
+            # The body first, because its schema carries structure the scalar
+            # path cannot. Anything still missing afterwards is synthesised too
+            # -- see the note below on why that is safe HERE and would not be
+            # anywhere else.
             guessed: list[str] = []
             if missing == ["body"] or ("body" in missing and len(missing) == 1):
                 body_schema = (schema.get("properties") or {}).get("body") or {}
@@ -1656,48 +1694,40 @@ class Run:
                     missing = []
 
             if missing:
-                # SKIPPED, and not attempted.
+                # SYNTHESISE THE REST, AND SAY SO.
                 #
-                # The original reasoning was that missing arguments do not matter
-                # because the confirmation gate runs before the handler. That is
-                # true of the SERVER and false of the path a call takes to reach
-                # it: the MCP SDK validates arguments against the input schema
-                # first, so a *_create with no synthesisable body is rejected
-                # upstream of the gate and never tests it.
+                # This used to skip. The reasoning was sound and the conclusion
+                # was too cautious: a missing BODY is a limit of the checker, a
+                # missing ID is a fact about the cluster -- so inventing an id
+                # would aim a tool at an object that does not exist.
                 #
-                # Reported as PROTOCOL, that produced forty-one entries reading
-                # like failures of operations verify_capella_paths.py had already
-                # confirmed live, with method probes. The tools are fine. This
-                # harness cannot invent a bucket spec, and saying so plainly is
-                # the difference between a gap in the TEST and a doubt about the
-                # SERVER.
-                # Two different reasons, and conflating them misdirects the fix.
+                # What that reasoning left out is the POSTURE. This phase runs
+                # with CB_ADMIN_DRY_RUN forced on, verified before the phase is
+                # allowed to start, and every tool here is behind the
+                # confirmation gate. Nothing is performed. An invented id
+                # therefore proves exactly what the phase exists to prove -- that
+                # the tool DISPATCHES, that the gate refuses it unconfirmed, and
+                # that the dry run intercepts it confirmed -- and proves nothing
+                # about the object, which is honest because there is no object.
                 #
-                # A missing BODY means the schema could not be turned into a
-                # payload -- a limitation here. A missing ID means no such object
-                # exists on this cluster, which is a fact about the environment
-                # and is fixed by creating one, not by improving this script.
-                # "cannot synthesise app_service_id -- provable only with a real
-                # body" said body when it meant object, and pointed at the wrong
-                # remedy.
-                ids = [m for m in missing if m != "body"]
-                if ids and "body" in missing:
-                    reason = (
-                        f"no {', '.join(ids)} on this cluster, and no body could be "
-                        "built — create the object, then Level 3 covers the rest"
+                # So: invent what is missing, mark every invented argument by
+                # name, and let the result carry the caveat. "gate proven, schema
+                # validity NOT proven" already exists for bodies; this is the
+                # same statement for arguments.
+                #
+                # A tool is skipped now only when it cannot be CALLED at all.
+                # Everything else is called and reports what the product said --
+                # including "not implemented", which is an answer.
+                for name in list(missing):
+                    spec = (schema.get("properties") or {}).get(name) or {}
+                    value, invented = _value_for(
+                        name, spec, self.context_for(tool.name),
+                        self.args.name_prefix, 0,
                     )
-                elif ids:
-                    reason = (
-                        f"no {', '.join(ids)} exists on this cluster — create one "
-                        "and this tool becomes testable"
-                    )
-                else:
-                    reason = (
-                        "no request body could be built from the shipped schema — "
-                        "the gate is provable only with a real body (Level 3)"
-                    )
-                self.record(Result(tool.name, SKIPPED, reason, phase="write"))
-                continue
+                    arguments[name] = value
+                    if invented:
+                        guessed.append(name)
+                missing = []
 
             # Unconfirmed first, for the tools whose arguments do resolve.
             _, gate = await self.call(session, tool.name, arguments, phase="write")
@@ -1712,7 +1742,7 @@ class Run:
                     # and claiming otherwise would be exactly the conflation this
                     # script keeps finding in its own output.
                     self.say(
-                        f"  {'':<46} body synthesised from the shipped schema; "
+                        f"  {'':<46} synthesised from the shipped schema; "
                         f"invented: {', '.join(guessed)} — gate proven, schema "
                         "validity NOT proven"
                     )

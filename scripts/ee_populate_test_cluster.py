@@ -320,7 +320,25 @@ class Populate:
         self.say(f"mode   {'PERFORM (real writes)' if self.performed else 'DRY RUN (preview)'}")
         self.say("=" * 70)
 
-        buckets = _rows(await self.call(session, "admin_bucket_list", {}))
+        # IS THE CLUSTER THERE AT ALL? Asked before "does it have buckets",
+        # because they are different failures and conflating them sends the
+        # reader looking for the wrong thing. On 2026-09-13 a container that had
+        # been started 30 seconds earlier refused the connection, and this
+        # script reported "the cluster has at least one bucket - FAIL", which is
+        # a true statement about a cluster that was not answering and a useless
+        # one to act on.
+        first = await self.call(session, "admin_bucket_list", {})
+        if isinstance(first, dict) and first.get(ERROR_MARKER) is True:
+            self.check(False, "the cluster answers admin_bucket_list",
+                       json.dumps(first)[:400])
+            self.say("\n   A refused connection or a timeout here means the node is"
+                     "\n   NOT UP YET, not that it is misconfigured. A restarted"
+                     "\n   container re-warms its buckets before ns_server answers,"
+                     "\n   and travel-sample on magma takes appreciably longer than"
+                     "\n   a fresh empty node. Poll /pools/default until it answers"
+                     "\n   rather than sleeping a fixed interval, then re-run.")
+            return
+        buckets = _rows(first)
         names = {b.get("name") for b in buckets if isinstance(b, dict)}
         if not self.check(bool(names), "the cluster has at least one bucket",
                           "create one first; every keyspace tool needs it"):
@@ -444,6 +462,50 @@ class Populate:
                      "bucket_name": bucket},
                     f"backup repository {PREFIX}-repo",
                 )
+
+            # 6. RUN ONE. A repository with no backup in it leaves
+            #    admin_backup_list answering "ok (empty)", which proves the tool
+            #    dispatches and proves NOTHING about the response it returns --
+            #    and the response shape is exactly what anything built on top of
+            #    it has to parse. Running a real backup is the difference
+            #    between a tool that was called and a tool that was verified.
+            #
+            #    Not idempotent on purpose, same reasoning as the Capella
+            #    backup: a second backup is a second restore point, not a
+            #    duplicate object, so there is nothing to skip.
+            await self.create(
+                session, "admin_backup_run",
+                {"repository_id": f"{PREFIX}-repo"},
+                f"backup run in {PREFIX}-repo",
+            )
+
+            # The backup is asynchronous. Poll rather than sleep a guessed
+            # interval -- travel-sample is 63k documents and the time it takes
+            # is a property of the machine, not something to hard-code.
+            if self.performed:
+                self.say("\n   waiting for the backup to appear in the repository")
+                rows = []
+                for _ in range(60):
+                    await asyncio.sleep(2)
+                    rows = _rows(await self.call(
+                        session, "admin_backup_list",
+                        {"repository_id": f"{PREFIX}-repo"}))
+                    if rows:
+                        break
+                if rows:
+                    self.check(True, "admin_backup_list returned a backup")
+                    # PRINT THE WHOLE ROW. This is the observed shape of an EE
+                    # backup record, and it is the thing a backup catalogue has
+                    # to key on. Writing code against a remembered shape is how
+                    # the last several defects in this repository happened.
+                    self.say("   the observed EE backup record:")
+                    self.say(json.dumps(rows[0], indent=2)[:1200])
+                else:
+                    self.check(
+                        False, "admin_backup_list returned a backup",
+                        "no backup appeared within 120 s; the run may still be "
+                        "in progress -- check admin_backup_repository_get",
+                    )
 
 
 async def main_async(args) -> int:

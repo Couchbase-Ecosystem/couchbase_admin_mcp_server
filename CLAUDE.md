@@ -172,6 +172,43 @@ Platform limits, probed in `tests/_platform.py` rather than inferred from
 bits do not exist, so `logging_config._restrict_to_owner` deliberately does
 nothing there rather than calling `os.chmod` and looking enforced.
 
+### 4.1 Docker on Windows: three ways the fixture looks broken and is not
+
+Each of these produces a symptom that reads as a tool defect. All three were
+diagnosed the slow way on 2026-09-13; none of them are in the code.
+
+**A restarted container can lose its published ports.** `docker start` reports
+success, the container reports `running`, and the host gets *connection
+refused* on every port. The tell is the ports column:
+
+    8091-8097/tcp                    <- EXPOSED only. Nothing is published.
+    0.0.0.0:8091->8091/tcp           <- what a working mapping looks like
+
+and `docker exec <c> curl -s http://127.0.0.1:8091/pools` answering **401**,
+which proves Couchbase is healthy and the failure is entirely host-side. Port
+mappings are fixed at CREATION, so this cannot be repaired in place — remove
+the container and rebuild. Suspected cause: Docker Desktop restarting while
+another container holds the port under `restart: unless-stopped`.
+
+**`unless-stopped` resurrects the thing you stopped.** `docker stop` holds a
+container down, but a Docker Desktop restart brings it back and it takes the
+port again. Check with
+`docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' <name>`.
+
+**The Backup service dies if an external alternate address exists.** It reads
+`/pools/default/nodeServices`, picks the EXTERNAL address as its own cluster
+endpoint, asks cbauth for credentials for that hostport, does not find it, and
+exits — restarting on a ~7.5 s cycle forever. Nothing listens on 8097, so every
+`admin_backup_*` call through `/_p/backup` answers **500 Unexpected server
+error** and every backup tool looks broken. The fix is topological, not code:
+publish ports 1:1 and set no alternate address (`-PortOffset 0`, now the
+default), or better, run the MCP server in a container on the same Docker
+network and publish nothing at all.
+
+The general shape: **a 404 or 500 from a service endpoint is a claim about the
+environment until proven otherwise.** Read the service's own log under
+`/opt/couchbase/var/lib/couchbase/logs/` before editing a handler.
+
 ---
 
 ## 5. Working style

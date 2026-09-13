@@ -261,6 +261,40 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
     ("admin_server_groups_get", "uuid", "uuid"),
 )
 
+#: Every field name the discovery table can fill: the OBJECT IDENTITIES of this
+#: surface. A required argument in this set names a thing that must already
+#: exist; a required argument outside it is payload the caller supplies.
+#:
+#: WHY THIS SET EXISTS, AND WHY IT IS NOT A NAME PATTERN
+#: -----------------------------------------------------
+#: The write phase briefly synthesised EVERY missing argument, on the reasoning
+#: that CB_ADMIN_DRY_RUN is forced on and the confirmation gate sits in front,
+#: so nothing can be performed. tests/test_verify_mcp_surface.py rejected it,
+#: and the test was right:
+#:
+#:     "Bodies are payload and are never routed. Path ids are targets and
+#:      always are. Inventing a cluster_id would preview a call against a
+#:      cluster that does not exist, and WITHOUT THE DRY RUN it would be a real
+#:      request to a fabricated path."
+#:
+#: The point is the last clause. "Dry run is on" was the single assumption the
+#: looser rule rested on, and that is precisely the assumption the safety
+#: property must not rest on. Depth, not one gate.
+#:
+#: A name pattern (`*_id`, `*_name`) cannot make the distinction: admin_bucket_create
+#: takes `name` as PAYLOAD while admin_scope_create takes `bucket_name` as a
+#: TARGET. The discovery table already enumerates what an identity is on this
+#: surface, so it is the authority rather than a second guess about spelling.
+#:
+#: The principled version of this needs the server to expose each Op's route so
+#: the harness can read the {placeholders} directly -- cb_mcp_get_tool_info
+#: returns schema and annotations but not the path. Until it does, this is the
+#: honest approximation, and it errs toward skipping.
+_IDENTITY_FIELDS: frozenset[str] = frozenset(
+    field_name
+    for _tool_name, field_name, *_rest in _DISCOVERY
+)
+
 #: Discovery entries that must NOT be called during the discovery loop, only
 #: harvested from their result if the read phase happens to call them.
 #:
@@ -1694,30 +1728,58 @@ class Run:
                     missing = []
 
             if missing:
-                # SYNTHESISE THE REST, AND SAY SO.
+                # SYNTHESISE PAYLOAD. NEVER SYNTHESISE AN IDENTITY.
                 #
-                # This used to skip. The reasoning was sound and the conclusion
-                # was too cautious: a missing BODY is a limit of the checker, a
-                # missing ID is a fact about the cluster -- so inventing an id
-                # would aim a tool at an object that does not exist.
+                # A missing identity is a fact about the environment: the object
+                # does not exist, and a call aimed at an invented one is aimed at
+                # nothing. A missing payload field is a limit of this checker,
+                # and a value invented for it is routed nowhere -- it rides in
+                # the body or the form, and the worst it can do is earn a 422
+                # that names the field, which is information.
                 #
-                # What that reasoning left out is the POSTURE. This phase runs
-                # with CB_ADMIN_DRY_RUN forced on, verified before the phase is
-                # allowed to start, and every tool here is behind the
-                # confirmation gate. Nothing is performed. An invented id
-                # therefore proves exactly what the phase exists to prove -- that
-                # the tool DISPATCHES, that the gate refuses it unconfirmed, and
-                # that the dry run intercepts it confirmed -- and proves nothing
-                # about the object, which is honest because there is no object.
-                #
-                # So: invent what is missing, mark every invented argument by
-                # name, and let the result carry the caveat. "gate proven, schema
-                # validity NOT proven" already exists for bodies; this is the
-                # same statement for arguments.
-                #
-                # A tool is skipped now only when it cannot be CALLED at all.
-                # Everything else is called and reports what the product said --
-                # including "not implemented", which is an answer.
+                # This block once invented BOTH, justified by the dry run being
+                # forced on. See _IDENTITY_FIELDS for why that justification was
+                # wrong and which test caught it.
+                identities = [n for n in missing if n in _IDENTITY_FIELDS]
+                if identities:
+                    self.record(
+                        Result(
+                            tool.name,
+                            SKIPPED,
+                            "no "
+                            + ", ".join(identities)
+                            + " exists on this cluster",
+                            phase="write",
+                        )
+                    )
+                    continue
+                if "body" in missing:
+                    # Reached only when the body schema carried no structure to
+                    # build from -- an empty schema is not a licence to invent a
+                    # shape, because the MCP SDK validates against the schema
+                    # before the gate is reached and a made-up body tests the
+                    # SDK, not the server.
+                    #
+                    # NAME THE REMEDY, not just the refusal. A skip that says
+                    # only "cannot synthesise" leaves the reader to work out
+                    # whether this is a defect, an environment gap, or a limit
+                    # of the checker. It is the third, and the thing that
+                    # settles it is a LEVEL 3 run -- a real body performed
+                    # against a live cluster through a real client, which is
+                    # what scripts/backup_cycle_test.py does for the backup
+                    # family. Saying so is the difference between a result and
+                    # a next step.
+                    self.record(
+                        Result(
+                            tool.name,
+                            SKIPPED,
+                            "cannot synthesise a body from the shipped schema — "
+                            "provable only at Level 3, with a real body performed "
+                            "against a live cluster",
+                            phase="write",
+                        )
+                    )
+                    continue
                 for name in list(missing):
                     spec = (schema.get("properties") or {}).get(name) or {}
                     value, invented = _value_for(

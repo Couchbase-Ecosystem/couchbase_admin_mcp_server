@@ -109,6 +109,60 @@ LIVE_VERIFIED_ON = "2026-09-01"
 #: silently under the LIVE_VERIFIED_ON banner and inheriting a provenance it
 #: does not have.
 LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
+    # LIVE_VERIFIED still says 405 for this operation, and that is correct: 405
+    # is what the non-mutating sweep observed. The 422 below came from a real
+    # POST by a different tool on a different day, and recording it there would
+    # give it a provenance it does not have.
+    #
+    # It is the strongest evidence this registry holds about the operation, and
+    # it is evidence of a DEFECT IN THIS FILE rather than in the server: the
+    # summary said the path names the target, Capella says the path names the
+    # source, and Capella has a dedicated error code for people who get it that
+    # way round.
+    # SAME SHAPE, SECOND TOOL. An XDCR replication is defined ON the cluster it
+    # replicates FROM, so the path names the SOURCE and body.target.cluster names
+    # the cluster that is WRITTEN — continuously, not once. The ownership
+    # guardrail had the same blind spot here as on restore and it is now handled
+    # generically; see _WRITES_ELSEWHERE in handlers/capella/__init__.py.
+    "capella_replication_create": (
+        "2026-09-13, scripts/capella_xdcr_setup.py --perform. PERFORMED: the "
+        "body {sourceBucket, target:{bucket, cluster, type}, direction:'oneWay', "
+        "priority:'low'} was ACCEPTED and answered {\"jobId\": "
+        "\"46b2431d-9821-4a2b-8d10-7a1c891c728e\"} — note the response names a "
+        "JOB, not the replication, so the id a caller needs for "
+        "capella_replication_get comes from capella_replications_list and not "
+        "from this create.\n"
+        "Both ends are addressed by BUCKET ID, and those ids differ per cluster "
+        "even when the bucket name is identical, so neither can be reused across "
+        "the two sides of the call.\n"
+        "The FIRST attempt was refused by the guardrail because the SOURCE "
+        "cluster was in CAPELLA_PROTECTED_CLUSTERS — which is how the "
+        "wrong-end-guarded defect was found in this tool. After the fix (see "
+        "_WRITES_ELSEWHERE in handlers/capella/__init__.py) the same call was "
+        "accepted with the source still protected, and the guard now evaluates "
+        "body.target.cluster instead. Both halves of that are load-bearing: the "
+        "refusal proved the guard was on the read end, the acceptance proved the "
+        "replacement guards the write end without blocking the safe direction."
+    ),
+    "capella_backup_restore": (
+        "2026-09-13, scripts/capella_cross_cluster_restore.py --perform. A real "
+        "POST through an MCP client, source Bride-of-Frankenstein -> target a "
+        "freshly provisioned cluster, answered 422 code 5026: 'The source "
+        "cluster ID is invalid. Please ensure the source cluster id matches the "
+        "id in the path.' [LIVE+METHOD] — the method and body were SENT and "
+        "REFUSED, so nothing was restored. The four required fields are "
+        "confirmed present and correctly named; what was wrong was which cluster "
+        "belongs in the path. Corrected in the Op below. A second run with the "
+        "path corrected answered 422 code 5022 — target cluster in `peering` — "
+        "which is the other documented precondition and is also recorded below. "
+        "A THIRD run, path corrected and both clusters healthy, answered "
+        "202 ACCEPTED: a real cross-cluster restore, Bride-of-Frankenstein -> "
+        "ashmahadevsatyanarayanan, bucket travel-sample, backup "
+        "bfacf78e-bd29-4bcb-a72a-9e174768c6b1 (full, 63,349 items). The body "
+        "below is now OBSERVED rather than transcribed, and cross-cluster "
+        "restore is no longer a documented capability this server had never "
+        "exercised."
+    ),
     "capella_cloud_snapshot_backups_list": (
         "2026-09-12, scripts/capella_backup_readiness.py. Real GET, 200, cursor "
         "envelope, one snapshot present."
@@ -2395,23 +2449,75 @@ OPS: tuple[Op, ...] = (
         # probe of a MATCHED route returns -- a wrong path answers 404.
         #
         # So the design question the dispute raised is also answered: the backup
-        # id is in the path alongside the target cluster id, which makes
-        # cross-cluster restore a primitive rather than an orchestration problem
-        # -- the path names the TARGET, the body names the SOURCE.
+        # id is in the path alongside a cluster id, which makes cross-cluster
+        # restore a primitive rather than an orchestration problem.
         #
-        # The BODY is still unprobed. --method-probe with an empty body returns
-        # 422 naming the required fields; until then the declared body is the
-        # reference's, not an observation.
+        # WHICH CLUSTER IS IN THE PATH — CORRECTED 2026-09-13, BY MEASUREMENT
+        # ------------------------------------------------------------------
+        # This comment and the summary below both said the path names the TARGET
+        # and the body names the SOURCE. That is BACKWARDS, and a model following
+        # it built a body that cannot succeed. Capella says so itself, in its own
+        # error vocabulary, on a real POST:
+        #
+        #   POST .../clusters/<TARGET>/backups/<backup>/restore
+        #   body sourceClusterID=<SOURCE> targetClusterID=<TARGET>
+        #   -> 422 {"code": 5026,
+        #           "message": "The source cluster ID is invalid. Please ensure
+        #                       the source cluster id matches the id in the path.",
+        #           "hint": "Returned when attempting to restore a backup and the
+        #                    source cluster id does not match the cluster id in
+        #                    the url path of the request."}
+        #
+        # A dedicated error code for this exact confusion is not an accident; it
+        # exists because the confusion is common. The rule it states:
+        #
+        #   PATH cluster  == sourceClusterID   — the cluster that OWNS the backup
+        #   targetClusterID (body only)        — the cluster that is OVERWRITTEN
+        #
+        # Which is consistent with the resource model: a backup is a child of the
+        # cluster that took it, so its URL is under that cluster. The destination
+        # is an argument, not a location.
+        #
+        # This matters beyond a wrong sentence. The ownership guardrail in
+        # handlers/capella/__init__.py fetches the PATH cluster, so on this one
+        # operation it was guarding the cluster that is only READ while leaving
+        # the cluster that gets OVERWRITTEN unchecked. See the note there.
+        #
+        # 405 verified the route and said nothing about any of this, which is the
+        # standing argument for why a path-only verification is not a verified
+        # operation. Two wrong preconditions and one wrong path segment all sat
+        # underneath a route that had been "verified" for weeks.
+        #
+        # PERFORMED 2026-09-13: 202 Accepted, cross-cluster, with the path and
+        # both preconditions right. See LIVE_VERIFIED_OUT_OF_BAND above.
+        #
+        # A SECOND PRECONDITION, ALSO MEASURED: BOTH CLUSTERS MUST BE HEALTHY.
+        # Same day, once the path was right:
+        #
+        #   -> 422 {"code": 5022,
+        #           "message": "Unable to target a restore for a cluster that is
+        #                       not in a healthy state."}
+        #
+        # The target was in `peering` -- an XDCR replication was establishing its
+        # network path. Worth stating because a cluster leaves `healthy` for
+        # ordinary reasons long after it finishes provisioning, so "it deployed
+        # fine" is not the same claim. Check currentState on BOTH ends with
+        # capella_cluster_get before calling this.
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/backups/{backup_id}/restore",
         summary=(
-            "Restore a managed backup. The cluster in the path is the TARGET. "
+            "Restore a managed backup. The cluster in the path is the SOURCE — "
+            "the cluster that OWNS the backup — and it MUST equal sourceClusterID "
+            "in the body; Capella answers 422 code 5026 when they differ. The "
+            "cluster that gets OVERWRITTEN is targetClusterID, which appears in "
+            "the body only. "
             "Documented as able to restore into the same cluster or another cluster "
             "in the same organization, provided both are on the same cloud provider "
             "— Azure to Azure is fine, Azure to AWS is not. DESTRUCTIVE: overwrites "
             "data in the target. Indexes come back DEFERRED, so the target is not "
             "performance-comparable to its source until builds complete — trigger "
             "them and poll capella_query_index_build_status before treating it as "
-            "ready. [LIVE 405]"
+            "ready. Both clusters must report currentState 'healthy' or Capella "
+            "answers 422 code 5022. [LIVE+METHOD 422]"
         ),
         group="backup",
         destructive=True,

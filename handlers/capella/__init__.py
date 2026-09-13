@@ -118,6 +118,24 @@ def _preserve_ownership_marker(name: str, args: dict, body_in: dict) -> None:
     )
 
 
+#: Operations whose PATH cluster is NOT the cluster they write to, mapped to the
+#: place in the request BODY that names the real target.
+#:
+#: Both entries were established by a real call that was refused, not by reading
+#: the reference. Capella requires the path to name the SOURCE for each: a backup
+#: is a child of the cluster that took it, and an XDCR replication is defined on
+#: the cluster it replicates FROM. See handlers/capella/spec.py.
+#:
+#: Adding an entry here moves an operation's ownership check from check 2 to
+#: check 2a. Do not add one speculatively — a wrong entry disables the ordinary
+#: guard and replaces it with a lookup of a field that may not exist, which
+#: fails closed but for the wrong reason.
+_WRITES_ELSEWHERE: dict[str, tuple[str, ...]] = {
+    "capella_backup_restore": ("targetClusterID",),
+    "capella_replication_create": ("target", "cluster"),
+}
+
+
 def _fetch_cluster(args: dict) -> dict:
     """Fetch the cluster a guarded call targets, or fail closed.
 
@@ -173,7 +191,10 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
     #    cluster that happened to live in that project, and the name-prefix
     #    guard — the whole defense against a hand-made production cluster inside
     #    a test project — protected nothing but capella_cluster_delete.
-    if "cluster_id" in placeholders:
+    #    Some operations are EXEMPT and handled in 2a — see _WRITES_ELSEWHERE.
+    #    Their path cluster is not the cluster they write to, so running this
+    #    check on it protects the wrong end in both directions at once.
+    if "cluster_id" in placeholders and name not in _WRITES_ELSEWHERE:
         cluster = _fetch_cluster(args)
         project_id = str(args.get("project_id") or "")
         if name == "capella_cluster_delete":
@@ -187,6 +208,63 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
             guardrails.assert_managed(
                 cluster, project_id, kind="cluster", policy=policy, verb=verb
             )
+
+    # 2a. THE OPERATIONS WHOSE PATH CLUSTER IS NOT THEIR VICTIM.
+    #
+    #     Almost every mutating call in this registry writes to the cluster named
+    #     in its path, so fetching that cluster and asserting ownership guards
+    #     the thing being changed. Two do not, and both were found the same way:
+    #     by a real call, not by reading the spec.
+    #
+    #       capella_backup_restore     path = SOURCE (owns the backup, read)
+    #                                  writes body.targetClusterID
+    #       capella_replication_create path = SOURCE (XDCR is defined on the
+    #                                  source), writes body.target.cluster
+    #                                  CONTINUOUSLY, for as long as it runs
+    #
+    #     Check 2 got both ends wrong on these, in opposite directions:
+    #
+    #       TOO STRICT  — a protected SOURCE refused an operation that only
+    #         reads it. Observed: CAPELLA_PROTECTED_CLUSTERS=Bride-of-Frankenstein
+    #         refused a one-way replication OUT of that cluster, which is the
+    #         safe direction and the one the protection was configured to allow.
+    #
+    #       TOO WEAK    — the cluster being WRITTEN was never checked at all,
+    #         because its id appears only in the body. A protected production
+    #         cluster could be the target of a restore or the destination of a
+    #         replication and nothing would fire. A protection that reads as
+    #         configured and does not hold is worse than none, which is the
+    #         argument this file makes everywhere else.
+    #
+    #     Generalised rather than special-cased per tool: a third operation with
+    #     this shape is likelier than not, and the failure is silent.
+    if name in _WRITES_ELSEWHERE:
+        path = _WRITES_ELSEWHERE[name]
+        node: object = args.get("body")
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        target_id = str(node or "")
+        spelling = "body." + ".".join(path)
+        if not target_id:
+            raise guardrails.GuardrailError(
+                f"`{name}` requires {spelling}, and the guardrails cannot be "
+                "evaluated without it: it names the cluster this operation "
+                "WRITES TO.",
+                hint=(
+                    "The cluster in the path is the SOURCE and is only read. "
+                    f"Supply {spelling}. See capella_clusters_list."
+                ),
+            )
+        project_id = str(args.get("project_id") or "")
+        target = _fetch_cluster({**args, "cluster_id": target_id})
+        guardrails.assert_managed(
+            target,
+            project_id,
+            kind="cluster",
+            policy=policy,
+            verb=("overwrite data on" if name == "capella_backup_restore"
+                  else "replicate into"),
+        )
 
     # 2b. Deleting a PROJECT is an indirect route to its clusters — no cluster
     #     tool is involved, so the ownership check above never fires. Capella is

@@ -288,3 +288,34 @@ def test_a_repository_is_created_in_the_active_state():
     built = _path_expressions(backup)
     creates = [t for t in built if "repository/active/" in t]
     assert creates, "the create path does not target the active state"
+
+
+def test_the_restore_schema_describes_the_shape_the_service_accepts():
+    """The description a model builds its request from.
+
+    Until 2026-09-12 it said the `target` object carried "filter_keys,
+    filter_values, mappings, include, exclude" -- a filter block. A performed
+    restore showed the service wants a FLAT object whose `target` is the
+    DESTINATION CLUSTER URL, with `user` and `password` beside it. A model
+    following the old description would have built a body the service rejects,
+    and the tool would have looked broken.
+
+    The distinction the schema must keep is `force_updates`: it overwrites
+    documents the target holds a NEWER copy of, which is how a restore becomes
+    data loss on a cluster someone is still using.
+    """
+    restore = next(t for t in backup.TOOLS if t.name == "admin_backup_restore_run")
+    description = (restore.inputSchema or {})["properties"]["target"]["description"]
+
+    for field in ("target", "user", "password", "auto_create_buckets",
+                  "force_updates", "map_data"):
+        assert field in description, f"the observed field {field!r} is undocumented"
+
+    assert "mappings" not in description, (
+        "the schema describes a filter block again; the service wants a flat "
+        "object whose target is the destination cluster URL"
+    )
+    assert "data loss" in description, (
+        "force_updates must be documented as the flag that destroys data, not "
+        "listed as one option among many"
+    )

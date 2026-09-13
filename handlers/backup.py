@@ -22,6 +22,57 @@ the Backup service perfectly well:
     individual backups come back inside the repository INFO response, so the
     endpoint is ``/<state>/<id>/info``.
 
+RESTORE, PERFORMED 2026-09-12
+-----------------------------
+`admin_backup_restore_run` had never been executed -- not cross-cluster, not
+same-cluster, not once -- so "backup and restore works" was half proven, and the
+unproven half is the one a customer reaches for on their worst day.
+
+It was run against the `mcptest` repository and answered:
+
+    {"task_name": "RESTORE-dd7647a6-1c4b-4bf9-b04d-dca634b444fe"}
+
+That settles the request body, and the two candidate shapes did NOT agree. This
+module's own schema described a filter block; the service wants a flat object
+whose `target` is the DESTINATION CLUSTER URL with `user` and `password`
+alongside. The schema is corrected above from the shape that was accepted.
+
+Still never run: CROSS-cluster restore. The body carries source and target
+separately, so it is one call rather than an export/import -- but there is one
+Capella cluster and nowhere to restore into. See CLAUDE.md section 6.
+
+CROSS-CLUSTER IS DOCUMENTED, AND IT IS NOT XDCR
+-----------------------------------------------
+The reference for this endpoint says of `target`: the address of "the cluster
+onto which the data is to be restored. Note that this need not be the host
+cluster." So restoring a repository held by one cluster's Backup service INTO a
+different cluster is the documented behaviour of this one call, with no
+replication set up and no export/import step. That is a stronger claim than
+"cross-cluster restore exists in Capella v4" and it is reachable from Enterprise
+Edition.
+
+Whether that target may be a CAPELLA cluster is a separate and UNSETTLED
+question. Two facts sit either side of it:
+
+  - `cbbackupmgr restore -c couchbases://...` into Capella is explicitly
+    documented, with --cacert and either --capella (7.6+) or the full set of
+    --disable-analytics / --disable-cluster-analytics / --disable-bucket-query /
+    --disable-cluster-query / --disable-views. Capella database credentials
+    cannot create buckets, so buckets must pre-exist, and indexes come back
+    unbuilt.
+  - This REST body carries the disable_* flags, but carries NO field for a CA
+    certificate, no --no-ssl-verify, and no --capella. The Backup service runs
+    cbbackupmgr underneath, so the TLS material is the open question, not the
+    direction of travel.
+
+Do not describe EE -> Capella restore through this tool as supported until it
+has been performed. The cbbackupmgr path to Capella IS supported and is the
+answer to give a customer today.
+
+References:
+  https://docs.couchbase.com/server/current/rest-api/backup-restore-data.html
+  https://docs.couchbase.com/cloud/clusters/cli-backup-restore.html
+
 CONFIRMED AGAINST A RUNNING SERVICE, 2026-09-12
 -----------------------------------------------
 The correction came from the service's API reference, which is a source and not
@@ -260,8 +311,14 @@ TOOLS: list[Tool] = [
     Tool(
         name="admin_backup_restore_run",
         description=(
-            "Trigger a restore operation. This can overwrite data in the "
-            "target cluster — review carefully. Requires confirm:true."
+            "Trigger a restore. OVERWRITES data in the target cluster — the "
+            "only tool here that destroys anything. Requires confirm:true.\n"
+            "The `target` object is the request body and its shape was WRONG in "
+            "this schema until 2026-09-12: it described a filter block "
+            "(filter_keys, mappings, include, exclude) when the service wants a "
+            "flat object whose `target` is the destination cluster URL. A model "
+            "following the old description would have built a body the service "
+            "rejects. Corrected from a performed restore, not from a docs page."
         ),
         inputSchema={
             "type": "object",
@@ -271,9 +328,37 @@ TOOLS: list[Tool] = [
                 "target": {
                     "type": "object",
                     "description": (
-                        "Restore target configuration object. Typical fields: "
-                        "filter_keys, filter_values, mappings, include, exclude. "
-                        "See Couchbase Backup Service REST docs for the full shape."
+                        "The restore request, sent to the Backup service verbatim. "
+                        "OBSERVED SHAPE, from a performed restore on 2026-09-12 "
+                        "(task RESTORE-dd7647a6...): a FLAT object whose `target` "
+                        "is the DESTINATION CLUSTER URL, not a filter block.\n"
+                        "  target   (required) cluster to restore INTO, e.g. "
+                        "'http://127.0.0.1:8091'\n"
+                        "  user, password  (required) credentials for that cluster\n"
+                        "  auto_create_buckets  create missing buckets. Default "
+                        "false; a restore that invents buckets is rarely wanted.\n"
+                        "  force_updates  OVERWRITE documents the target holds a "
+                        "NEWER copy of. This is the flag that turns a restore "
+                        "into data loss on a live cluster. Omit unless you mean "
+                        "it.\n"
+                        "  auto_remove_collections  drop scopes and collections "
+                        "the backup records as deleted. Off by default, so a "
+                        "restore does not silently remove what the target has.\n"
+                        "  enable_bucket_config  restore bucket SETTINGS as well "
+                        "as data, overwriting the target bucket's configuration.\n"
+                        "  replace_ttl  'all' | 'none' | 'expired' -- reset expiry "
+                        "on restored documents. 'all' rewrites the expiry of every "
+                        "document, including ones that had none.\n"
+                        "  replace_ttl_with  the new expiry: an RFC3339 time, or "
+                        "'0' for no expiry. Required when replace_ttl is not "
+                        "'none'.\n"
+                        "  map_data  remap on restore, e.g. 'mcptest=mcptest_copy'\n"
+                        "  filter_keys, filter_values  regular expressions\n"
+                        "  start, end  bound which backups in the repository\n"
+                        "  disable_data, disable_analytics, disable_eventing, "
+                        "disable_ft, disable_gsi_indexes, disable_views  skip a "
+                        "service\n"
+                        "Returns a task name; the restore is ASYNCHRONOUS."
                     ),
                 },
                 "confirm": {"type": "boolean"},

@@ -443,11 +443,31 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # explicitly asked for an incremental one.
             if args.get("full_backup") is not None:
                 payload["full_backup"] = arg_truthy(args["full_backup"])
+            # ALWAYS SEND A BODY, EVEN AN EMPTY ONE.
+            #
+            # This read `data=payload if payload else None`, so the common call --
+            # admin_backup_run with only a repository_id -- sent NO body, and the
+            # Backup service refused it:
+            #
+            #   400 {'status': 400, 'msg': 'invalid request body', 'extras': 'EOF'}
+            #
+            # 'EOF' is the service saying it began decoding a JSON body and found
+            # the request empty. `{}` is a valid request; absent is not.
+            #
+            # MEASURED 2026-09-13, the first time this tool was ever EXECUTED. It
+            # had only ever been exercised through the confirmation gate and the
+            # dry-run preview, both of which stop before the HTTP call -- so a
+            # tool that could never have worked passed every check the surface
+            # harness makes, for as long as the harness has existed. A write tool
+            # is not verified until a real one has been performed.
+            #
+            # admin_request sends `data={}` as the body `{}` because it tests
+            # `data is not None`, so passing the empty dict is sufficient here.
             return ok(
                 admin_request(
                     "POST",
                     _repository_path(args, suffix="/backup"),
-                    data=payload if payload else None,
+                    data=payload,
                     json_body=True,
                 )
             )

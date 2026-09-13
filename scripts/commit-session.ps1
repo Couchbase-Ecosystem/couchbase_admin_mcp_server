@@ -217,7 +217,11 @@ starts.
                   'tests/test_capella.py', 'tests/test_capella_guardrail_hardening.py',
                   'tests/test_mcp_status.py', 'tests/test_verify_mcp_surface.py',
                   'tests/test_server_dispatch.py', 'tests/test_transport_edge.py',
-                  'tests/test_dry_run.py', 'tests/test_gui_frontend.py')
+                  'tests/test_dry_run.py', 'tests/test_gui_frontend.py',
+                  # Belongs here rather than with the tooling: it is a test that
+                  # fails when a future operation ships guarded on the wrong
+                  # cluster, and it checks its own detector is not vacuous first.
+                  'tests/test_guarded_write_target.py')
         Message = @'
 test: close the gaps where a green run proved nothing
 

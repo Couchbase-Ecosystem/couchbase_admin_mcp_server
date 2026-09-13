@@ -203,10 +203,11 @@ DESTINATION CLUSTER URL with `user` and `password` beside it. A model following
 the shipped description would have built a body the service rejects. The schema
 is corrected from what was accepted.
 
-**`capella_backup_restore` has still never been executed.** Not same-cluster,
-not cross-cluster. It is destructive and the only Capella cluster available
-holds `harvester` and `supportal` alongside `travel-sample`, so it needs a
-deliberate decision rather than a spare five minutes.
+**`capella_backup_restore` was PERFORMED cross-cluster on 2026-09-13.** 202
+Accepted, Bride-of-Frankenstein -> ashmahadevsatyanarayanan, bucket
+`travel-sample`, backup `bfacf78e-...` (full, 63,349 items), via
+`scripts/capella_cross_cluster_restore.py --perform`. It took three attempts and
+each rejection was a finding — see "Cross-cluster restore" below.
 
 ### The 244/244 target was set and not met
 
@@ -236,23 +237,60 @@ body.
   * `deploy/docker-compose.*.yml` — never brought up. The container verification
     uses `docker run` probes, which exercise the image but not the compose files.
 
-### Cross-cluster restore: DESIGNED IN, UNVERIFIED
+### Cross-cluster restore: PERFORMED 2026-09-13
 
 `capella_backup_restore` takes `sourceClusterID` and `targetClusterID` as
 SEPARATE required fields, which is a shape that only makes sense if they can
-differ, and the field's own description says so. Documented constraints: same
-organization, same cloud provider (Azure to Azure fine, Azure to AWS not).
-Indexes come back DEFERRED, so a restored target is not performance-comparable
-to its source until builds complete.
+differ. It is now exercised end to end: 202 Accepted, a real restore from one
+Capella cluster into another, driven through an MCP client.
 
-**It has never been executed.** The Field Engineering organization has ONE
-cluster, so there is nowhere to restore into. This is not a code gap and not
-something a test can close -- it needs a second Capella cluster on the same
-provider to exist.
+Getting there cost three attempts, and each rejection corrected something this
+file or the registry had asserted without measuring:
 
-Do not describe cross-cluster restore to a customer as verified. The path is
-confirmed (405 via OPTIONS, plus the published reference), the body is the
-reference's rather than an observation, and the operation has never run.
+  1. **422 code 5026** — "The source cluster ID is invalid. Please ensure the
+     source cluster id matches the id in the path." `spec.py` said the path
+     names the TARGET. It names the SOURCE. A model following the shipped tool
+     description would build a request that cannot succeed, and a customer
+     hitting it would reasonably conclude cross-cluster restore does not work.
+     Capella has a dedicated error code for this confusion, which is evidence
+     the confusion is common.
+
+         path cluster_id  == sourceClusterID   owns the backup, read only
+         targetClusterID  (body only)          OVERWRITTEN
+
+     Consequence beyond the wrong sentence: the ownership guardrail in
+     `handlers/capella/__init__.py` fetches the PATH cluster, so on this one
+     operation it guarded the cluster being READ and left the cluster being
+     OVERWRITTEN unchecked. `CAPELLA_PROTECTED_CLUSTERS` could name a production
+     cluster and a restore could still overwrite it. Fixed: check 2a guards
+     `body.targetClusterID` and refuses if it is absent.
+
+  2. **422 code 5022** — "Unable to target a restore for a cluster that is not
+     in a healthy state." The target was in `peering` while an XDCR replication
+     established its network path. A cluster leaves `healthy` for ordinary
+     reasons long after provisioning, so "it deployed fine" is a different
+     claim. Both ends are now preflighted.
+
+  3. **The target bucket must already exist**, with the same name AND the same
+     conflict resolution as the source. The v4 restore body has no auto-create
+     flag — unlike the self-managed Backup Service body, which has
+     `auto_create_buckets`. The script creates it with
+     `capella_bucket_create`, copying `storageBackend`, quota, replicas and
+     conflict resolution off the SOURCE bucket rather than using defaults.
+
+None of this was visible from `[LIVE 405]`. An OPTIONS probe matched the route
+and said nothing about the path semantics, the preconditions, or the body —
+which is the standing argument in this repository for why a path-only
+verification is not a verified operation, stated here with three counts of
+evidence.
+
+**One honest limit on the evidence.** A two-way XDCR replication had been
+running before the restore and had already moved ~31,592 documents into the
+target bucket, so a raw item count does not by itself separate "arrived by
+restore" from "arrived by replication". The replication was DELETED before the
+restore was issued, so anything the count gains from here is attributable to
+the restore and nothing else is writing. Say it that way rather than quoting a
+final count as if it proved the restore alone.
 
 - `admin_backup_*` — all four candidate paths 404 with the Backup service
   present. **Not guessed.** Unresolved and recorded as unresolved.

@@ -196,6 +196,17 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
     ("capella_buckets_list", "bucket_id", "id"),
     ("capella_database_credentials_list", "user_id", "id"),
     ("capella_app_services_list", "app_service_id", "id"),
+    # Both of these hang off app_service_id, so they must come AFTER it: the
+    # loop resolves in table order and a tool whose arguments are not yet in the
+    # context is reported "not yet resolvable" and never retried.
+    #
+    # Their absence was worth 14 SKIPPED results reading "no value for
+    # app_service_id, app_endpoint_name" -- which named the right cause for the
+    # first id and the wrong one for the second. app_endpoint_name was never
+    # discovered by anything, so it would have stayed missing even once an App
+    # Service existed.
+    ("capella_app_endpoints_list", "app_endpoint_name", ("name", "id")),
+    ("capella_app_service_admin_users_list", "admin_user_id", "id"),
     ("capella_allowed_cidrs_list", "allowed_cidr_id", "id"),
     ("capella_backups_list", "backup_id", "id"),
     ("capella_events_list", "event_id", "id"),
@@ -224,6 +235,26 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
     ("admin_group_list", "group_name", "id"),
     ("admin_backup_repository_list", "repository_id", "id"),
     ("admin_eventing_list", "function_name", "appname"),
+    # DISCOVERABLE ALL ALONG, AND NOTHING WAS LOOKING.
+    #
+    # Eight write tools skipped for want of `otpNode` or a server-group `uuid`,
+    # reported as "no otpNode exists on this cluster" -- which is false. Every
+    # cluster has nodes, and admin_node_list was already being CALLED in the
+    # read phase and its rows thrown away. Same for admin_server_groups_get.
+    #
+    # This is the third kind of SKIPPED, distinct from the two the write phase
+    # already separates: not a missing object, and not an unsynthesisable body,
+    # but an id sitting in a response the run had already received. The skip
+    # message named the environment when the gap was in this table.
+    #
+    # NOTE what this makes testable: admin_node_remove, admin_failover_hard,
+    # admin_failover_graceful and admin_recovery_type_set all take an otpNode.
+    # They are DESTRUCTIVE and the write phase runs under CB_ADMIN_DRY_RUN with
+    # the confirmation gate in front, so they are previewed and never performed
+    # -- but it is worth saying out loud that this line is what lets a failover
+    # tool be aimed at a real node id.
+    ("admin_node_list", "otpNode", "otpNode"),
+    ("admin_server_groups_get", "uuid", "uuid"),
 )
 
 #: Discovery entries that must NOT be called during the discovery loop, only
@@ -372,6 +403,28 @@ def _is_error(payload: Any) -> bool:
     would mislabel a partially successful call as a denial.
     """
     return isinstance(payload, dict) and payload.get("_is_error") is True
+
+
+#: Responses whose rows cannot be found by "the one list in the envelope".
+#:
+#: `_items` picks the single list in a dict and returns nothing when there is
+#: more than one -- deliberately, because guessing between two lists is how a
+#: harness silently reports the wrong object. /pools/nodes carries BOTH `nodes`
+#: and `alerts`, so it needs the key naming rather than inferring. That is why
+#: admin_node_list reported "no rows" on a cluster that plainly has a node.
+_ENVELOPE_KEY: dict[str, str] = {
+    "admin_node_list": "nodes",
+    "admin_server_groups_get": "groups",
+}
+
+#: Ids that are not a field but a SUBSTRING of one.
+#:
+#: A server group carries no `uuid`; its id is the last segment of its `uri`
+#: (/pools/default/serverGroups/<uuid>), which admin_server_group_delete and
+#: admin_server_group_rename both require. Reading it out is not a guess -- the
+#: uri is the object's canonical address -- but it is not a field lookup either,
+#: so it is stated here rather than hidden behind a field name.
+_FIELD_FROM_URI: frozenset[str] = frozenset({"admin_server_groups_get"})
 
 
 def _items(payload: Any) -> list:
@@ -1053,10 +1106,24 @@ class Run:
         self.say("== discovery ==")
         advertised = {t.name for t in self.advertised}
 
-        env_org = os.environ.get("CAPELLA_ORG_ID", "").strip()
-        if env_org:
-            self.context["organization_id"] = env_org
-            self.say(f"  organization_id from CAPELLA_ORG_ID: {env_org}")
+        # Seed every id the environment pins, not just the organization.
+        #
+        # CAPELLA_ORG_ID was honoured and the other two were not, which was
+        # harmless while the organization held ONE cluster and became the whole
+        # run the moment it held two: `_choose` takes the first row for anything
+        # that is not a bucket, so a second cluster silently moved the target.
+        # A run against a cluster with no buckets, no backups and no app services
+        # reports 134 SKIPPED and looks like a collapse in coverage when nothing
+        # about the server changed.
+        for env_name, key in (
+            ("CAPELLA_ORG_ID", "organization_id"),
+            ("CAPELLA_PROJECT_ID", "project_id"),
+            ("CAPELLA_CLUSTER_ID", "cluster_id"),
+        ):
+            pinned = os.environ.get(env_name, "").strip()
+            if pinned:
+                self.context[key] = pinned
+                self.say(f"  {key} from {env_name}: {pinned}")
 
         for tool, key, item_field in _DISCOVERY:
             if tool not in advertised or key in self.context_for(tool):
@@ -1079,7 +1146,18 @@ class Run:
             )
             if result.outcome not in _SUCCESSFUL:
                 continue
-            rows = [_unwrap(row) for row in _items(payload)]
+            envelope = _ENVELOPE_KEY.get(tool)
+            if envelope and isinstance(payload, dict) and isinstance(
+                payload.get(envelope), list
+            ):
+                raw_rows = payload[envelope]
+            else:
+                raw_rows = _items(payload)
+            rows = [_unwrap(row) for row in raw_rows]
+            if tool in _FIELD_FROM_URI:
+                for row in rows:
+                    if isinstance(row, dict) and row.get("uri") and not row.get(key):
+                        row[key] = str(row["uri"]).rstrip("/").rsplit("/", 1)[-1]
             chosen = self._choose(tool, rows, item_field)
             if chosen is None:
                 self.say(f"  {tool:<46} {self._nothing_to_select(rows, item_field)}")
@@ -1106,7 +1184,89 @@ class Run:
         # keyspace is three NAMES, while everything else in v4 addresses a bucket
         # by an opaque id.
         await self._discover_keyspace(session, advertised)
+        self._seed_derived_context()
         self.say()
+
+    def _seed_derived_context(self) -> None:
+        """Fill the arguments that are LITERALS, not discovered objects.
+
+        These were the other kind of SKIPPED. "no value for statement" does not
+        mean the cluster is missing something — there is no object called a
+        statement. It means this script never invented one, and every run
+        reported a dozen tools as untested for want of values that cost nothing
+        to produce. That is a gap in the CHECKER reported as a gap in the
+        ENVIRONMENT, which is the distinction the write phase is careful about
+        and discovery was not.
+
+        Each value below is chosen to exercise the tool without depending on
+        anything: `SELECT 1` is valid SQL++ that names no keyspace, so it works
+        on a cluster with no buckets and cannot be broken by whatever the sample
+        data happens to look like. Nothing here is discovered, so nothing here
+        can be stale.
+        """
+        cluster = self.contexts[CLUSTER_SIDE]
+        capella = self.contexts[CAPELLA_SIDE]
+
+        # A statement that names no keyspace. cb_explain_query and
+        # cb_index_advisor both parse before they plan, so this reaches the
+        # planner without needing a bucket to exist.
+        #
+        # TYPES MATTER HERE. `statement` is a string and `statements` is an
+        # ARRAY of strings; seeding both as strings would have replaced "no value
+        # for statements" with a schema-validation failure upstream of the
+        # handler -- a skip turned into a false defect, which is worse than the
+        # skip. The shapes below were read off the shipped inputSchemas, not
+        # assumed from the names.
+        cluster.setdefault("statement", "SELECT 1")
+        cluster.setdefault("statements", ["SELECT 1"])
+
+        # admin_stats_single takes a metric NAME. admin_stats_multi takes a list
+        # of ns_server range-query objects, each carrying Prometheus label
+        # matchers -- a different shape entirely despite the similar argument
+        # name. kv_curr_items is exported by every Data node.
+        cluster.setdefault("metric_name", "kv_curr_items")
+        cluster.setdefault("metrics", [
+            {"metric": [{"label": "name", "value": "kv_curr_items"}], "step": 60}
+        ])
+
+        # cb_mcp_get_tool_info describes a tool, and this script is holding the
+        # list of every advertised tool. Prefer one that is always present.
+        known = sorted(t.name for t in self.advertised)
+        if known:
+            preferred = "cb_mcp_status" if "cb_mcp_status" in known else known[0]
+            cluster.setdefault("tool_name", preferred)
+            capella.setdefault("tool_name", preferred)
+
+        # capella_fixture_list walks a directory on THIS machine, so the only
+        # sensible root is the repository the server was started from.
+        capella.setdefault("root_path", REPO_ROOT)
+
+        # ONE URL SLOT, TWO PLACEHOLDER NAMES.
+        #
+        #   .../appEndpoints/{app_endpoint_name}/cors
+        #   .../appEndpoints/{app_endpoint_keyspace}/accessControlFunction
+        #
+        # Same position, same value, different spelling — so discovering one
+        # leaves the other unresolved and two tools skip for want of an argument
+        # the run is already holding. Seeded from the discovered endpoint rather
+        # than invented, so if no App Endpoint exists this stays missing and the
+        # skip remains honest.
+        #
+        # The registry should probably settle on one placeholder; until it does,
+        # this is the harness refusing to report a spelling difference as an
+        # absent object.
+        endpoint = capella.get("app_endpoint_name")
+        if endpoint:
+            capella.setdefault("app_endpoint_keyspace", endpoint)
+
+        seeded = {
+            "statement", "statements", "metric_name", "metrics", "tool_name",
+            "root_path",
+        }
+        if capella.get("app_endpoint_keyspace"):
+            seeded.add("app_endpoint_keyspace")
+        self.say(f"  seeded (literals, not discovered)             "
+                 f"{', '.join(sorted(seeded))}")
 
     def _choose(self, tool: str, rows: list, item_field: str) -> str | None:
         """Pick one row.
@@ -1128,6 +1288,31 @@ class Run:
         ]
         if not candidates:
             return None
+
+        if tool == "capella_clusters_list":
+            # The operator knows this cluster as a name off the console or as a
+            # hostname in a connection string; v4 knows it as a uuid. Accept any
+            # of the three rather than making someone look it up, and REFUSE on
+            # an unmatched name instead of falling through to row zero -- falling
+            # through is how a run ends up pointed at the wrong cluster while
+            # printing a cluster id that looks deliberate.
+            wanted = (getattr(self.args, "capella_cluster", "") or "").strip()
+            if wanted:
+                needle = wanted.lower()
+                named = [
+                    r for r in candidates
+                    if any(needle in str(r.get(f, "")).lower()
+                           for f in ("id", "name", "connectionString"))
+                ]
+                if len(named) == 1:
+                    return value_of(named[0])
+                self.note(
+                    f"--capella-cluster {wanted!r} matched {len(named)} of "
+                    f"{len(candidates)} cluster(s); discovery did NOT select one. "
+                    "Every Capella read below is unresolved rather than pointed "
+                    "at an arbitrary cluster."
+                )
+                return None
 
         if tool in _BUCKET_TOOLS:
             wanted = getattr(self.args, "bucket", "") or ""
@@ -1762,6 +1947,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Prefix for every value this script invents for a request body. "
             "Nothing generated can collide with a real object, and a prefixed "
             "name in a transcript is obviously synthetic six weeks later."
+        ),
+    )
+    parser.add_argument(
+        "--capella-cluster",
+        default="",
+        metavar="ID|NAME|HOST",
+        help=(
+            "Which Capella cluster to point the run at, by id, name, or a "
+            "fragment of its connection string. Required in substance once an "
+            "organization holds more than one cluster: without it discovery "
+            "takes the first row, which is arbitrary. CAPELLA_CLUSTER_ID pins "
+            "the same thing from the environment."
         ),
     )
     parser.add_argument("--timeout", type=float, default=30.0)

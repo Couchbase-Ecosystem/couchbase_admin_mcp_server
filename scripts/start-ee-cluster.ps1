@@ -89,10 +89,43 @@ param(
     [int] $FtsRam       = 256,
     [int] $EventingRam  = 256,
 
-    # Host ports are CONTAINER port + this. 8091 was already allocated by the
-    # cluster this workstation was using, and a fresh cluster must not fight it
-    # for a port. 0 means publish 1:1.
-    [int] $PortOffset = 30000,
+    # Host ports are CONTAINER port + this. 0 means publish 1:1.
+    #
+    # DEFAULT CHANGED TO 0 ON 2026-09-13, AND THE REASON IS THE BACKUP SERVICE.
+    #
+    # A non-zero offset forces an external alternate address, because the host
+    # cannot otherwise reach a remapped port. The Backup service then reads
+    # /pools/default/nodeServices, PICKS THE EXTERNAL ALTERNATE ADDRESS as its
+    # own cluster endpoint, and asks cbauth for credentials for that hostport --
+    # which cbauth does not know, because cbauth knows the node by its real
+    # identity. Measured from the service's own log:
+    #
+    #   (REST) Dispatching request to '.../pools/default/nodeServices'   (200)
+    #   (REST) Failed to get credentials due to error: Unable to find given
+    #          hostport in cbauth database: `127.0.0.1:38091'
+    #   (Main) Failed to run node  err="could not create REST client: ..."
+    #
+    # It then EXITS AND IS RESTARTED, on a ~7.5 second cycle, forever. Nothing
+    # listens on 8097, so every admin_backup_* call through /_p/backup answers
+    # 500 "Unexpected server error" and every backup tool looks broken.
+    #
+    # So the offset is no longer the default. Pass one only when 8091 is
+    # genuinely taken, and accept that the Backup service will not run.
+    [int] $PortOffset = 0,
+
+    # Bind-mount a HOST directory as the Backup service's archive, so backups
+    # land on a real drive instead of inside a container that gets rm -f'd.
+    #
+    # Empty means the archive stays inside the container at the path below, and
+    # a `docker rm` destroys every backup in it. That is fine for verifying the
+    # tools and wrong for anything you want to keep.
+    #
+    # WINDOWS CAVEAT, stated because it will bite silently: a Docker Desktop
+    # bind mount does not honour chown. The archive step below tries anyway and
+    # reports what happened rather than assuming; if the Backup service still
+    # answers "Location not accessible by all nodes", the mount is the reason
+    # and a named volume plus scripts/fetch-ee-backup.ps1 is the way round it.
+    [string] $BackupArchiveHost = '',
 
     [switch] $LoadSample,
     [switch] $WriteEnvFile,
@@ -104,7 +137,13 @@ $ErrorActionPreference = 'Stop'
 # The management port AS SEEN FROM THE HOST. Everything this script does from
 # the outside goes here; everything it does with docker exec uses 8091, because
 # inside the container the ports are unshifted.
+#: Where the Backup service keeps repositories INSIDE the container. Bind-mount
+#: a host directory here with -BackupArchiveHost to keep the backups.
+$ArchivePath = '/opt/couchbase/var/lib/couchbase/backup-archive'
 $MgmtHost = 8091 + $PortOffset
+#: The node's own name. Must be an FQDN (ns_server refuses short names) and must
+#: resolve on the container network, which "<container>.<network>" does.
+$NodeFqdn = "$Name.$Network"
 $KvHost   = 11210 + $PortOffset
 
 function Say([string] $Text) { Write-Host $Text }
@@ -157,9 +196,23 @@ if ($existing -ne $Network) {
 }
 
 Step "container $Name"
-$running = docker ps -a --filter "name=^$Name$" --format '{{.Names}}'
-if ($running -eq $Name) {
-    Ok "already exists — leaving it alone (docker rm -f $Name to start over)"
+# EXISTS AND RUNNING ARE DIFFERENT QUESTIONS, and asking only the first one
+# cost 180 seconds on 2026-09-13. A `docker run` that fails on a port bind still
+# leaves the container BEHIND in state "created" -- it exists, it has never
+# started, and nothing will ever answer on its ports. This branch saw it, said
+# "leaving it alone", and the next step waited out its full timeout against a
+# container that was not running. `docker ps -a` lists those; `docker ps` does
+# not, so ask for the state rather than for the name.
+$state = (docker ps -a --filter "name=^$Name$" --format '{{.State}}') -join ''
+if ($state -eq 'running') {
+    Ok "already running — leaving it alone (docker rm -f $Name to start over)"
+} elseif ($state) {
+    Say "   container exists in state '$state', not running — starting it"
+    & docker start $Name | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Die "could not start the existing container. It was probably created by a docker run that failed on a port bind, and its port mapping is fixed at creation time: docker rm -f $Name and re-run."
+    }
+    Ok "started"
 } else {
     $ports = @()
     foreach ($c in @(8091,8092,8093,8094,8095,8096,8097,9102,11207,11210,
@@ -167,7 +220,18 @@ if ($running -eq $Name) {
         $ports += '-p'
         $ports += "$($c + $PortOffset):$c"
     }
-    $runArgs = @('run','-d','--name',$Name,'--network',$Network) + $ports + @($Image)
+    $mounts = @()
+    if ($BackupArchiveHost) {
+        if (-not (Test-Path $BackupArchiveHost)) {
+            New-Item -ItemType Directory -Path $BackupArchiveHost -Force | Out-Null
+        }
+        # Resolve to a full path: docker rejects a relative one, and the error
+        # it gives names the string it was handed, not the reason.
+        $full = (Resolve-Path $BackupArchiveHost).Path
+        $mounts = @('-v', "${full}:$ArchivePath")
+        Say "   backup archive bind-mounted from $full"
+    }
+    $runArgs = @('run','-d','--name',$Name,'--network',$Network) + $ports + $mounts + @($Image)
     & docker @runArgs | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Die "docker run failed. A port is probably already bound — check with: netstat -ano | findstr $MgmtHost"
@@ -192,6 +256,74 @@ while ((Get-Date) -lt $deadline) {
 }
 if (-not $ready) { Die "ns_server did not answer on $MgmtHost within $ReadyTimeoutSeconds s. docker logs $Name" }
 Ok "ns_server answers on $MgmtHost"
+
+if ($PortOffset -ne 0) {
+Step "name the node after its container"
+# WHY THIS MUST HAPPEN BEFORE ANYTHING ELSE
+#
+# A node initialised through 127.0.0.1 registers ITSELF as 127.0.0.1. Set an
+# external alternate address of 127.0.0.1 on top of that and the two maps become
+# indistinguishable: any client whose bootstrap host is 127.0.0.1 -- which
+# includes every service running INSIDE the container -- matches the external
+# entry and follows it to a port that exists only on the host.
+#
+# Measured twice before it was understood:
+#
+#   cbimport  -> "dial tcp 127.0.0.1:38091: connect: connection refused"
+#   Backup    -> "Unable to find given hostport in cbauth database:
+#                 `127.0.0.1:38091'" while creating a repository
+#
+# Both were read as client problems and worked around. They were the same
+# problem, and it is this one.
+#
+# CORRECTED 2026-09-13, AFTER THE RENAME SHIPPED AND DID NOT FIX IT.
+#
+# The paragraph below claimed the rename fixes the Backup failure "at the root".
+# It does not. With the node renamed AND an external alternate address set, the
+# Backup service still chose 127.0.0.1:38091 out of nodeServices and still died
+# on `Unable to find given hostport in cbauth database'. The rename fixes
+# cbimport, which bootstraps from a host the alternate map can shadow; it does
+# nothing for a service that reads the alternate map directly. The only fix for
+# Backup is to not set an external alternate address at all -- see -PortOffset.
+#
+# Naming the node after its container fixes it at the root: internal clients
+# resolve the container on the docker network, host clients use the 127.0.0.1
+# alternate map, and neither can be mistaken for the other. Rename FIRST --
+# it is only permitted while the node is uninitialised.
+#
+# IT MUST BE AN FQDN. `cb-mcp-ee` alone is refused:
+#
+#     Requested hostname "cb-mcp-ee" is not allowed: Short names are not
+#     allowed. Please use a Fully Qualified Domain Name.
+#
+# `<container>.<network>` satisfies that AND is what Docker's embedded DNS
+# already resolves on a user-defined network, so the name is both acceptable to
+# ns_server and actually reachable -- which a made-up domain would not be.
+try {
+    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$MgmtHost/node/controller/rename" `
+        -ContentType 'application/x-www-form-urlencoded' `
+        -Body (ConvertTo-FormBody @{ hostname = $NodeFqdn }) | Out-Null
+    Ok "node hostname is now '$NodeFqdn'"
+} catch {
+    $detail = Read-HttpError $_
+    if ($detail -match 'already|initialized') {
+        Ok "node already named — continuing"
+    } else {
+        # Not fatal on its own: the cluster still works for host clients. But
+        # say plainly what will break, rather than letting it surface later as
+        # an unrelated-looking 500 from the Backup service.
+        Say "   NOTE: could not rename the node: $detail"
+        Say "         In-container services (Backup, cbimport) may follow the"
+        Say "         external alternate address and fail to authenticate."
+    }
+}
+
+} else {
+    Step "node name"
+    Say "   left as 127.0.0.1 - ports are published 1:1, so no alternate"
+    Say "   address is needed and cbauth, the host and in-container services"
+    Say "   all agree on one identity. This is what lets Backup run."
+}
 
 Step "cluster-init"
 # THE GRANULAR SEQUENCE, NOT cluster-init AND NOT /clusterInit.
@@ -263,27 +395,109 @@ Init-Post '/settings/web' @{
     port     = 'SAME'
 } 'administrator credentials set' | Out-Null
 
-Step "which services actually came up"
-# The whole reason for the paragraph above. Ask, and say so either way.
-try {
-    $svc = (Invoke-RestMethod -Uri "http://127.0.0.1:$MgmtHost/pools/default/nodeServices" `
-        -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String(
-            [Text.Encoding]::ASCII.GetBytes("$($Username):$($Password)")) }
-        ).nodesExt[0].services.PSObject.Properties.Name
-    Say "   $($svc -join ' ')"
-    if ($svc -contains 'backupAPI') {
-        Ok "the Backup service is running — admin_backup_* are reachable"
-    } elseif ($Services -match 'backup') {
-        Say "   NOTE: 'backup' was requested and backupAPI is NOT present."
-        Say "         admin_backup_repository_list and admin_backup_plans_list will"
-        Say "         answer 404 'Service backup not running on this node'. That is"
-        Say "         the ENVIRONMENT, not those tools -- they were verified against"
-        Say "         a live Backup service on 2026-09-12."
-    }
-} catch {
-    Say "   could not read nodeServices: $(Read-HttpError $_)"
+# Basic auth for every authenticated call below. DEFINED HERE, not further
+# down: it used to be declared inside the alternate-address step, which is now
+# conditional, so anything above that step referencing $auth got an empty
+# string and a 401.
+$pair = "$($Username):$($Password)"
+$auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
+
+Step "waiting for every requested service to register"
+# THIS WAITS. IT USED TO ONLY LOOK, AND ONLY INSIDE THE ALTERNATE-ADDRESS STEP.
+#
+# setupServices returns 200 the moment the services are ASSIGNED. They register
+# their ports seconds to a minute later, and until they do, ns_server answers
+# every proxied call with 404 "Service <name> not running on this node".
+#
+# Measured 2026-09-13: with -PortOffset 0 the wait was skipped entirely, because
+# it lived inside the alternate-address block and that block is conditional. The
+# fixture script ran immediately afterwards and got
+#
+#     404 on PUT /_p/fts/api/index/mcptest-fts: Service fts not running on
+#     this node
+#
+# which reads exactly like the proxy-prefix defect that was fixed in
+# handlers/search_admin.py -- a correct tool, a correct path, and a service that
+# was not there yet. A readiness check that is skipped in the common case is
+# worse than none, because its absence is invisible.
+$expectedByService = @{
+    'kv'       = 'kv'
+    'data'     = 'kv'
+    'index'    = 'indexHttp'
+    'n1ql'     = 'n1ql'
+    'query'    = 'n1ql'
+    'fts'      = 'fts'
+    'eventing' = 'eventingAdminPort'
+    'backup'   = 'backupAPI'
+    'cbas'     = 'cbas'
+}
+$wantPorts = @('mgmt')
+foreach ($svc in ($Services -split ',')) {
+    $svc = $svc.Trim()
+    if ($expectedByService.ContainsKey($svc)) { $wantPorts += $expectedByService[$svc] }
+}
+$wantPorts = $wantPorts | Select-Object -Unique
+
+$svc = @()
+$deadline = (Get-Date).AddSeconds(180)
+while ((Get-Date) -lt $deadline) {
+    try {
+        $svc = @((Invoke-RestMethod -Uri "http://127.0.0.1:$MgmtHost/pools/default/nodeServices" `
+            -Headers @{ Authorization = "Basic $auth" }
+            ).nodesExt[0].services.PSObject.Properties.Name)
+        if (@($wantPorts | Where-Object { $svc -notcontains $_ }).Count -eq 0) { break }
+    } catch { $svc = @() }
+    Start-Sleep -Seconds 3
+}
+Say "   $($svc -join ' ')"
+$late = @($wantPorts | Where-Object { $svc -notcontains $_ })
+if ($late.Count -eq 0) {
+    Ok "every requested service has registered a port"
+} else {
+    # Do NOT say the service is absent and the tools are fine. On 2026-09-13
+    # backupAPI was in nodeServices the whole time while the Backup service
+    # crash-looped on cbauth: "not registered yet" and "registered and dying"
+    # are different states with the same symptom. Report the observation and
+    # name the log that tells them apart.
+    Say "   NOTE: these never registered a port within 180 s:"
+    Say "         $($late -join ', ')"
+    Say "         Tools for them will answer 404 'Service <name> not running on"
+    Say "         this node'. If one answers 500 instead, it IS running and"
+    Say "         failing -- read its log under"
+    Say "         /opt/couchbase/var/lib/couchbase/logs/ before suspecting the tool."
 }
 
+Step "backup archive directory"
+# OWNERSHIP, not just existence. The Backup service runs as `couchbase`; a
+# directory made with `docker exec mkdir` is owned by root, and the service
+# fails the repository create with a message that names the ARCHIVE and not the
+# permission:
+#
+#     500 'Location not accessible by all nodes'
+#     extras: node <uuid> cannot access location /opt/.../backup-archive:
+#             mkdir .../.cbbs-<hash>: permission denied
+#
+# Creating it here, correctly, removes a manual step that was easy to get wrong
+# in exactly this invisible way.
+& docker exec -u 0 $Name bash -c "mkdir -p '$ArchivePath' && chown couchbase:couchbase '$ArchivePath' 2>/dev/null; ls -ld '$ArchivePath'"
+if ($LASTEXITCODE -ne 0) {
+    Say "   note: could not prepare $ArchivePath — create it inside the"
+    Say "         container, owned by couchbase, before the first repository."
+} elseif ($BackupArchiveHost) {
+    # chown is a no-op on a Docker Desktop bind mount, so do not claim it
+    # worked. The ls -ld above is the evidence; the repository create is the
+    # real test and it happens a few seconds from now either way.
+    Ok "$ArchivePath is bind-mounted from the host (see the ownership above)"
+    Say "   if the first repository create answers 'Location not accessible by"
+    Say "   all nodes', the mount is why -- re-run without -BackupArchiveHost"
+    Say "   and use scripts/fetch-ee-backup.ps1 to copy the archive out."
+} else {
+    Ok "$ArchivePath exists and is owned by couchbase"
+    Say "   NOTE: it lives INSIDE the container. docker rm destroys it."
+    Say "         Pass -BackupArchiveHost <dir> to keep backups on a drive."
+}
+
+if ($PortOffset -ne 0) {
 Step "external alternate address"
 # WHY THIS READS THE SERVER RATHER THAN NAMING PORTS ITSELF
 # ---------------------------------------------------------
@@ -298,8 +512,6 @@ Step "external alternate address"
 #
 # One PUT carrying everything -- the docs are explicit that each PUT deletes all
 # previous alternate settings, so an incremental call silently drops the rest.
-$pair = "$($Username):$($Password)"
-$auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
 
 # WAIT FOR THE SERVICES TO REGISTER FIRST.
 #
@@ -462,6 +674,13 @@ try {
 } catch {
     Die "could not read the alternate address back: $(Read-HttpError $_)"
 }
+} else {
+    Step "external alternate address"
+    Say "   NOT SET, deliberately. Ports are 1:1, so 127.0.0.1:<port> already"
+    Say "   reaches this node, and an alternate address here would break the"
+    Say "   Backup service - it reads the alternate map, dials the address it"
+    Say "   finds there, and cbauth does not recognise that hostport."
+}
 
 if ($LoadSample) {
     Step "travel-sample"
@@ -567,8 +786,17 @@ Say " The cluster is up. Set these in the shell that runs the MCP server."
 Say " The password is the one you passed; it is deliberately not echoed."
 Say "======================================================================"
 Say ""
-Say "  `$env:CB_CONNECTION_STRING = 'couchbase://127.0.0.1:${KvHost}?network=external'"
-Say "  `$env:CB_ADMIN_HOST        = 'http://127.0.0.1:${MgmtHost}'"
+# CB_MGMT_PORT, NOT CB_ADMIN_HOST. This block named the wrong variable for most
+# of 2026-09-13. _admin_url() derives the REST URL from CB_CONNECTION_STRING and
+# DISCARDS the SDK port, assuming 8091 unless CB_MGMT_PORT says otherwise -- so
+# CB_ADMIN_HOST was ignored, every REST call went to whatever was on 8091 with
+# these credentials, and the surface run recorded 43 UPSTREAM 401s.
+if ($PortOffset -eq 0) {
+    Say "  `$env:CB_CONNECTION_STRING = 'couchbase://127.0.0.1'"
+} else {
+    Say "  `$env:CB_CONNECTION_STRING = 'couchbase://127.0.0.1:${KvHost}?network=external'"
+    Say "  `$env:CB_MGMT_PORT         = '${MgmtHost}'"
+}
 Say "  `$env:CB_USERNAME          = '$Username'"
 Say "  `$env:CB_PASSWORD          = '<the password you passed>'"
 Say "  `$env:CB_BUCKET            = 'travel-sample'"

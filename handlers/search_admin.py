@@ -31,6 +31,22 @@ Found by scripts/verify_mcp_surface.py, which called these tools through a real
 MCP client for the first time. No unit test could have caught it: they all mock
 admin_request and assert on the path string that was passed, which is precisely
 the string that was wrong.
+
+PER-INDEX STATS IS A DIFFERENT PATH
+===================================
+Fixing the prefix made eight of the nine tools answer. `admin_fts_index_stats`
+still returned 404 {"error": "Page not found"} because the path itself was also
+wrong: Search does not hang stats off the index resource. `/api/index/<name>`
+has children `count`, `ingestControl`, `planFreezeControl`, `queryControl` and
+`query` — but NOT `stats`. Per-index statistics live under the stats resource:
+
+    GET /_p/fts/api/index/<name>/stats   404   {"error":"Page not found"}
+    GET /_p/fts/api/stats/index/<name>   200   {"feeds":{...},"pindexes":{...}}
+
+Same defect class as the prefix bug and it survived the prefix fix for the same
+reason: the unit tests assert the path string the handler builds, so a handler
+that builds a path no server implements passes every one of them. Only a live
+call through the MCP client finds it.
 """
 
 from __future__ import annotations
@@ -215,8 +231,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("DELETE", f"{_FTS}/api/index/{ix}"))
 
         if name == "admin_fts_index_stats":
+            # NOT /api/index/<name>/stats — that path does not exist in Search.
+            # See "PER-INDEX STATS IS A DIFFERENT PATH" in the module docstring.
             ix = quote_path(args["index_name"])
-            return ok(admin_request("GET", f"{_FTS}/api/index/{ix}/stats"))
+            return ok(admin_request("GET", f"{_FTS}/api/stats/index/{ix}"))
 
         if name == "admin_fts_index_doc_count":
             ix = quote_path(args["index_name"])

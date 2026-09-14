@@ -375,3 +375,61 @@ def test_a_sub_resource_error_inside_a_success_is_still_a_success(gui, monkeypat
         gui.HANDLERS[tool] = real
 
     assert resp.get_json()["ok"] is True
+
+
+# ── The console and the MCP surface must advertise the same tools ────────────
+
+
+def test_the_console_advertises_every_tool_the_mcp_surface_does():
+    """A handler module added to server.py and not to gui_server.py is invisible
+    in the console, silently.
+
+    THIS IS NOT HYPOTHETICAL. handlers/backup_catalog.py shipped with six tools,
+    a full test suite, and a place in server.py's registry -- and was absent from
+    gui/gui_server.py's ALL_TOOLS for its entire life, so every one of its tools
+    was unreachable from the console while appearing complete everywhere else.
+    tests/test_handler_contract.py's MODULE_NAMES guard caught the equivalent
+    omission on the server side immediately; nothing watched this side.
+
+    Equality, not containment, and in both directions:
+
+      * A tool in the MCP surface and not the console is a capability the console
+        silently lacks.
+      * A tool in the console and not the MCP surface is worse -- it is reachable
+        over HTTP without being part of the audited surface, which is the shape
+        of a privilege escalation rather than a missing feature.
+
+    If a tool ever SHOULD be console-only or MCP-only, this test is the right
+    place to record which and why, as a named allowlist. Until then there are
+    none, and the honest assertion is that the two sets are identical.
+    """
+    import server
+    from gui import gui_server
+
+    mcp_tools = {t.name for t in server._RAW_TOOLS}
+    console_tools = {t.name for t in gui_server.ALL_TOOLS}
+
+    missing = sorted(mcp_tools - console_tools)
+    extra = sorted(console_tools - mcp_tools)
+    assert not missing, (
+        "these tools are in the MCP surface and NOT in the console -- add the "
+        f"handler module to gui_server.ALL_TOOLS and HANDLERS: {missing}"
+    )
+    assert not extra, (
+        "these tools are reachable from the console and are NOT part of the MCP "
+        f"surface, so they are outside the audited surface entirely: {extra}"
+    )
+
+
+def test_every_console_tool_can_be_dispatched():
+    """ALL_TOOLS and HANDLERS are built from separate expressions, so a module
+    added to one and not the other advertises a tool that 500s when called."""
+    from gui import gui_server
+
+    undispatchable = sorted(
+        t.name for t in gui_server.ALL_TOOLS if t.name not in gui_server.HANDLERS
+    )
+    assert not undispatchable, (
+        "these tools are advertised by the console with no handler behind them: "
+        f"{undispatchable}"
+    )

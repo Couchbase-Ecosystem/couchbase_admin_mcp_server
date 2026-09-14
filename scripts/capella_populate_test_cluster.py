@@ -535,15 +535,26 @@ class Populate:
         #   * 'custom' is the only state that may carry one, and must
         #   * minute is 0 or 30; hour is 0-23; from/to are objects
         #
-        # WHAT THIS COSTS, SAID PLAINLY: 00:00-23:30 is the widest window the
-        # rules allow, so this schedule leaves the cluster OFF for thirty
-        # minutes a night. There is no schedule that does not. The shape this
-        # script used to send -- seven whole-day "on" days, chosen precisely
-        # because it could never hibernate anything -- breaks no stated rule and
-        # answers 500 code 10000 every time. A fixture cannot have both "the
-        # resource exists" and "nothing ever turns off"; this picks the first,
-        # because the tool under test is the setter and a fixture cluster can
-        # afford half an hour.
+        # OFF BY DEFAULT SINCE 2026-09-14, AND THE REASON IS NOT TIDINESS.
+        #
+        # 00:00-23:30 is the widest window the rules allow, so any schedule this
+        # script can create leaves the cluster OFF for thirty minutes a night.
+        # That stopped being theoretical within the hour: the fixture cluster
+        # powered down, and every write to it -- including enabling the Data API
+        # -- was refused with
+        #
+        #   422 "Temporarily unavailable while the Cluster is in the Turning On
+        #        state."
+        #
+        # which names the cluster's state and not the caller's mistake. Someone
+        # debugging that at 2am reads it as a broken tool.
+        #
+        # The seven whole-day "on" shape, chosen precisely because it could never
+        # hibernate anything, breaks no stated rule and answers 500 code 10000
+        # every time. So a fixture cannot have both "the resource exists" and
+        # "nothing ever turns off", and the default now favours the cluster
+        # staying up. Pass --with-onoff-schedule when the point of the run IS to
+        # exercise the schedule tools.
         _WEEK = ("monday", "tuesday", "wednesday", "thursday",
                  "friday", "saturday", "sunday")
 
@@ -551,6 +562,13 @@ class Populate:
         # refuses a duplicate with 422 code 11050; PUT updates and refuses a
         # missing one with 404 code 11040. Reading the schedule first turns a
         # guess into a lookup, and costs one GET.
+        if not getattr(self.args, "with_onoff_schedule", False):
+            self.say("\n   skipping the on/off schedule: it powers the cluster "
+                     "down for 30 minutes a night, which refuses every write "
+                     "with 422 'Turning On' while it cycles. Pass "
+                     "--with-onoff-schedule to create one.")
+            return
+
         existing = await self.call(
             session, "capella_cluster_onoff_schedule_get", dict(ids))
         tool = ("capella_cluster_onoff_schedule_update"
@@ -826,6 +844,11 @@ def main() -> int:
                         help="https endpoint for an alert integration. Capella "
                              "calls it on create and fails unless it answers 2xx.")
     parser.add_argument("--webhook-token", default="")
+    parser.add_argument("--with-onoff-schedule", action="store_true",
+                        help="create an on/off schedule. OFF by default: the "
+                             "widest legal window still powers the cluster down "
+                             "for 30 minutes a night, and every write during the "
+                             "cycle is refused with a 422 about cluster state.")
     parser.add_argument("--perform", dest="dry_run", action="store_false",
                         default=True)
     parser.add_argument("--org", default=None)

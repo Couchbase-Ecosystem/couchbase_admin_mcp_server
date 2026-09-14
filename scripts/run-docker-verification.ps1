@@ -486,7 +486,17 @@ $testFiles = @(
 # builds with .pyd files the container cannot load -- turning a test run into an
 # import error that looks like a code failure. pytest and its dependencies are
 # pure Python, so a clean --target directory is portable across the two.
-$pytestLib = Join-Path $repoPath '.pytest-lib'
+# OUTSIDE THE REPOSITORY, AND THAT IS NOT TIDINESS.
+#
+# This staged into <repo>/.pytest-lib first, with a .gitignore entry, and
+# test_pragma_no_cover_is_used_sparingly_and_always_explained failed with 44
+# violations -- every one of them inside pytest, pygments, pluggy and packaging.
+# That test WALKS THE TREE; .gitignore does not hide a directory from os.walk.
+# Any repository-level check that scans files would have tripped the same way.
+#
+# Third-party wheels are not source and do not belong under the project root at
+# all. Temp is where a build artifact for one container run belongs.
+$pytestLib = Join-Path ([System.IO.Path]::GetTempPath()) 'cb-admin-mcp-pytest-lib'
 if (-not (Test-Path (Join-Path $pytestLib 'pytest'))) {
     Write-Host '   staging pytest for Linux (host network, one time) ...'
     $null = uv pip install --quiet --target $pytestLib pytest 2>&1
@@ -497,7 +507,7 @@ if (-not (Test-Path (Join-Path $pytestLib 'pytest'))) {
 
 if (-not (Test-Path (Join-Path $pytestLib 'pytest'))) {
     Check $false 'the skipped security tests ran on Linux' `
-        "could not stage pytest into $pytestLib from the host -- run 'uv pip install --target .pytest-lib pytest' and look at the error"
+        "could not stage pytest into $pytestLib from the host -- run 'uv pip install --target `"$pytestLib`" pytest' and look at the error"
 } else {
     # /src FIRST so the repo's own modules win, then the staged pytest, then the
     # image's site-packages for mcp and couchbase.

@@ -298,7 +298,8 @@ let an escape hatch widen silently.
     },
     @{
         Name  = 'Capella surface: a bootstrap trap and a retraction'
-        Paths = @('handlers/capella/spec.py', 'handlers/capella/spec_pending.py',
+        Paths = @('handlers/backup_catalog.py', 'server.py',
+                  'handlers/capella/spec.py', 'handlers/capella/spec_pending.py',
                   'handlers/capella/__init__.py', 'handlers/capella/client.py',
                   # Three of its four handlers stopped refusing on 2026-09-14.
                   'handlers/capella/fixture.py')
@@ -405,6 +406,21 @@ map, so every caller resynced the whole endpoint; capella_app_endpoint_
 cors_set did not mark `origin` required; capella_cluster_create was
 missing configurationType and zones; capella_bucket_create was missing
 evictionPolicy.
+
+ADDED: handlers/backup_catalog.py, six tools, BOTH planes. The
+requirement asked for backups carrying tags -- "latest where
+content-publisher-version = 1.6". Capella backups cannot be named and
+carry no user metadata; an EE repository name is one string, not a tag
+set. So the metadata lives locally and POINTS AT the backup: one JSON
+file per entry, so a partial failure costs one record rather than the
+catalogue, and the whole thing diffs in git.
+
+cb_backup_catalog_sync marks entries present or missing against the
+plane's own list and DELETES NOTHING. "Expired on schedule" and
+"someone deleted the wrong thing" look identical from here, and the
+entry is the only surviving record that the backup existed. An empty
+backup_ids list is called out rather than silently marking everything
+missing.
 
 fixture.py: capella_fixture_list, _verify and _export(include_data=
 false) now do the work instead of returning a refusal. Export refuses

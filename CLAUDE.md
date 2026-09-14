@@ -55,7 +55,41 @@ causes, zero tests run.
 Any claim worth making is worth stating alongside the observation that would
 disprove it. If no such observation exists, it is not a finding.
 
-### 1.5 Retractions are recorded, not quietly corrected
+### 1.5 Read the provider's generated client before probing the API
+
+**The Terraform provider's generated client is the strongest source available
+for a v4 request shape, and it outranks the rendered documentation pages.** It
+is generated from Couchbase's own API document, so it carries the parameter
+names, the required-vs-optional split and the content types as the service
+actually implements them — not as a docs page describes them.
+
+This rule has a price attached. `capella_app_endpoint_access_control_function_set`
+was probed **43 measured times** against a live cluster, returning 400 "does not
+evaluate to a function" on every attempt, and produced two retracted claims about
+the body shape along the way. The answer was in the provider's source the whole
+time: the body is **raw JavaScript with `Content-Type: application/javascript`**,
+not JSON of any shape. Reading the generated client first would have cost one
+grep.
+
+The same source settled `bucket` being required-in-practice on the index
+endpoints (`ListIndexDefinitionsParams`), the `/queryService/indexes` path, and
+the restore body needing **both** `sourceClusterID` and `targetClusterID`.
+
+Order of consultation, strongest first:
+
+1. `internal/generated/api/openapi.gen.go` in the provider — generated, so it
+   cannot drift from the API document.
+2. The provider's hand-written structs under `internal/api/` — occasionally
+   *ahead* of the generated client (see `loadBalancerCidr` in
+   `internal/api/appservice/appservice.go`, which the generated client lacks).
+   This is the one documented exception to rule 1.
+3. A live probe.
+4. The rendered docs pages. Last, not first: they have been wrong about the Data
+   API base host and about the on/off schedule body.
+
+See `docs/PROVIDER_SOURCE.md` for which checkout this refers to.
+
+### 1.6 Retractions are recorded, not quietly corrected
 
 A wrong cause stays in the document with the reason it failed. See
 `CAPELLA-CONNECTIVITY.md`, which keeps all three of its retracted diagnoses.

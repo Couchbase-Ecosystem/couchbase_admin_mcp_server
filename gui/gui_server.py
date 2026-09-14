@@ -186,6 +186,7 @@ from auth.scope_gate import (  # noqa: E402
 )
 from handlers import (  # noqa: E402
     backup,
+    backup_catalog,
     buckets,
     capella,
     cluster,
@@ -290,6 +291,7 @@ ALL_TOOLS = (
     + diagnostics.TOOLS
     + eight_x.TOOLS
     + backup.TOOLS
+    + backup_catalog.TOOLS
     + eventing.TOOLS
     + encryption.TOOLS
     + capella.TOOLS
@@ -308,6 +310,7 @@ HANDLERS = {
     **{t.name: diagnostics for t in diagnostics.TOOLS},
     **{t.name: eight_x for t in eight_x.TOOLS},
     **{t.name: backup for t in backup.TOOLS},
+    **{t.name: backup_catalog for t in backup_catalog.TOOLS},
     **{t.name: capella for t in capella.TOOLS},
     **{t.name: eventing for t in eventing.TOOLS},
     **{t.name: encryption for t in encryption.TOOLS},

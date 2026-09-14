@@ -148,6 +148,57 @@ __all__ = ["PENDING_OPS"]
 #: honest and is not progress.
 
 PENDING_OPS: tuple[Op, ...] = (
+    Op(
+        name="capella_app_endpoint_audit_log_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",
+        summary=(
+            "Read an App Endpoint's audit logging configuration. "
+            "[TF openapi.gen.go:24663] THE ROUTE ANSWERED 422 on 2026-09-14, "
+            "which is progress and is not enough to ship. A GET is verified "
+            "in this repository by a 200 or a 404; "
+            "test_every_read_operation_was_verified_by_a_real_call refuses "
+            "anything else, and rightly -- a 422 means the route answered "
+            "and the READ never happened. Read it as an entitlement rather "
+            "than a defect: the App Service level equivalent is refused in "
+            "this organization with 'your support package does not include "
+            "audit logging'. An organization with audit logging licensed "
+            "promotes this in one call."
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_audit_log_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",
+        summary=(
+            "Configure an App Endpoint's audit logging.\n"
+            "THE BODY SHAPE IS STILL NOT ESTABLISHED. The PATH and METHOD are "
+            "now live-verified, and that is all: no body schema is declared, so "
+            "this operation cannot be called usefully yet. It ships in that "
+            "state deliberately rather than with an invented body -- only the "
+            "path and method were taken from "
+            "openapi.gen.go:24736; no body schema is declared, so this record is "
+            "NOT promotable on a path probe alone. Shipping it with an invented "
+            "body would repeat exactly the failure CLAUDE.md records: three wrong "
+            "request bodies sat behind verified paths, and a path probe cannot "
+            "catch that because it never sends a body.\n"
+            "Note the App Service level equivalent is entitlement-gated in this "
+            "organization (capella_cluster_audit_log_config_set answers 422 'your "
+            "support package does not include audit logging'), so this may be "
+            "unverifiable here for the same reason. [TF openapi.gen.go:24736]\n"
+            "PATH AND METHOD CONFIRMED 405 on 2026-09-14, and that is still "
+            "not enough. It was promoted on the probe report saying READY TO "
+            "PROMOTE, and test_no_shipped_write_tool_is_missing_its_body_"
+            "schema sent it straight back. The report judges PATHS; a path "
+            "verdict says nothing about a body. The guard was right and the "
+            "promotion was not."
+        ),
+        group="app_endpoints",
+        guarded=True,
+    ),
     # ── P1 item 4: the replication job a create actually returns ─────────────
     Op(
         name="capella_replication_job_get",
@@ -173,112 +224,4 @@ PENDING_OPS: tuple[Op, ...] = (
     # Each of these is the missing HALF of something already shipped. The pattern
     # matters: a surface that can SET a thing and not READ it back, or START a
     # thing and not STOP it, is one an operator cannot reason about.
-    Op(
-        name="capella_app_endpoint_cors_get",
-        method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/cors",
-        summary=(
-            "Read an App Endpoint's CORS configuration. We can SET this and "
-            "cannot read it back, so a caller cannot check what is configured "
-            "before replacing it -- and capella_app_endpoint_cors_set REPLACES. "
-            "[TF openapi.gen.go:24978]"
-        ),
-        group="app_endpoints",
-        read_only=True,
-        idempotent=True,
-    ),
-    Op(
-        name="capella_app_endpoint_resync_stop",
-        method="DELETE",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/resync",
-        summary=(
-            "Stop a running resync. We can START one and cannot cancel it.\n"
-            "That asymmetry is worse than it sounds: a resync reprocesses every "
-            "document in the endpoint through the access control function, and on "
-            "a large dataset it is long-running and load-bearing on the cluster. "
-            "An operator who starts one by mistake currently has no way to stop "
-            "it through this server. [TF openapi.gen.go:25738]"
-        ),
-        group="app_endpoints",
-        destructive=True,
-        guarded=True,
-    ),
-    Op(
-        name="capella_app_endpoint_access_control_function_delete",
-        method="DELETE",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/accessControlFunction",
-        summary=(
-            "Remove a collection's access control function.\n"
-            "DESTRUCTIVE IN A WAY THAT DOES NOT LOOK DESTRUCTIVE, exactly like "
-            "its import-filter sibling: deleting the function does not delete "
-            "data, it removes the rules that decide which documents a mobile user "
-            "may see and write. Read the current source with "
-            "capella_app_endpoint_get first -- the dedicated getter answers 200 "
-            "with an EMPTY body, so it is not a backup.\n"
-            "THE KEYSPACE IS NOT THE APP ENDPOINT NAME: endpoint.scope.collection. "
-            "Expected 202, not 204. [TF openapi.gen.go:23848]"
-        ),
-        group="app_endpoints",
-        destructive=True,
-        guarded=True,
-    ),
-    Op(
-        name="capella_app_endpoint_collections_list",
-        method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/collections",
-        summary=(
-            "List the collections an App Endpoint syncs. Today the only way to "
-            "see this is to read the whole endpoint document and walk "
-            "scopes.<scope>.collections. [TF openapi.gen.go:24862]"
-        ),
-        group="app_endpoints",
-        read_only=True,
-        idempotent=True,
-    ),
-    Op(
-        name="capella_app_endpoint_admin_users_list",
-        method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/adminUsers",
-        summary=(
-            "List an App Endpoint's admin users. Distinct from the APP SERVICE "
-            "admin users capella_app_service_admin_users_list returns -- these "
-            "are scoped to one endpoint. [TF openapi.gen.go:24547]"
-        ),
-        group="app_endpoints",
-        read_only=True,
-        idempotent=True,
-    ),
-    Op(
-        name="capella_app_endpoint_audit_log_get",
-        method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",
-        summary=(
-            "Read an App Endpoint's audit logging configuration. "
-            "[TF openapi.gen.go:24663]"
-        ),
-        group="app_endpoints",
-        read_only=True,
-        idempotent=True,
-    ),
-    Op(
-        name="capella_app_endpoint_audit_log_set",
-        method="PUT",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",
-        summary=(
-            "Configure an App Endpoint's audit logging.\n"
-            "THE BODY SHAPE IS NOT RECORDED HERE AND MUST BE READ FROM THE "
-            "PROVIDER BEFORE THIS SHIPS. Only the path and method were taken from "
-            "openapi.gen.go:24736; no body schema is declared, so this record is "
-            "NOT promotable on a path probe alone. Shipping it with an invented "
-            "body would repeat exactly the failure CLAUDE.md records: three wrong "
-            "request bodies sat behind verified paths, and a path probe cannot "
-            "catch that because it never sends a body.\n"
-            "Note the App Service level equivalent is entitlement-gated in this "
-            "organization (capella_cluster_audit_log_config_set answers 422 'your "
-            "support package does not include audit logging'), so this may be "
-            "unverifiable here for the same reason. [TF openapi.gen.go:24736]"
-        ),
-        group="app_endpoints",
-        guarded=True,
-    ),
 )

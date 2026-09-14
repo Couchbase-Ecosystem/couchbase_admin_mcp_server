@@ -235,6 +235,24 @@ _OBJECT_ABSENT_HINTS = (
 #: do after routing the request.
 _DOMAIN_CODE_FLOOR = 1000
 
+#: The keys a Capella error response carries. Go's http.ServeMux answers an
+#: unrouted request with the PLAIN TEXT "404 page not found", so a body with this
+#: shape cannot have come from anywhere but one of the API's own handlers -- and a
+#: handler runs after routing. See the 404 branch in verify() for the measurement
+#: that made this necessary.
+_ERROR_ENVELOPE_KEYS = ("httpStatusCode", "message")
+
+
+def _capella_error_envelope(body: str) -> bool:
+    """Whether a body is a Capella error object, regardless of its code."""
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    return all(key in parsed for key in _ERROR_ENVELOPE_KEYS)
+
 
 def _response_shape(body: str, limit: int = 24) -> list:
     """The KEY NAMES a 200 response carries — never the values.
@@ -1804,6 +1822,37 @@ def probe(
                 "VERIFIED",
                 status,
                 f"route matched; object absent (Capella error {code})",
+                method_sent=method_sent,
+            )
+        # A CAPELLA ERROR ENVELOPE, even without a domain code, proves routing.
+        #
+        # MEASURED 2026-09-14. capella_app_endpoint_cors_get was reported as
+        # "PATH IS WRONG: 404 with no sign the route matched" and listed under
+        # PATHS THAT NEED FIXING. Its body was:
+        #
+        #   {"code":404, "hint":"Please review your request ...",
+        #    "httpStatusCode":404, "message":"App Endpoint CORS is not enabled"}
+        #
+        # The path is correct. That endpoint simply has no CORS configured, which
+        # is its normal state until cors_set is called. Two things hid it: `code`
+        # echoes the HTTP status (404), so it sits below _DOMAIN_CODE_FLOOR, and
+        # "is not enabled" is not one of the phrases _object_absent_prose knows.
+        #
+        # The discriminator spec_pending.py already documents is the right one and
+        # is not a keyword match: Go's mux default for an unrouted request is the
+        # PLAIN TEXT "404 page not found". A well-formed JSON error envelope with
+        # hint/httpStatusCode/message can only have come from a handler, and a
+        # handler runs after routing. Weaker than a domain code, because it does
+        # not name the object -- so it carries the body, like the prose branch.
+        if _capella_error_envelope(body):
+            return Result(
+                op,
+                "VERIFIED",
+                status,
+                "route matched; the response is a Capella error ENVELOPE rather "
+                "than Go's plain-text mux default, so a handler ran. No domain "
+                "code, so this is weaker than the branch above. Body: "
+                f"{body[:200].replace(chr(10), ' ')}",
                 method_sent=method_sent,
             )
         # Second opinion for a 404 that is not a structured domain error — and it is a

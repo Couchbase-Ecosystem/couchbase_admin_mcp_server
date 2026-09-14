@@ -120,7 +120,44 @@ ERROR rather than a pass.
 - A 2xx from a probe is never evidence of a path. It is evidence that the probe
   did something, and the first question is what.
 
-### 1.7 Retractions are recorded, not quietly corrected
+### 1.7 A harness must not report its own blind spot as a fact about the system
+
+**"I could not find one" and "there is not one" are different claims.** A tool
+that cannot tell them apart will report the first as the second, and the reader
+has no way to know — because the output reads as evidence about the customer's
+cluster.
+
+This has now happened three times in `scripts/verify_capella_paths.py`, all of
+them printed as though the cluster were empty:
+
+1. A nested `{"data": [{"data": {...}}]}` response read as an empty list. The
+   cluster had objects; the helper unwrapped one level and the endpoint used two.
+2. `app_endpoint_name` and `app_endpoint_keyspace` were never discovered at all.
+   **Twenty operations reported "no identifier available"**, six of them shipped
+   ops that had therefore never been path-probed. The objects existed the whole
+   time, and `scripts/verify_mcp_surface.py` had been discovering them from the
+   same two calls all along.
+3. The backup-cycle discovery looked for `cycleId`. The rows carry **`cycleID`**.
+   It printed "this bucket has no cycles" in the same run in which
+   `capella_bucket_backup_cycles_list` returned rows.
+
+Each time the fix was local and the pattern survived. `_absence_detail` is the
+structural answer: when no identifier is found, it inspects whether there were
+ROWS, and says so explicitly —
+
+    no rows -- the path is right and this cluster genuinely has none
+
+    *** ROWS WERE RETURNED AND NONE CARRIED ['cycleId']. The keys present are
+    ['createdAt', 'cycleID']. This is a limitation of THIS SCRIPT, not an empty
+    cluster
+
+The general rule, for any harness in this repository: **before reporting that
+something is absent, establish that you looked somewhere it would have been.**
+If that cannot be established, report the uncertainty rather than the absence.
+This is §1.4 applied to tooling — a claim of absence is a finding, and a finding
+needs the observation that would overturn it.
+
+### 1.8 Retractions are recorded, not quietly corrected
 
 A wrong cause stays in the document with the reason it failed. See
 `CAPELLA-CONNECTIVITY.md`, which keeps all three of its retracted diagnoses.

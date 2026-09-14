@@ -479,6 +479,53 @@ def _first_id(payload: str, *keys: str) -> str | None:
     return None
 
 
+def _keys_on_first_row(payload: str) -> list[str]:
+    """The key names on a list response's first row, or [] if there are no rows.
+
+    THE POINT IS TO TELL TWO THINGS APART THAT _first_id CANNOT.
+    It returns None both when a list is genuinely empty and when it has rows
+    whose id key is spelled differently than the caller guessed, and those
+    demand opposite reactions: the first is a fact about the cluster, the second
+    is a limitation of this script reported AS a fact about the cluster.
+
+    That has now happened three times:
+
+      * A nested {"data": [{"data": {...}}]} shape read as an empty list --
+        recorded in _first_id's own docstring.
+      * app_endpoint_name and app_endpoint_keyspace were never discovered at all,
+        so twenty operations reported "no identifier available" as though the
+        objects did not exist. Six of them were shipped operations.
+      * The backup-cycle discovery looked for `cycleId`. The rows carry `cycleID`,
+        capital ID, so it printed "this bucket has no cycles" in the same run
+        where capella_bucket_backup_cycles_list returned rows.
+
+    Every one of those read as a statement about the customer's cluster. A
+    harness that cannot find something must say which of the two it means.
+    """
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        return []
+    items = _list_items(parsed)
+    if not items or not isinstance(items[0], dict):
+        return []
+    first = items[0]
+    inner = first.get("data") if isinstance(first.get("data"), dict) else first
+    return sorted({*inner.keys(), *first.keys()})
+
+
+def _absence_detail(payload: str, keys: tuple[str, ...]) -> str:
+    """Why no identifier came back, in words that do not blame the cluster."""
+    present = _keys_on_first_row(payload)
+    if not present:
+        return "no rows -- the path is right and this cluster genuinely has none"
+    return (
+        f"*** ROWS WERE RETURNED AND NONE CARRIED {list(keys)}. The keys present "
+        f"are {present}. This is a limitation of THIS SCRIPT, not an empty "
+        f"cluster -- fix the key names above rather than provisioning anything"
+    )
+
+
 #: Smallest App Service Capella will actually create. Kept in step with
 #: spec.MIN_APP_SERVICE_NODES by a test, not by an import — see bootstrap_app_service.
 _MIN_APP_SERVICE_NODES = 2
@@ -1289,9 +1336,9 @@ def discover(token: str, args) -> dict:
                 print(f"  backup cycle: {found}")
             else:
                 print(
-                    f"  backup cycle: HTTP {status} with no items — the path looks "
-                    "right and this bucket has no cycles, which is expected while "
-                    "no schedule exists. cycle_id paths SKIPPED"
+                    f"  backup cycle: HTTP {status}, "
+                    f"{_absence_detail(cbody, ('cycleID', 'cycleId', 'id'))}. "
+                    "cycle_id paths SKIPPED"
                 )
 
     # ── Eventing functions and XDCR replications ────────────────────────────
@@ -1348,11 +1395,15 @@ def discover(token: str, args) -> dict:
             ids[id_key] = found
             print(f"  {label}: {found}")
         else:
+            # WHICH KIND OF NOTHING THIS IS -- see _absence_detail. "The cluster
+            # has none" and "this script looked under the wrong key" were
+            # indistinguishable here, and the second was printed as the first
+            # three times.
             print(
-                f"  {label}: {segment} answered HTTP {status} with no items — path "
-                f"looks right, and THIS cluster has none. If the organization has the "
-                f"object on another cluster, pass --project/--cluster to point here. "
-                f"{id_key} paths SKIPPED"
+                f"  {label}: {segment} answered HTTP {status}; "
+                f"{_absence_detail(rbody, keys)}. If the organization has the "
+                f"object on another cluster, pass --project/--cluster to point "
+                f"here. {id_key} paths SKIPPED"
             )
 
     # ── Identifiers used ONLY by the parked set ─────────────────────────────

@@ -1,5 +1,9 @@
 # Deploying the Couchbase Admin MCP server
 
+> This is the **reference for the artifacts in this directory**. For the
+> walkthrough — local Docker, AWS and GCP, end to end — see
+> [`../docs/CONTAINER_DEPLOYMENT.md`](../docs/CONTAINER_DEPLOYMENT.md).
+
 ## The rule: one container, one control plane
 
 This server can drive two unrelated control planes — Capella's v4 API, and

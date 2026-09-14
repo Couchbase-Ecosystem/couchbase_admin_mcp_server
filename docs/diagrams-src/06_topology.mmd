@@ -11,5 +11,9 @@ graph TB
     E2 --> E4["cluster / Capella"]
     E2 --> E5["durable audit file"]
   end
+  R["HARD RULE - one container, one control plane.<br/>Either topology drives Capella OR a self-managed cluster, never both.<br/>CB_ADMIN_REQUIRE_DEPLOYMENT declares it; the server refuses to start otherwise."]
+  W ~~~ R
+  E ~~~ R
   style W fill:#eef4fb,stroke:#2c6fb5
   style E fill:#f3e5f5,stroke:#6a1b9a
+  style R fill:#fdecea,stroke:#c62828

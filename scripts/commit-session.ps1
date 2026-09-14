@@ -235,6 +235,12 @@ starts.
         Paths = @('tests/test_no_vacuous_coverage.py', 'tests/conftest.py',
                   'handlers/mcp_status.py',
                   'tests/test_capella.py', 'tests/test_capella_guardrail_hardening.py',
+                  # Added 2026-09-14: capella_request grew a content_type
+                  # parameter and every test double of it had to grow the same
+                  # keyword. Unclaimed files make this script refuse the whole
+                  # session, so a file joins a group when it is first touched.
+                  'tests/test_capella_environment_flow.py',
+                  'tests/test_capella_retry_safety.py',
                   'tests/test_mcp_status.py', 'tests/test_verify_mcp_surface.py',
                   'tests/test_server_dispatch.py', 'tests/test_transport_edge.py',
                   'tests/test_dry_run.py', 'tests/test_gui_frontend.py',
@@ -273,12 +279,29 @@ emptiness is the success state.
 
 It found 17 unguarded sites, including one in a file added in the same
 session.
+
+Twenty capella_request test doubles grew a `content_type` keyword,
+because the real function did. The App Endpoint access control
+function wants raw JavaScript with Content-Type
+application/javascript, not JSON -- five guardrail tests failed with
+"request() got an unexpected keyword argument 'content_type'" until
+the doubles matched the signature they are doubling.
+
+Also widens one deliberate pin. test_capella.py asserted that exactly
+one operation used body_scalar, with a docstring saying a second one
+would be "worth a look". A second one arrived -- the App Endpoint access
+control function, whose object body meant the source never reached the
+server's validator -- so the look happened, and the test now pins both
+names and checks the shape of each. The pin did its job: it refused to
+let an escape hatch widen silently.
 '@
     },
     @{
         Name  = 'Capella surface: a bootstrap trap and a retraction'
         Paths = @('handlers/capella/spec.py', 'handlers/capella/spec_pending.py',
-                  'handlers/capella/__init__.py', 'handlers/capella/client.py')
+                  'handlers/capella/__init__.py', 'handlers/capella/client.py',
+                  # Three of its four handlers stopped refusing on 2026-09-14.
+                  'handlers/capella/fixture.py')
         Message = @'
 spec: cloud snapshot reads, and a retracted transcription
 
@@ -340,6 +363,55 @@ rule earning its keep.
 Also settles the capella_backup_restore path dispute (two sources agree
 on .../backups/{backup_id}/restore) and replaces a stale hard-coded
 count in a comment with the property the test actually checks.
+
+FIXED: capella_app_endpoint_access_control_function_set could never have
+worked. It wrapped the sync function in an object, {"function": "..."},
+and every call answered:
+
+    400 bad request: 1 errors:
+    collection "airline" sync function error: invalid javascript syntax:
+    JavaScript source does not evaluate to a function
+
+Three inputs were tried against a live App Service: a `function (doc,
+oldDoc, meta) {...}` declaration, the same source in parentheses, and
+the function Capella ITSELF had stored -- read out of
+capella_app_endpoint_get and sent back verbatim. All three produced that
+identical error. A real syntax validator would have accepted the
+server's own function, so the source never reached the validator: the
+wrapper meant it saw nothing. The body is a bare JSON string, the same
+shape capella_eventing_function_code_set takes, and the op now carries
+body_scalar.
+
+RETRACTED with it: the summary's claim that the source had to be wrapped
+in parentheses to "evaluate to a function". That was a reading of the
+error message, not a measurement, and it was wrong.
+
+ADDED: capella_app_endpoint_update. Eleven App Endpoint operations
+shipped before it and not one wrote the endpoint document, which made
+scopes, importFilter, cors, oidc, userXattrKey, deltaSyncEnabled and
+disablePublicAllDocs unreachable. Found while failing to make the
+dedicated access-control path work; a real PUT answered 204.
+
+ADDED: capella_cluster_onoff_schedule_update. POST creates and answers
+422 code 11050 on a duplicate, telling the caller to use the update
+API -- which did not exist. PUT at a cluster with no schedule answers
+404, so the register entry is the 422 from an invalid body instead:
+404 cannot tell "route exists, object does not" from "no such route",
+and test_write_operations_are_path_verified_only is right to refuse it.
+
+FIXED, all from the provider's generated client rather than a probe:
+capella_app_endpoint_resync_start shipped body={} and takes a scopes
+map, so every caller resynced the whole endpoint; capella_app_endpoint_
+cors_set did not mark `origin` required; capella_cluster_create was
+missing configurationType and zones; capella_bucket_create was missing
+evictionPolicy.
+
+fixture.py: capella_fixture_list, _verify and _export(include_data=
+false) now do the work instead of returning a refusal. Export refuses
+include_data=true BY NAME -- documents need the Data API and a cluster
+access credential -- because an export that quietly produced no
+documents while reporting success is the worst outcome this module
+has. The manifest's fidelity block records what actually happened.
 '@
     },
     @{

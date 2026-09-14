@@ -227,6 +227,26 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
         # field is a tuple and why a failed selection now prints the row's keys.
         ("auditLogExportId", "exportId", "id"),
     ),
+    # FIXTURES AND ENVIRONMENTS: OUR OWN TOOLS, DISCOVERED THE SAME WAY.
+    #
+    # Four SKIPPED results read "no value for fixture_path / fixture_id / env_name"
+    # and every one was this table not looking, not a missing capability.
+    # capella_fixture_list walks root_path (already seeded to the repo root) and
+    # returns a row per fixture; capella_env_list returns a row per managed
+    # environment. Both are reads, both are free, and both were being ignored.
+    #
+    # These stay SKIPPED when the lists are genuinely empty -- no fixture on disk,
+    # no managed environment -- and that is the correct result rather than a gap:
+    # a fixture_path invented by this checker points at nothing, and a call aimed
+    # at nothing tests nothing. Run capella_fixture_export --include-data false to
+    # put one on disk.
+    ("capella_fixture_list", "fixture_path", ("fixture_path", "path")),
+    ("capella_fixture_list", "fixture_id", ("fixture_id", "id")),
+    # The row key is `environment`, not `env_name` -- capella_env_list reports the
+    # marker's own vocabulary (mcp-env:{"env": ...}) rather than the argument name
+    # the env tools take. Both spellings are listed because a reader checking this
+    # table against the tool schema will look for the argument name first.
+    ("capella_env_list", "env_name", ("environment", "env", "env_name", "name")),
     # Self-managed. Same mechanism, different vocabulary: ns_server addresses
     # buckets by NAME where v4 uses an opaque id.
     ("admin_bucket_list", "bucket_name", "name"),
@@ -518,6 +538,22 @@ def _items(payload: Any) -> list:
         return data
     if isinstance(data, dict) and isinstance(data.get("items"), list):
         return data["items"]
+    # OUR OWN COMPOSITE TOOLS ANSWER WITH TWO LISTS, AND THE FALLBACK BELOW
+    # REFUSES TO GUESS BETWEEN THEM -- correctly, but the result was silent
+    # empty discovery for both.
+    #
+    #   capella_env_list     -> {"managed": [...], "unmanaged": [...]}
+    #   capella_fixture_list -> {"fixtures": [...], "unreadable": [...]}
+    #
+    # In each pair the first is the answer and the second is a caveat: an
+    # unmanaged cluster is one this server did not create, an unreadable fixture
+    # is a directory whose manifest will not parse. Neither can supply an
+    # identity, so naming the row key is not a preference, it is the difference
+    # between discovering nothing and discovering the right thing.
+    for key in ("managed", "fixtures"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            return rows
     lists = [value for value in payload.values() if isinstance(value, list)]
     return lists[0] if len(lists) == 1 else []
 
@@ -775,8 +811,26 @@ def _value_for(
     if declared == "array":
         item = spec.get("items")
         if spec.get("minItems") and isinstance(item, dict):
-            value, invented = _value_for(name, item, context, prefix, depth + 1)
-            return [value], invented
+            # ONE ELEMENT IS NOT ENOUGH WHEN THE SCHEMA ASKS FOR SEVEN.
+            #
+            # This built a single-element list for any minItems at all, which the
+            # MCP SDK then rejected before dispatch:
+            #
+            #   Input validation error: [{'day': 'monday', 'state': 'on'}] is
+            #   too short
+            #
+            # reported as PROTOCOL FAILURE — a result about this checker, dressed
+            # as a result about the server. capella_cluster_onoff_schedule_set
+            # requires exactly seven days, and it is the first operation in the
+            # registry whose minItems is not 1.
+            count = int(spec.get("minItems") or 1)
+            values = []
+            invented = False
+            for _ in range(count):
+                value, was_invented = _value_for(name, item, context, prefix, depth + 1)
+                values.append(value)
+                invented = invented or was_invented
+            return values, invented
         return [], False
     if declared == "object":
         nested, nested_guessed = synthesise_body(spec, context, prefix, depth + 1)
@@ -857,8 +911,31 @@ class Run:
         """
         return self.contexts[CAPELLA_SIDE]
 
+    #: Tools whose PATH cluster is not the cluster this run is pointed at.
+    #:
+    #: An XDCR replication is a property of a PAIR, and Capella lists it on the
+    #: SOURCE. A replication into the throwaway cluster is therefore invisible
+    #: from the throwaway cluster, and capella_replication_get skipped for want
+    #: of an id that the run could see the whole time -- on the other cluster.
+    #:
+    #: Feeding it that id WITHOUT also switching the cluster would manufacture a
+    #: 404: correct id, wrong path. That is the same mistake as sending an App
+    #: Endpoint name where a keyspace belongs, and it is why the id and the
+    #: cluster travel together here rather than the id alone being seeded.
+    _CLUSTER_FROM: dict[str, str] = {
+        "capella_replication_get": "_replication_cluster_id",
+        "capella_replication_delete": "_replication_cluster_id",
+    }
+
     def context_for(self, tool_name: str) -> dict[str, str]:
-        return self.contexts[side_of(tool_name)]
+        context = self.contexts[side_of(tool_name)]
+        key = self._CLUSTER_FROM.get(tool_name)
+        if key and context.get(key):
+            # A COPY. Mutating the shared side context would repoint every
+            # later tool at the other cluster, which is a much larger mistake
+            # than the one this fixes.
+            return {**context, "cluster_id": context[key]}
+        return context
 
     def note(self, text: str) -> None:
         """Record a finding that is not a tool call.
@@ -1198,6 +1275,25 @@ class Run:
         self.say("== discovery ==")
         advertised = {t.name for t in self.advertised}
 
+        # SEED THE LITERALS FIRST, NOT ONLY LAST.
+        #
+        # _seed_derived_context ran at the END of this phase, so every literal it
+        # supplies was missing while the discovery loop needed it. That cost
+        # nothing until a discovery tool took one: capella_fixture_list needs
+        # root_path, which is a literal, and the loop reported
+        #
+        #   capella_fixture_list   not yet resolvable (needs ['root_path'])
+        #
+        # then the value was seeded four lines later. Three fixture tools stayed
+        # SKIPPED for want of an argument this script had all along -- the same
+        # class of mistake as the missing _DISCOVERY entries, one layer up.
+        #
+        # Calling it twice is safe by construction: every assignment in it is a
+        # setdefault, so the second call cannot overwrite anything discovery
+        # found. It runs again at the end because a few literals are only useful
+        # once discovery has supplied what they sit beside.
+        self._seed_derived_context()
+
         # Seed every id the environment pins, not just the organization.
         #
         # CAPELLA_ORG_ID was honoured and the other two were not, which was
@@ -1266,6 +1362,14 @@ class Run:
             # and the scope and collection live nowhere but this row. Stored
             # under a leading underscore so it is never mistaken for a resolved
             # argument and never sent to a tool.
+            if tool == "capella_clusters_list":
+                # Kept for the cross-cluster replication lookup below: a
+                # replication is listed on its SOURCE, which may not be the
+                # cluster this run selected.
+                self.context_for(tool)["_cluster_rows"] = [
+                    r for r in rows if isinstance(r, dict)
+                ]
+
             if tool == "capella_app_endpoints_list":
                 # item_field is a str OR a tuple of candidate spellings -- see
                 # _DISCOVERY, where this entry is ("name", "id"). row.get(tuple)
@@ -1280,6 +1384,45 @@ class Run:
                     if any(str(row.get(f)) == chosen for f in fields):
                         self.context_for(tool)["_app_endpoint_row"] = row
                         break
+
+        # REPLICATIONS LIVE ON THE SOURCE. If none is visible here, look at the
+        # other clusters in this project before concluding there are none --
+        # and keep the cluster alongside the id, because the pair is what makes
+        # the id usable. See _CLUSTER_FROM.
+        capella_ctx = self.contexts[CAPELLA_SIDE]
+        if (
+            "capella_replications_list" in advertised
+            and not capella_ctx.get("replication_id")
+            and capella_ctx.get("organization_id")
+            and capella_ctx.get("project_id")
+        ):
+            others = [
+                str(row.get("id"))
+                for row in (capella_ctx.get("_cluster_rows") or [])
+                if isinstance(row, dict)
+                and str(row.get("id")) != capella_ctx.get("cluster_id")
+            ]
+            for other in others:
+                payload, result = await self.call(
+                    session, "capella_replications_list",
+                    {"organization_id": capella_ctx["organization_id"],
+                     "project_id": capella_ctx["project_id"],
+                     "cluster_id": other},
+                    phase="discovery",
+                )
+                if result.outcome not in _SUCCESSFUL:
+                    continue
+                rows = [_unwrap(r) for r in _items(payload)]
+                found = next(
+                    (str(r.get("id")) for r in rows
+                     if isinstance(r, dict) and r.get("id")), "")
+                if found:
+                    capella_ctx["replication_id"] = found
+                    capella_ctx["_replication_cluster_id"] = other
+                    self.say(f"  {'replication_id (on another cluster)':<46} "
+                             f"{found}")
+                    self.say(f"  {'  its source cluster':<46} {other}")
+                    break
 
         mode_note = (self.status.get("connection") or {}).get("connection_string", "")
         if mode_note and "cloud.couchbase.com" not in mode_note:
@@ -1355,7 +1498,16 @@ class Run:
 
         # capella_fixture_list walks a directory on THIS machine, so the only
         # sensible root is the repository the server was started from.
-        capella.setdefault("root_path", REPO_ROOT)
+        # THE REPOSITORY ROOT IS NOT WHERE FIXTURES LIVE. capella_fixture_list
+        # answers "how many fixtures are under this path", and pointed at the
+        # repository root it correctly answered zero -- the fixture is in
+        # <repo>/fixtures/<id>/manifest.json. Prefer that directory when it
+        # exists, so the tool is asked the question it can answer.
+        fixtures_dir = os.path.join(REPO_ROOT, "fixtures")
+        capella.setdefault(
+            "root_path",
+            fixtures_dir if os.path.isdir(fixtures_dir) else REPO_ROOT,
+        )
 
         # ONE URL SLOT, TWO PLACEHOLDER NAMES -- AND THEY ARE NOT THE SAME VALUE.
         #
@@ -1773,8 +1925,13 @@ class Run:
                     )
                     missing = []
                 elif body_schema:
-                    # A scalar body -- one tool takes JavaScript source as a bare
-                    # JSON string. Generated the same way, flagged the same way.
+                    # A scalar body -- two ops take JavaScript source as a bare
+                    # JSON string: capella_eventing_function_code_set and
+                    # capella_app_endpoint_access_control_function_set (the
+                    # latter corrected from an object body 2026-09-14, after
+                    # three valid inputs all earned the same "does not evaluate
+                    # to a function" 400). Generated the same way, flagged the
+                    # same way.
                     value, invented = _value_for(
                         "body",
                         body_schema,

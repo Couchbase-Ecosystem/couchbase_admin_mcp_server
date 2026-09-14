@@ -455,6 +455,81 @@ if ($ClusterContainer -and $Network -and $Username -and $Password) {
     Check $false 'EE tool call skipped' 'need a cluster container, a network, and CB_USERNAME/CB_PASSWORD'
 }
 
+# -- 7. the tests that CANNOT run on the developer's machine --------------------
+
+Write-Host ''
+Write-Host '== 7. the security tests Windows skips ==' -ForegroundColor Cyan
+Write-Host '   Seven tests skip on Windows because creating a symlink needs'
+Write-Host '   Developer Mode or elevation, and one needs POSIX permission bits.'
+Write-Host '   They guard SYMLINK ESCAPE and log-file permissions -- exactly the'
+Write-Host '   class of bug that matters most in a container someone else runs.'
+Write-Host '   A security test that skips in dev and never runs in CI is a test'
+Write-Host '   that exists on paper. Linux is where this ships, so run them here.'
+
+$repoPath = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$testFiles = @(
+    'tests/test_round3_hardening.py',
+    'tests/test_logging_hardening.py',
+    'tests/test_logging_and_client.py'
+)
+
+# PYTEST COMES FROM THE HOST, NOT FROM THE NETWORK INSIDE THE CONTAINER.
+#
+# The first version ran `pip install --user pytest` in the container and failed
+# with "No module named pytest": the container inherits the same corporate TLS
+# proxy problem as check 2, so it cannot reach PyPI. Installing on the HOST works
+# -- that is where every other dependency in this repo came from.
+#
+# Staged into a DEDICATED directory rather than mounting the project's .venv.
+# That venv holds Windows builds of couchbase and mcp, and putting it on
+# PYTHONPATH ahead of the image's own site-packages would shadow the Linux
+# builds with .pyd files the container cannot load -- turning a test run into an
+# import error that looks like a code failure. pytest and its dependencies are
+# pure Python, so a clean --target directory is portable across the two.
+$pytestLib = Join-Path $repoPath '.pytest-lib'
+if (-not (Test-Path (Join-Path $pytestLib 'pytest'))) {
+    Write-Host '   staging pytest for Linux (host network, one time) ...'
+    $null = uv pip install --quiet --target $pytestLib pytest 2>&1
+    if (-not (Test-Path (Join-Path $pytestLib 'pytest'))) {
+        $null = python -m pip install --quiet --target $pytestLib pytest 2>&1
+    }
+}
+
+if (-not (Test-Path (Join-Path $pytestLib 'pytest'))) {
+    Check $false 'the skipped security tests ran on Linux' `
+        "could not stage pytest into $pytestLib from the host -- run 'uv pip install --target .pytest-lib pytest' and look at the error"
+} else {
+    # /src FIRST so the repo's own modules win, then the staged pytest, then the
+    # image's site-packages for mcp and couchbase.
+    $pytestCmd = "python -m pytest -q -rs -p no:cacheprovider " + ($testFiles -join ' ')
+    $testOut = docker run --rm `
+        -v "${repoPath}:/src" -v "${pytestLib}:/pytest-lib:ro" -w /src `
+        -e PYTHONPATH=/src:/pytest-lib -e HOME=/tmp `
+        --entrypoint sh cb-admin-mcp:verify -c $pytestCmd 2>&1 | Out-String
+
+    $summary = ($testOut -split "`n" | Where-Object { $_ -match '\d+ (passed|failed|error)' }) -join ' '
+    if (-not $summary) { $summary = ($testOut -split "`n" | Select-Object -Last 5) -join ' ' }
+    Write-Host "   $($summary.Trim())"
+
+    if ($testOut -match '\d+ failed' -or $testOut -match 'ERROR') {
+        Check $false 'the skipped security tests ran on Linux' `
+            'they RAN and something FAILED -- this is the finding the Windows skips were hiding'
+        Write-Host $testOut
+    } elseif ($testOut -match '(\d+) passed') {
+        Check $true 'the skipped security tests ran on Linux' `
+            'symlink escape and permission-bit guards, executed where this ships'
+        $stillSkipped = ([regex]::Matches($testOut, 'SKIPPED')).Count
+        if ($stillSkipped -gt 0) {
+            Write-Host "   NOTE: $stillSkipped test(s) skipped even on Linux. Read the -rs"
+            Write-Host '   reasons above: a test that skips in BOTH environments is not'
+            Write-Host '   platform-guarded, it is unguarded.'
+        }
+    } else {
+        Check $false 'the skipped security tests ran on Linux' 'could not parse the pytest output'
+        Write-Host $testOut
+    }
+}
+
 # -- Summary -------------------------------------------------------------------
 
 Write-Host ''
@@ -463,6 +538,8 @@ if ($script:Failures.Count -eq 0) {
     Write-Host '  The image builds, refuses a posture that drifted to `both`, and'
     Write-Host '  ANSWERED A REAL TOOL CALL against each control plane from inside a'
     Write-Host '  container -- driven by an MCP client, not a urllib probe.'
+    Write-Host '  It also RAN the symlink and permission tests Windows skips, on'
+    Write-Host '  Linux, where this ships.'
     exit 0
 }
 Write-Host ("{0} check(s) failed:" -f $script:Failures.Count) -ForegroundColor Red

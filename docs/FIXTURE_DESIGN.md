@@ -363,9 +363,20 @@ anything.
 
 ## Scope: which planes the fixture family covers
 
-**Decided 2026-09-14: the `capella_fixture_*` family is Capella-only, and that is
-a decision rather than an oversight. It is also not obviously the right one, so
-the argument against is recorded alongside it.**
+**SUPERSEDED 2026-09-14, later the same day. Chris answered the question this
+section said would settle it — both planes — so the family is no longer
+Capella-only and an Enterprise Edition sibling is in scope.**
+
+The reasoning below is kept rather than deleted, because it is still the
+argument for why an EE implementation is a SECOND IMPLEMENTATION and not a port,
+and that is the thing most likely to be underestimated by whoever picks the work
+up. What has changed is the conclusion, not the analysis.
+
+The original decision, for the record:
+
+> **Decided 2026-09-14: the `capella_fixture_*` family is Capella-only, and that
+> is a decision rather than an oversight. It is also not obviously the right one,
+> so the argument against is recorded alongside it.**
 
 This matters because the rest of the tool surface is verified against *both*
 deployment targets, and `handlers/backup_catalog.py` is explicitly plane-aware —
@@ -412,22 +423,42 @@ family that silently works on one plane only reads as something nobody got to.
   interchangeable with Capella's, which is a genuinely valuable property: capture
   on a laptop's EE cluster, import into Capella, compare like for like.
 
-### What would settle it
+### What settled it
 
-Not an argument — a question to Disney: **do they need to reproduce a dataset on
-Enterprise Edition, or only on Capella?** If only Capella, this stays as it is
-and the naming already tells the truth. If both, the work is a sibling
-`ee_fixture_export` / `ee_fixture_import` pair sharing the manifest schema and
-`_fixture_integrity`, not a rewrite of the Capella path.
+Not an argument — a question, and it has been answered.
 
-**Open until then, and until it is answered this must not be described as "the
-fixture capability" without the word Capella in front of it.**
+The question was: **do they need to reproduce a dataset on Enterprise Edition,
+or only on Capella?** The answer, on 2026-09-14, was **both**.
 
-### Checked and NOT yet verified
+So the work is the sibling pair this section predicted: an `admin_fixture_*`
+family sharing the manifest schema, the integrity check and the path handling
+with the Capella one, rather than a rewrite of the Capella path. The prefix is
+`admin_` rather than `ee_` because that is this server's established prefix for
+the self-managed surface, and a third prefix would be a new convention bought
+for nothing.
 
-Whether the `capella_fixture_*` tools are correctly excluded from the tool list
-in an EE-mode container, or merely present and failing at call time. The
-capability gating exists (`tests/test_one_container_one_surface.py` asserts the
-compose files keep the two modes apart), but nobody has run an EE-mode container
-and read back the tool list to confirm these four are absent from it. One run of
-`scripts/run-docker-verification.ps1` against the EE compose file answers it.
+The shared half lives in `handlers/fixture_core.py`. What is genuinely separate
+is the three things named above: the structure walk, document export, and
+document import — because EE reaches all three through the query service and the
+SDK rather than through v4 operations and the Data API.
+
+### Checked — ANSWERED 2026-09-14
+
+The open question was whether the `capella_fixture_*` tools are correctly
+excluded from the tool list in EE mode, or merely present and failing at call
+time. They are correctly excluded. Measured by loading the registry with
+`CB_DEPLOYMENT` pinned, which is the same code path a container takes:
+
+    measured 2026-09-14
+    self_managed   142 tools loaded, fixture tools: []
+    capella        158 tools loaded, fixture tools: [export, import, list, verify]
+
+An operator running the EE container therefore does not see four tools that
+cannot work for them, which was the concern.
+
+**What this does NOT establish**, and the distinction matters: this measured the
+gating, not the shipped image. A container could still differ — a different
+entry point, an environment the compose file supplies differently — and the run
+of `scripts/run-docker-verification.ps1` against the EE compose file would settle
+that. What it would add is confirmation that the image behaves as the code does;
+the gating logic itself is no longer the open part.

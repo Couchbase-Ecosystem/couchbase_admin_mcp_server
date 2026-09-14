@@ -503,3 +503,97 @@ server problem rather than a network one. The allowlist gates the data plane —
 the SDK's 11207 connection and the Data API, and therefore the fixture tools.
 `CAPELLA-CONNECTIVITY.md` has the full account of the data-plane side, including
 which parts of it are measured and which are still hypothesis.
+
+---
+
+## 11. Proving a fixture family — the round trip
+
+This is the only check in this repository that compares a fixture against
+something **other than itself**, and it is the difference between a fixture
+family that is carefully written and one that is verified.
+
+### Why nothing cheaper is enough
+
+On 2026-09-14 the Capella exporter recorded the wrong document key for 187 of
+188 documents. The export query read
+
+    SELECT META().id AS id, META().expiration AS exp, d.*
+
+and `d.*` comes last, so any document carrying its own `id` field overwrote the
+metadata alias. `travel-sample`'s airline documents are `{"id": 10, ...}` keyed
+`airline_10`; the fixture recorded `10`.
+
+Every check in place at the time passed:
+
+| Check | Why it passed anyway |
+|---|---|
+| per-file `sha256` | the hash of a wrong file matches the hash recorded for that wrong file |
+| line counts | 188 wrong documents are still 188 lines |
+| `*_fixture_verify --check_cluster` | `COUNT(*)` on the cluster was 188, correctly |
+
+Each one compares a fixture against its own record. Only a round trip compares
+it against a second, independent capture.
+
+### Running it
+
+```powershell
+# Capella
+uv run python scripts\fixture_round_trip.py --plane capella `
+    --keyspace travel-sample.inventory.airline `
+    --scratch  travel-sample.roundtrip.airline `
+    --work     C:\Work\Development\roundtrip `
+    --perform
+
+# Enterprise Edition
+uv run python scripts\fixture_round_trip.py --plane ee `
+    --keyspace travel-sample.inventory.airline `
+    --scratch  travel-sample.roundtrip.airline `
+    --work     C:\Work\Development\roundtrip-ee `
+    --perform
+```
+
+Drop `--perform` to print the three calls it would make and exit. The two
+exports are reads; the import is the only write, and it creates the scratch
+scope and collection.
+
+Pick a source keyspace **with documents in it**. A round trip over an empty
+collection compares nothing with nothing; the script refuses rather than
+reporting a clean result that establishes nothing.
+
+### Reading the result
+
+`identical: true` with a non-zero `first_documents` is the strongest statement
+available about a fixture family on that plane.
+
+Otherwise the report separates **keys** from **bodies**, because the repairs are
+different:
+
+- **keys differ, bodies do not** — the export is recording something other than
+  the document key. The script says so in `signature` and names
+  `META_ID_ALIAS`. This is the 2026-09-14 failure.
+- **bodies differ, keys do not** — the payload is being altered in transit.
+  Look at the import's write path, not the export's query.
+- **keys missing from the second export** — the import wrote some and not all.
+  Its per-keyspace `failures` list says which.
+
+### Afterwards
+
+**The scratch keyspace is not removed.** A verification tool that deletes things
+can destroy the evidence of the failure it just found, so the script prints what
+it created and leaves it. Drop the scope yourself once you have read the result:
+
+```powershell
+uv run python scripts\dump_tool.py admin_scope_delete `
+    -a bucket_name=travel-sample -a scope_name=roundtrip `
+    --write --perform --allow-destructive
+```
+
+### Current status, 2026-09-14
+
+| Plane | Round trip run? |
+|---|---|
+| Capella | **Yes** — and it is what found the key bug. The fix is in; a confirming re-run is outstanding. |
+| Enterprise Edition | **No.** `handlers/fixture.py` has never been run against a live EE cluster. |
+
+Until the EE row says yes, treat `admin_fixture_export`, `admin_fixture_import`,
+`admin_fixture_list` and `admin_fixture_verify` as written rather than verified — `tests/test_ee_fixture.py` asserts that the module keeps saying so.

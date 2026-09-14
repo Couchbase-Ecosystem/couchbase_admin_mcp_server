@@ -89,7 +89,38 @@ Order of consultation, strongest first:
 
 See `docs/PROVIDER_SOURCE.md` for which checkout this refers to.
 
-### 1.6 Retractions are recorded, not quietly corrected
+### 1.6 A probe that expects a refusal can perform the operation
+
+**`body_required` is a claim about what a CALLER must send. It is not a claim
+about what the SERVICE rejects.** Those are different propositions, and the
+second one can only be established by asking.
+
+On 2026-09-14 `scripts/verify_capella_paths.py --method-probe` read
+`capella_data_api_set`'s `body_required=("enableDataApi",)`, inferred that an
+empty body would be refused, and sent a real `PUT .../dataAPI` with `{}`.
+Capella answered **202 Accepted**. An empty body means `enableDataApi: false`,
+so the verification run **turned the Data API off on the cluster it was
+measuring** — confirmed minutes later by `capella_data_api_get`:
+
+    {"enabled": false, "state": "disabled", "connectionString": ""}
+
+Everything in the fixture layer — export, import, cluster-side verify — reads
+that connection string. A run whose whole purpose was to observe without
+changing anything took the cluster's most load-bearing capability offline, and
+the only reason it was caught is that the script reports a 2xx on a write as an
+ERROR rather than a pass.
+
+`Op.empty_body_accepted` is the override and it already existed
+(`capella_alert_integration_update` carries it). The rule:
+
+- Before relying on a refusal, ask whether the service has any reason to refuse.
+  A PUT that replaces a small settings object usually has none.
+- An operation whose empty body would be VALID input must carry
+  `empty_body_accepted=True`, which drops it back to an OPTIONS probe.
+- A 2xx from a probe is never evidence of a path. It is evidence that the probe
+  did something, and the first question is what.
+
+### 1.7 Retractions are recorded, not quietly corrected
 
 A wrong cause stays in the document with the reason it failed. See
 `CAPELLA-CONNECTIVITY.md`, which keeps all three of its retracted diagnoses.

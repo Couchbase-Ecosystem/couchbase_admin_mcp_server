@@ -466,8 +466,22 @@ def _stub_export_cluster(monkeypatch, *, collections: list[str],
         for keyspace, rows in rows_by_keyspace.items():
             _b, _s, c = keyspace.rsplit(".", 2)
             if f"`{c}`" in statement:
+                # ROWS ARRIVE METADATA-ALIASED, as the real query returns them.
+                # A row that already names the alias is passed through untouched,
+                # so a test can exercise a document whose BODY carries `id`.
+                shaped = []
+                for row in rows:
+                    if fixture.META_ID_ALIAS in row:
+                        shaped.append(dict(row))
+                        continue
+                    row = dict(row)
+                    shaped.append({
+                        fixture.META_ID_ALIAS: row.pop("id", None),
+                        fixture.META_EXP_ALIAS: row.pop("exp", 0),
+                        **row,
+                    })
                 # One page, then empty, so the key-range loop terminates.
-                return {"results": [] if parameters.get("$last_key") else rows}
+                return {"results": [] if parameters.get("$last_key") else shaped}
         return {"results": []}
 
     monkeypatch.setattr(fixture, "_sql_query", _query)
@@ -544,3 +558,222 @@ def test_a_keyspace_filter_that_matches_is_not_refused(tmp_path, monkeypatch):
     })
     payload = json.loads("".join(block.text for block in result))
     assert payload["documents"] == 1
+
+
+# ── a keyspace_map key contains dots, which the dotted CLI syntax cannot carry ──
+
+
+def test_a_keyspace_map_key_is_a_whole_keyspace_including_its_dots():
+    """MEASURED 2026-09-14, and it silently cost a round-trip run.
+
+    The import was invoked as
+
+        -a "keyspace_map.travel-sample.inventory.airline=travel-sample.mcptest_import.airline"
+
+    and scripts/dump_tool.py's dotted-name parser built
+
+        {"travel-sample": {"inventory": {"airline": "travel-sample.mcptest_import.airline"}}}
+
+    because it reads every dot as a level of nesting. But the KEY here is the
+    whole keyspace, dots included. The schema refused it honestly -- "is not of
+    type 'string'" -- and the import never ran, so the export that followed read
+    an empty collection.
+
+    No amount of shell quoting fixes that: it is the SYNTAX, not the shell.
+    scripts/dump_tool.py --args-json exists for this, the same way `git commit -F`
+    keeps a commit message out of the shell.
+
+    This pins the schema's side of it: keyspace_map values are plain strings
+    keyed by a full keyspace, so a nested object is not a valid spelling.
+    """
+    schema = None
+    for tool in fixture.TOOLS:
+        if tool.name == "capella_fixture_import":
+            schema = tool.inputSchema
+    assert schema is not None
+    keyspace_map = schema["properties"]["keyspace_map"]
+    assert keyspace_map["type"] == "object"
+    # Values are strings. A nested object here would mean the dotted spelling
+    # was legitimate, and it is not.
+    assert keyspace_map["additionalProperties"] == {"type": "string"}
+
+
+def test_the_import_rejects_a_nested_keyspace_map_rather_than_guessing(tmp_path):
+    """The shape the dotted CLI syntax produces must not be quietly tolerated.
+
+    Accepting it would mean guessing which of several plausible flattenings the
+    caller meant, on an operation that writes to somebody's cluster.
+    """
+    directory = _write_fixture(tmp_path)
+    result = fixture._import({
+        "fixture_path": str(directory),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "keyspace_map": {"travel-sample": {"inventory": {"airline": "x.y.z"}}},
+    })
+    body = _text(result)
+    assert "keyspace_map values must be keyspace STRINGS" in body
+    assert "travel-sample" in body
+    # It must name the cause rather than the symptom, because the caller's next
+    # move is a different CLI flag, not a different mapping.
+    assert "--args-json" in body
+    assert "Nothing was imported" in body
+
+
+# ── the metadata aliases must not be clobbered by a document's own fields ─────
+
+
+def test_the_metadata_aliases_cannot_collide_with_ordinary_field_names():
+    """FOUND BY A ROUND TRIP ON 2026-09-14, after nothing else had caught it.
+
+    The export read `SELECT META().id AS id, META().expiration AS exp, d.*`.
+    `d.*` comes LAST, so a document carrying its own `id` field overwrote the
+    metadata alias, and two things followed silently:
+
+      * the recorded key was the document's `id` FIELD, not its document key --
+        travel-sample's airline documents are {"id": 10, ...} under the key
+        `airline_10`, and every fixture recorded `10`;
+      * popping `id` off the row then removed that field from the body, so the
+        body was lossy too.
+
+    Per-file hashes, line counts and capella_fixture_verify's COUNT(*) all
+    passed throughout, because every one of them compares a fixture against
+    itself. It took export -> import -> export to surface it: 187 of 188 keys
+    differed while zero bodies did.
+    """
+    assert fixture.META_ID_ALIAS.startswith("__")
+    assert fixture.META_EXP_ALIAS.startswith("__")
+    # The names must not be the bare ones that collided.
+    assert fixture.META_ID_ALIAS != "id"
+    assert fixture.META_EXP_ALIAS != "exp"
+    # The xattr alias carries the same prefix for the same reason.
+    assert "__fixture_xattr_" in fixture.XATTR_SELECT
+
+
+def test_the_export_query_aliases_the_metadata_before_splatting_the_document():
+    """The ORDER is what bit: d.* last means d.* wins."""
+    statement = fixture.EXPORT_QUERY.format(
+        id_alias=fixture.META_ID_ALIAS,
+        exp_alias=fixture.META_EXP_ALIAS,
+        bucket="b", scope="s", collection="c",
+    )
+    assert f"META().id AS {fixture.META_ID_ALIAS}" in statement
+    assert "AS id," not in statement
+    assert "AS exp," not in statement
+
+
+def test_an_exported_row_keeps_a_document_field_named_id(tmp_path, monkeypatch):
+    """The regression, end to end: a document whose body contains `id` must keep
+    it, and must be keyed by its real document key."""
+    _stub_export_cluster(
+        monkeypatch, collections=["airline"],
+        rows_by_keyspace={"b.s.airline": [{
+            fixture.META_ID_ALIAS: "airline_10",
+            fixture.META_EXP_ALIAS: 0,
+            "id": 10,
+            "name": "40-Mile Air",
+        }]},
+    )
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.airline"],
+    })
+    payload = json.loads("".join(block.text for block in result))
+    assert payload["documents"] == 1
+
+    line = (tmp_path / "fx" / "data" / "b.s.airline.jsonl").read_text(
+        encoding="utf-8").strip()
+    row = json.loads(line)
+    # The KEY is the document key, not the body's id field.
+    assert row["id"] == "airline_10"
+    # And the body keeps its own id field.
+    assert row["doc"]["id"] == 10
+    assert row["doc"]["name"] == "40-Mile Air"
+
+
+# ── system scopes belong to Capella, not to the fixture ──────────────────────
+
+
+def _import_against(monkeypatch, tmp_path, structure):
+    """Drive _import with a canned structure and a cluster that accepts nothing."""
+    from handlers.capella import environment as env
+
+    directory = _write_fixture(tmp_path)
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    manifest["structure"] = structure
+    manifest["files"] = []
+    manifest["payload_sha256"] = None
+    (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    monkeypatch.setattr(env, "_resolve_context", lambda args: ("o", "p", None))
+    from handlers.capella import guardrails
+    monkeypatch.setattr(guardrails, "assert_project_allowed", lambda *a, **k: None)
+    monkeypatch.setattr(guardrails, "assert_name_allowed", lambda *a, **k: None)
+
+    attempted: list[str] = []
+
+    def _invoke(op_name, args, body=None, composite=""):
+        if op_name == "capella_buckets_list":
+            return {"data": [{"name": "b", "id": "Yg=="}]}
+        if op_name == "capella_scope_create":
+            name = str((body or {}).get("name"))
+            attempted.append(name)
+            # Capella refuses ONLY the reserved prefixes. An ordinary scope
+            # succeeds -- a stub that refuses everything would make this test
+            # pass for the wrong reason.
+            if name.startswith(("_", "%")):
+                raise RuntimeError(
+                    'HTTP 422 {"code": 11006, "message": "The scope name '
+                    'provided is not valid. A scope name can not start with an '
+                    'underscore or percentage."}'
+                )
+            return {}
+        return {"data": []}
+
+    monkeypatch.setattr(env, "_invoke", _invoke)
+    monkeypatch.setattr(fixture, "capella_request", lambda *a, **k: {"definitions": []})
+    result = fixture._import({
+        "fixture_path": str(directory), "cluster_id": "c",
+        "organization_id": "o", "project_id": "p",
+    })
+    return json.loads(_text(result)), attempted
+
+
+def test_a_system_scope_is_skipped_rather_than_attempted(monkeypatch, tmp_path):
+    """MEASURED 2026-09-14. The exporter records every scope it finds, `_system`
+    included, so the importer tried to create it and Capella refused:
+
+        422 code 11006 "A scope name can not start with an underscore or
+                        percentage."
+
+    That collected a problem on EVERY run and set imported:false on an import
+    that had otherwise loaded all 188 documents correctly. A tool that always
+    reports a failure it cannot avoid trains its reader to ignore failures.
+    """
+    payload, attempted = _import_against(monkeypatch, tmp_path, [
+        {"name": "b", "scopes": [
+            {"name": "_system", "collections": [{"name": "_mobile"}]},
+            {"name": "inventory", "collections": [{"name": "airline"}]},
+        ]},
+    ])
+    assert "_system" not in attempted, "a system scope must never be sent"
+    assert "inventory" in attempted, "an ordinary scope must still be created"
+
+    structure = next(s for s in payload["steps"] if s["step"] == "structure")
+    assert "b._system" in structure["system_scopes_skipped"]
+    # Its collections are named too, so the reader knows what was not carried.
+    assert "b._system._mobile" in structure["system_scopes_skipped"]
+    # And skipping them is NOT a problem.
+    assert not any("11006" in p for p in payload["problems"])
+
+
+def test_a_percentage_prefixed_scope_is_skipped_for_the_same_reason(
+        monkeypatch, tmp_path):
+    """Capella's rule names underscore AND percentage. _default was skipped one
+    case at a time; this covers the family rather than the instance."""
+    payload, attempted = _import_against(monkeypatch, tmp_path, [
+        {"name": "b", "scopes": [{"name": "%odd", "collections": []}]},
+    ])
+    assert "%odd" not in attempted
+    structure = next(s for s in payload["steps"] if s["step"] == "structure")
+    assert "b.%odd" in structure["system_scopes_skipped"]

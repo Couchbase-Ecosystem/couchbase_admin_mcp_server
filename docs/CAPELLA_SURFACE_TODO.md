@@ -219,16 +219,22 @@ matters for fixture teardown.
 
 ## P2 — add if the use case appears
 
-- **Free-tier cluster / bucket / App Service** (~14 ops, `:20844-21114`,
+> Operation counts in P2 and P3 below are **Capella's**, not this server's, and
+> were read from the provider's generated client on **2026-09-14**. They say how
+> big each subsystem is, so a reader can weigh the work — they are estimates of
+> somebody else's surface and will drift as Capella ships.
+
+
+- **Free-tier cluster / bucket / App Service** (~14 ops as of 2026-09-14, `:20844-21114`,
   `:27986-28223`, `:22464-22642`). Directly relevant to the ephemeral-environment
   workflow `capella_env_*` is meant to serve; a free-tier cluster is the cheapest
   possible test environment. Reason to wait: `capella_env_*` is not implemented
   yet, so there is nothing to wire them into.
-- **Cloud snapshot backups** (~10 ops, `:29743-30314`). `spec_pending.py` flagged
+- **Cloud snapshot backups** (~10 ops as of 2026-09-14, `:29743-30314`). `spec_pending.py` flagged
   this subsystem as unexamined before anyone probed it; three read operations were
   promoted on evidence and the writes were not. Fully mapped in the generated
   client now, so the unknown is gone.
-- **Org users and API keys** (~9 ops, `:34098-34365`, `:16637-16888`). Note
+- **Org users and API keys** (~9 ops as of 2026-09-14, `:34098-34365`, `:16637-16888`). Note
   `PATCH`, not `PUT`, on user update. Reason to wait: an MCP server that can mint
   API keys is a different security proposition, and that decision should be made
   deliberately rather than because the endpoint existed.
@@ -240,7 +246,7 @@ matters for fixture teardown.
 
 ## P3 — deliberately NOT adding, with reasons
 
-**Networking: private endpoints, network peers, mTLS** (~20 ops, `:30745-32168`).
+**Networking: private endpoints, network peers, mTLS** (~20 ops as of 2026-09-14, `:30745-32168`).
 These configure how a cluster is reachable, on infrastructure the person running
 this container does not own and cannot see. A misconfiguration here does not
 produce an error message, it produces an outage, and the blast radius is the
@@ -248,18 +254,18 @@ customer's VPC. The Terraform provider is the right tool for this — it has sta
 a plan step, and a human reading a diff. **Reconsider if** a customer asks for
 private-endpoint *inspection* (the GETs alone, read-only) rather than management.
 
-**CMEK** (~8 ops + associate/unassociate, `:17078-17523`, `:30314/30369`).
+**CMEK** (~8 ops + associate/unassociate, as of 2026-09-14, `:17078-17523`, `:30314/30369`).
 Customer-managed encryption keys. Same argument, sharper: an agent that can
 unassociate a CMEK can make a cluster's data unreadable. **Reconsider if** the
 read operations are wanted for audit purposes; the writes should stay out.
 
-**Analytics / Columnar** (~30 ops, `:16533-20455`). A whole separate product
+**Analytics / Columnar** (~30 ops as of 2026-09-14, `:16533-20455`). A whole separate product
 surface with its own clusters, databases and scopes. Not a gap in a Capella
 *admin* server — it is a different server. **Reconsider if** someone actually
 asks. Shipping 30 untested operations to be thorough is how the verification
 debt this repo just spent a night clearing gets recreated.
 
-**aiServices** (~25 ops, `:15573-16497`, `:21465-22001`). Models, providers,
+**aiServices** (~25 ops as of 2026-09-14, `:15573-16497`, `:21465-22001`). Models, providers,
 API keys, workflows, workflow runs. Same reasoning, plus it is new enough that
 the surface will move. **Reconsider when** it stabilises and someone names a use.
 

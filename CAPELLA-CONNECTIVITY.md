@@ -301,7 +301,8 @@ call, the cluster's response, and the response shape sent back.
 
 It is also the layer that caught the worst bug in the CRUD work. A patch applied
 its tests but not its source. Every unit test passed, and the server quietly
-advertised 37 tools instead of 38. Only the integration run surfaced it, as
+advertised 37 tools instead of 38 (counts as they stood in August 2026).
+Only the integration run surfaced it, as
 `Unknown tool: 'get_documents_by_ids'`. **If an MCP server is only unit-tested,
 a missing tool registration is invisible.**
 

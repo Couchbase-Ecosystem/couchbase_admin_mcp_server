@@ -269,7 +269,7 @@ graph LR
     GR["guardrails.py<br/>org pin, project allowlist,<br/>name prefix, env ceiling"]
   end
   subgraph Quarantine["Not shipped"]
-    PN["spec_pending.py<br/>22 ops, paths tagged [DOC]<br/>outside OPS, no tools generated"]
+    PN["spec_pending.py<br/>parked ops, paths tagged [DOC] or [TF]<br/>outside OPS, no tools generated"]
   end
   E --> P
   F --> P
@@ -409,7 +409,8 @@ how this should be deployed, for three reasons:
 `detect_mode()` resolves `CAPELLA_API_KEY_SECRET` plus a non-Capella
 `CB_CONNECTION_STRING` to `both`. So an instance intended for a self-managed
 cluster, whose `.env` still carries a Capella key from earlier work, silently
-loads all 208 tools and the one-interface-per-instance boundary is gone with no
+loads EVERY tool from both planes (280 as of 2026-09-14) and the
+one-interface-per-instance boundary is gone with no
 warning at the point of use. The inference is defensible in isolation, because
 an operator who configures both plainly intends both, but naming the mode
 removes it. `CB_DEPLOYMENT_GATE=false` is a further escape hatch with the same effect;

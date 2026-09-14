@@ -135,8 +135,34 @@ _DESTRUCTIVE = ToolAnnotations(
 #: page, degrades quadratically across a large collection, and is unstable if
 #: anything mutates mid-export. The last key is the only cursor state to persist,
 #: which also makes a failed export resumable.
+#: Aliases for the METADATA columns. THE LEADING UNDERSCORES ARE LOAD-BEARING.
+#:
+#: This query used to read `SELECT META().id AS id, META().expiration AS exp,
+#: d.*`, and `d.*` COMES LAST -- so any document carrying its own `id` or `exp`
+#: FIELD overwrote the metadata alias. The consequences were silent and severe:
+#:
+#:   * The recorded key was the document's own `id` field rather than its actual
+#:     document key. travel-sample's airline documents have {"id": 10, ...} and
+#:     the key `airline_10`; every exported fixture recorded `10`.
+#:   * Popping `id` out of the row to use as the key then STRIPPED that field
+#:     from the document body, so the body was lossy as well as the key wrong.
+#:
+#: Nothing caught it. Per-file hashes matched, line counts matched, and
+#: capella_fixture_verify's COUNT(*) matched, because every one of those checks
+#: compares a fixture against itself. It was found on 2026-09-14 by a round trip
+#: -- export, import into a scratch keyspace, export back, compare -- which
+#: showed 187 of 188 keys differing while zero document BODIES differed. The one
+#: key that matched was `_sync:syncInfo`, whose body has no fields at all.
+#:
+#: A field beginning with a double underscore can still collide in principle.
+#: These names are chosen to make that vanishingly unlikely rather than
+#: impossible, and _export now REFUSES a row where the collision would happen
+#: instead of silently preferring one.
+META_ID_ALIAS = "__fixture_meta_id"
+META_EXP_ALIAS = "__fixture_meta_exp"
+
 EXPORT_QUERY = """
-SELECT META().id AS id, META().expiration AS exp, d.*
+SELECT META().id AS {id_alias}, META().expiration AS {exp_alias}, d.*
 FROM `{bucket}`.`{scope}`.`{collection}` AS d
 WHERE META().id > $last_key
 ORDER BY META().id
@@ -148,7 +174,10 @@ LIMIT $page_size
 #: must therefore be declared by the caller and recorded in the manifest. Get the
 #: list wrong and xattrs are dropped in silence. Fifteen per query maximum; the
 #: full surface requires Couchbase Server 8.0.
-XATTR_SELECT = "META().xattrs.`{name}` AS `xattr_{name}`"
+#: Same collision hazard as the metadata aliases above, and the same remedy:
+#: a document field literally named `xattr_foo` would otherwise be
+#: indistinguishable from the carried xattr `foo`.
+XATTR_SELECT = "META().xattrs.`{name}` AS `__fixture_xattr_{name}`"
 
 _TAGS_SCHEMA = {
     "type": "object",
@@ -923,7 +952,11 @@ def _export(args: dict) -> list[TextContent]:
                         matched_keyspaces.add(keyspace)
                     if wanted_keyspaces and keyspace not in wanted_keyspaces:
                         continue
-                    select = ["META().id AS id", "META().expiration AS exp", "d.*"]
+                    select = [
+                        f"META().id AS {META_ID_ALIAS}",
+                        f"META().expiration AS {META_EXP_ALIAS}",
+                        "d.*",
+                    ]
                     for name in xattrs:
                         select.append(XATTR_SELECT.format(name=name))
                     statement = (
@@ -947,13 +980,29 @@ def _export(args: dict) -> list[TextContent]:
                                 if not rows:
                                     break
                                 for row in rows:
-                                    doc_id = row.pop("id", None)
-                                    expiry = row.pop("exp", 0)
+                                    doc_id = row.pop(META_ID_ALIAS, None)
+                                    expiry = row.pop(META_EXP_ALIAS, 0)
+                                    prefix = "__fixture_xattr_"
                                     carried = {
-                                        key[len("xattr_"):]: row.pop(key)
+                                        key[len(prefix):]: row.pop(key)
                                         for key in list(row)
-                                        if key.startswith("xattr_")
+                                        if key.startswith(prefix)
                                     }
+                                    if doc_id is None:
+                                        # The alias did not survive, which can
+                                        # only mean a document field of the same
+                                        # name overwrote it. Refuse rather than
+                                        # record a key that is not the key --
+                                        # the exact failure these aliases exist
+                                        # to prevent.
+                                        raise RuntimeError(
+                                            f"a document in {keyspace} has no "
+                                            f"{META_ID_ALIAS}: a field of that "
+                                            f"name in the document overwrote "
+                                            f"the metadata alias, so its real "
+                                            f"key cannot be recovered. Nothing "
+                                            f"was written for this keyspace."
+                                        )
                                     handle.write(json.dumps({
                                         "id": doc_id,
                                         "exp": expiry,
@@ -1398,6 +1447,30 @@ def _import(args: dict) -> list[TextContent]:
         return err("keyspace_map must be an object of "
                    "bucket.scope.collection -> bucket.scope.collection",
                    tool="capella_fixture_import")
+    # VALUES MUST ALREADY BE STRINGS. str(v) on anything else produces a
+    # plausible-looking target keyspace out of a Python repr -- "{'inventory':
+    # {...}}" -- and this operation writes to somebody's cluster, so a garbage
+    # mapping is worse than a refusal.
+    #
+    # MEASURED 2026-09-14: scripts/dump_tool.py's dotted -a syntax turns
+    #   -a "keyspace_map.travel-sample.inventory.airline=..."
+    # into {"travel-sample": {"inventory": {"airline": "..."}}}, because it
+    # reads every dot as nesting. The KEY here is a whole keyspace, dots
+    # included, so that spelling cannot express it at all. Use --args-json.
+    nested = sorted(k for k, v in keyspace_map.items() if not isinstance(v, str))
+    if nested:
+        return err(
+            f"keyspace_map values must be keyspace STRINGS, and these are not: "
+            f"{nested}.\n"
+            f"A keyspace_map key is a WHOLE keyspace including its dots -- "
+            f"{{'bucket.scope.collection': 'bucket.scope.collection'}} -- so a "
+            f"nested object here almost certainly came from a dotted "
+            f"command-line argument, which reads every dot as a level of "
+            f"nesting and cannot express a key that contains one.\n"
+            f"Pass the mapping with scripts/dump_tool.py --args-json instead. "
+            f"Nothing was imported.",
+            tool="capella_fixture_import",
+        )
     keyspace_map = {str(k): str(v) for k, v in keyspace_map.items()}
 
     try:
@@ -1451,6 +1524,7 @@ def _import(args: dict) -> list[TextContent]:
             )
 
     steps: list[dict] = []
+    skipped_system_scopes: list[str] = []
     created_buckets: list[str] = []
     created_scopes: list[str] = []
     created_collections: list[str] = []
@@ -1493,6 +1567,32 @@ def _import(args: dict) -> list[TextContent]:
             scope_name = str(scope.get("name") or "")
             if not scope_name:
                 continue
+            # A SYSTEM SCOPE IS NOT THE FIXTURE'S TO CREATE. Capella makes
+            # `_system` itself and refuses any attempt to add one:
+            #
+            #   422 code 11006 "A scope name can not start with an underscore
+            #                   or percentage."
+            #
+            # MEASURED 2026-09-14. The exporter records every scope it sees,
+            # `_system` included, so the importer dutifully tried to create it
+            # and collected a problem on every single run -- enough to set
+            # imported:false on an import that had otherwise loaded all 188
+            # documents correctly. A tool that always reports a failure it
+            # cannot avoid trains its reader to ignore the failures.
+            #
+            # The underscore rule is Capella's, not a guess: `_default` was
+            # already skipped for the same reason, one case at a time. This
+            # covers the family.
+            if scope_name.startswith(("_", "%")):
+                skipped_system_scopes.append(f"{target_name}.{scope_name}")
+                scope_ref = dict(bucket_ref, scope_name=scope_name)
+                for collection in scope.get("collections") or []:
+                    collection_name = str(collection.get("name") or "")
+                    if collection_name:
+                        skipped_system_scopes.append(
+                            f"{target_name}.{scope_name}.{collection_name}"
+                        )
+                continue
             if scope_name != "_default":
                 try:
                     _env._invoke("capella_scope_create", bucket_ref,
@@ -1529,7 +1629,7 @@ def _import(args: dict) -> list[TextContent]:
                             f"{collection_name} could not be created: {exc}"
                         )
 
-    steps.append({
+    structure_step: dict[str, Any] = {
         "step": "structure",
         "buckets_created": created_buckets,
         "scopes_created": created_scopes,
@@ -1538,7 +1638,17 @@ def _import(args: dict) -> list[TextContent]:
             "Existing buckets, scopes and collections are REUSED, not "
             "recreated. This tool is re-runnable by design."
         ),
-    })
+    }
+    if skipped_system_scopes:
+        structure_step["system_scopes_skipped"] = skipped_system_scopes
+        structure_step["system_scopes_note"] = (
+            "Capella creates and owns these, and refuses any attempt to make "
+            "one (422 code 11006). They are recorded by the exporter because it "
+            "records what it finds, and skipped here because they are not the "
+            "fixture's to create. This is NOT a problem and does not affect "
+            "`imported`."
+        )
+    steps.append(structure_step)
 
     # ── 5. documents ─────────────────────────────────────────────────────
     #

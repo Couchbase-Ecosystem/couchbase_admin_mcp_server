@@ -148,6 +148,185 @@ __all__ = ["PENDING_OPS"]
 #: honest and is not progress.
 
 PENDING_OPS: tuple[Op, ...] = (
+    # ── P1 item 7: App Service admin user read and update ────────────────────
+    #
+    # We CREATE and DELETE these and can neither read one back nor change it. So
+    # rotating an App Service admin user's password means deleting the user and
+    # making a new one, and every harness holding the old credential fails in
+    # between -- the same asymmetry the database credential had until today.
+    Op(
+        name="capella_app_service_admin_user_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/adminUsers/{admin_user_id}",
+        summary=(
+            "Read one App Service admin user. The list endpoint returns every "
+            "user; this reads one by id, which is what an update needs first "
+            "given that `access` REPLACES rather than adds. "
+            "[TF openapi.gen.go:23263]"
+        ),
+        group="app_services",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_service_admin_user_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/adminUsers/{admin_user_id}",
+        summary=(
+            "Update an App Service admin user: password, or endpoint access.\n"
+            "EXPECT THE CREATE OP'S `access` RULE TO HOLD HERE, and do not assume "
+            "it: exactly one of accessAllEndpoints or endpoints, never both and "
+            "never neither, with {accessAllEndpoints: false} counting as NEITHER. "
+            "That was measured on the create path and is recorded there; this "
+            "record does not claim it has been measured on THIS one.\n"
+            "NO BODY SCHEMA IS DECLARED. Only path and method were sourced. This "
+            "is NOT promotable on a path probe alone -- "
+            "test_no_shipped_write_tool_is_missing_its_body_schema will refuse "
+            "it, and correctly, exactly as it refused "
+            "capella_app_endpoint_audit_log_set on 2026-09-14. Read "
+            "UpdateAppServiceAdminUserRequest from the provider before shipping. "
+            "[TF openapi.gen.go:23336]"
+        ),
+        group="app_services",
+        guarded=True,
+    ),
+
+    # ── P1 item 8: sample buckets ────────────────────────────────────────────
+    #
+    # We can LOAD a sample dataset and cannot list or unload one. That matters
+    # for fixture teardown: a sample bucket loaded for a test run is 63,000
+    # documents that nothing in this server can remove.
+    Op(
+        name="capella_sample_buckets_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/sampleBuckets",
+        summary=(
+            "List the sample datasets loaded on a cluster. "
+            "[TF openapi.gen.go:33107]"
+        ),
+        group="buckets",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_sample_bucket_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/sampleBuckets/{sample_bucket_id}",
+        summary=(
+            "Read one loaded sample bucket. [TF openapi.gen.go:33278]"
+        ),
+        group="buckets",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_sample_bucket_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/sampleBuckets/{sample_bucket_id}",
+        summary=(
+            "Unload a sample dataset, DELETING THE BUCKET AND EVERY DOCUMENT IN "
+            "IT. This is the teardown half of capella_sample_bucket_load and it "
+            "is a bucket delete in all but name -- on this organization's test "
+            "cluster that is travel-sample, which every fixture and index in "
+            "this repository currently points at. "
+            "[TF openapi.gen.go:33223]"
+        ),
+        group="buckets",
+        destructive=True,
+        guarded=True,
+    ),
+
+    # ── P1 item 6: bucket backup schedules and cycles ─────────────────────────
+    #
+    # PARKED WITH A WARNING ATTACHED. Four operations were once parked against
+    # /v4/.../buckets/{bucket_id}/backupSchedule, transcribed from the rendered
+    # reference, and a live sweep on 2026-09-12 returned Go's mux default
+    # "404 page not found" for that path and six other spellings. Those records
+    # were DELETED rather than left parked, and the retraction is recorded at the
+    # top of this module.
+    #
+    # THIS IS A DIFFERENT PATH -- /backup/schedules, two segments, sourced from
+    # the provider's generated client rather than a docs page. The distinction is
+    # the whole reason these are parked rather than shipped: the same mistake in
+    # the same subsystem twice would be indefensible, and one probe run settles
+    # it. If these also answer plain-text 404, DELETE them as disconfirmed rather
+    # than leaving them parked -- a parked record implies "awaiting confirmation".
+    Op(
+        name="capella_bucket_backup_schedules_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/schedules",
+        summary=(
+            "List a bucket's backup schedules. We ship on-demand backup and no "
+            "scheduling at all. [TF openapi.gen.go:28613] -- and see the "
+            "RETRACTED note at the top of this module: a DIFFERENT, similar path "
+            "was disconfirmed live on 2026-09-12."
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_bucket_backup_schedule_create",
+        method="POST",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/schedules",
+        summary=(
+            "Create a backup schedule for a bucket. NO BODY SCHEMA IS DECLARED; "
+            "read CreateBackupScheduleRequest from the provider before shipping. "
+            "[TF openapi.gen.go:28613]"
+        ),
+        group="backup",
+        guarded=True,
+    ),
+    Op(
+        name="capella_bucket_backup_schedule_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/schedules",
+        summary=(
+            "Replace a bucket's backup schedule. NO BODY SCHEMA IS DECLARED. "
+            "Note the path carries no schedule id, so this almost certainly "
+            "REPLACES the bucket's single schedule rather than updating one of "
+            "several -- which is a claim to verify, not to assume. "
+            "[TF openapi.gen.go:28802]"
+        ),
+        group="backup",
+        guarded=True,
+    ),
+    Op(
+        name="capella_bucket_backup_schedule_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/schedules",
+        summary=(
+            "Remove a bucket's backup schedule. Deleting a schedule stops future "
+            "backups and deletes none that exist. [TF openapi.gen.go:28802]"
+        ),
+        group="backup",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_bucket_backup_cycles_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/cycles",
+        summary=(
+            "List a bucket's backup cycles. A CYCLE is not a BACKUP: "
+            "capella_backups_list returns the individual backups, and a cycle is "
+            "the scheduled run that produced them. [TF openapi.gen.go:28458]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_bucket_backup_cycle_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/cycles/{cycle_id}",
+        summary=(
+            "Read one backup cycle. [TF openapi.gen.go:28558]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
     Op(
         name="capella_app_endpoint_audit_log_get",
         method="GET",

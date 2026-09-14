@@ -1171,6 +1171,61 @@ def discover(token: str, args) -> dict:
             print(f"  admin user   : {admin}")
         else:
             print("  admin user   : none (admin-user paths SKIPPED)")
+
+        # ── App Endpoints: the identifier 20 operations were blocked on ──────
+        #
+        # MEASURED GAP, 2026-09-14. A --method-probe --include-pending run
+        # reported SKIPPED for TWENTY operations -- fourteen needing
+        # app_endpoint_name and six needing app_endpoint_keyspace -- purely
+        # because this script never discovered either. Six of those twenty are
+        # SHIPPED operations, so a third of the App Endpoint surface had never
+        # been path-probed at all, and the run said so in a way that read like
+        # "the objects do not exist" rather than "this harness cannot look".
+        #
+        # They do exist: scripts/verify_mcp_surface.py discovers both from the
+        # same two calls made here, and has done all along. The two harnesses
+        # disagreeing about what is discoverable is the actual defect.
+        _, ep_body = _request("GET", f"{base}/appservices/{app}/appEndpoints", token)
+        endpoint = _first_id(ep_body, "name", "id")
+        if endpoint:
+            ids["app_endpoint_name"] = endpoint
+            print(f"  app endpoint : {endpoint}")
+
+            # THE KEYSPACE IS NOT THE ENDPOINT NAME. It is
+            # <endpoint>.<scope>.<collection>, because the access control
+            # function and the import filter are per COLLECTION. Sending the
+            # bare endpoint name answers 404 "App Endpoint keyspace <name> not
+            # found", which reads as a missing endpoint and is not one.
+            _, doc = _request(
+                "GET",
+                f"{base}/appservices/{app}/appEndpoints/"
+                f"{urllib.parse.quote(str(endpoint), safe='')}",
+                token,
+            )
+            keyspace = ""
+            try:
+                parsed = json.loads(doc)
+                scopes = parsed.get("scopes") if isinstance(parsed, dict) else None
+                if isinstance(scopes, dict):
+                    for scope_name, scope in scopes.items():
+                        collections = (scope or {}).get("collections")
+                        if isinstance(collections, dict) and collections:
+                            keyspace = (
+                                f"{endpoint}.{scope_name}.{next(iter(collections))}"
+                            )
+                            break
+            except Exception:
+                keyspace = ""
+            if keyspace:
+                ids["app_endpoint_keyspace"] = keyspace
+                print(f"  ep keyspace  : {keyspace}")
+            else:
+                # A two-part keyspace is not a keyspace, and a 404 earned by
+                # sending one teaches nothing. Skip honestly instead.
+                print("  ep keyspace  : endpoint names no scope/collection "
+                      "(keyspace paths SKIPPED)")
+        else:
+            print("  app endpoint : none (App Endpoint paths SKIPPED)")
     elif not app_services_unreadable:
         print("  app service  : NONE FOUND (App Services paths will be SKIPPED)")
 

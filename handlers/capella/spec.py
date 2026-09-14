@@ -1957,7 +1957,13 @@ OPS: tuple[Op, ...] = (
             "carries enableDataApi and enableNetworkPeering as plain bools with "
             "no omitempty, so this is a replace: omitting enableNetworkPeering "
             "sends false and turns peering off. Read the current status first "
-            "and send back what you are not changing. [TF data_api.go]"
+            "and send back what you are not changing.\n"
+            "AN EMPTY BODY IS ACCEPTED, NOT REFUSED. Measured 2026-09-14: a PUT "
+            "with {} answered 202 rather than the 422 its required field "
+            "implies. So a caller who sends a partial body does not get an "
+            "error, they get the Data API turned OFF -- and the connection "
+            "string every fixture tool reads goes empty minutes later. "
+            "[TF data_api.go] [LIVE+METHOD 202 -- see empty_body_accepted]"
         ),
         group="clusters",
         body={
@@ -1974,6 +1980,18 @@ OPS: tuple[Op, ...] = (
             },
         },
         body_required=("enableDataApi",),
+        # MEASURED 2026-09-14, AND IT PERFORMED THE OPERATION. The --method-probe
+        # run sent a real PUT with an EMPTY body, expecting the 422 that
+        # body_required implies, and Capella answered 202: ACCEPTED. An empty
+        # body means enableDataApi=false and enableNetworkPeering=false, so the
+        # verification run may have DISABLED the Data API on the cluster it was
+        # measuring -- the one thing the fixture tools cannot work without.
+        #
+        # body_required is a claim about what a CALLER must send. It is not a
+        # claim about what the SERVICE rejects, and this operation is the proof
+        # that the two are different. The probe inferred the second from the
+        # first, which is the inference empty_body_accepted exists to override.
+        empty_body_accepted=True,
         guarded=True,
     ),
     Op(

@@ -109,6 +109,7 @@ from auth.scope_gate import (
 )
 from handlers import (
     backup,
+    backup_catalog,
     buckets,
     capella,
     cluster,
@@ -157,6 +158,12 @@ _RAW_TOOLS: list[Tool] = (
     + encryption.TOOLS
     + capella.TOOLS
     + mcp_status.TOOLS
+    # DELIBERATELY NOT UNDER handlers/capella. The catalogue annotates backups on
+    # BOTH planes -- a Capella backup id or an EE repository plus backup name --
+    # and registering it as a Capella tool would filter it out of self_managed
+    # mode, which is exactly the deployment whose backup naming is worst served
+    # by the plane itself.
+    + backup_catalog.TOOLS
 )
 
 _HANDLERS = {
@@ -175,6 +182,7 @@ _HANDLERS = {
     **{t.name: encryption for t in encryption.TOOLS},
     **{t.name: capella for t in capella.TOOLS},
     **{t.name: mcp_status for t in mcp_status.TOOLS},
+    **{t.name: backup_catalog for t in backup_catalog.TOOLS},
 }
 
 # Tools that stay loaded in read-only mode despite destructiveHint=true,

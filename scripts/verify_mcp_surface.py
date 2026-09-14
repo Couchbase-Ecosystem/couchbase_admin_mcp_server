@@ -240,6 +240,10 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
     # a fixture_path invented by this checker points at nothing, and a call aimed
     # at nothing tests nothing. Run capella_fixture_export --include-data false to
     # put one on disk.
+    # The backup catalogue is LOCAL and works on both planes, so it is discovered
+    # here rather than in either plane's section. catalog_root is seeded as a
+    # literal for the same reason root_path is.
+    ("cb_backup_catalog_list", "catalog_id", ("catalog_id", "id")),
     ("capella_fixture_list", "fixture_path", ("fixture_path", "path")),
     ("capella_fixture_list", "fixture_id", ("fixture_id", "id")),
     # The row key is `environment`, not `env_name` -- capella_env_list reports the
@@ -542,15 +546,16 @@ def _items(payload: Any) -> list:
     # REFUSES TO GUESS BETWEEN THEM -- correctly, but the result was silent
     # empty discovery for both.
     #
-    #   capella_env_list     -> {"managed": [...], "unmanaged": [...]}
-    #   capella_fixture_list -> {"fixtures": [...], "unreadable": [...]}
+    #   capella_env_list         -> {"managed": [...], "unmanaged": [...]}
+    #   capella_fixture_list     -> {"fixtures": [...], "unreadable": [...]}
+    #   cb_backup_catalog_list   -> {"entries": [...], "unreadable": [...]}
     #
     # In each pair the first is the answer and the second is a caveat: an
     # unmanaged cluster is one this server did not create, an unreadable fixture
     # is a directory whose manifest will not parse. Neither can supply an
     # identity, so naming the row key is not a preference, it is the difference
     # between discovering nothing and discovering the right thing.
-    for key in ("managed", "fixtures"):
+    for key in ("managed", "fixtures", "entries"):
         rows = payload.get(key)
         if isinstance(rows, list):
             return rows
@@ -1503,6 +1508,13 @@ class Run:
         # repository root it correctly answered zero -- the fixture is in
         # <repo>/fixtures/<id>/manifest.json. Prefer that directory when it
         # exists, so the tool is asked the question it can answer.
+        # The catalogue's own default, so a run with no configuration looks where
+        # the tools would have written.
+        capella.setdefault(
+            "catalog_root",
+            os.environ.get("CB_ADMIN_CATALOG_ROOT")
+            or os.path.join(REPO_ROOT, ".backup-catalog"),
+        )
         fixtures_dir = os.path.join(REPO_ROOT, "fixtures")
         capella.setdefault(
             "root_path",

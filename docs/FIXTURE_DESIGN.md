@@ -358,3 +358,76 @@ anything.
   5. Mobile mode, only if a scenario needs `_sync`.
   6. Everything else deferred in the handoff — eventing, CMEK, audit-log export,
      billing, network peers, private endpoints — after.
+
+---
+
+## Scope: which planes the fixture family covers
+
+**Decided 2026-09-14: the `capella_fixture_*` family is Capella-only, and that is
+a decision rather than an oversight. It is also not obviously the right one, so
+the argument against is recorded alongside it.**
+
+This matters because the rest of the tool surface is verified against *both*
+deployment targets, and `handlers/backup_catalog.py` is explicitly plane-aware —
+every entry carries `plane: capella | enterprise` and the sync step marks entries
+`out_of_scope` on the plane they do not belong to. Against that background, a
+family that silently works on one plane only reads as something nobody got to.
+
+### Why Capella-only
+
+- **The mechanism is Capella's.** Export reads documents over the Capella Data
+  API: a control-plane call to discover `connectionString`, an HTTP Basic cluster
+  access credential, and the allowlist that governs it. Enterprise Edition has
+  none of those three. There is no "enable the Data API" on EE because the query
+  service is simply there, on port 18093, reached with cluster credentials.
+- **So an EE implementation is not a port, it is a second implementation.** The
+  structure walk would go through the EE REST API rather than v4 ops, document
+  export would go through the EE query service or the SDK, and index state would
+  come from the same `system:indexes` but reached differently. Roughly the only
+  parts that transfer unchanged are the manifest schema, the integrity check, and
+  `capella_fixture_list` — which is pure filesystem work and already
+  plane-agnostic in everything but its name.
+- **EE already has the thing fixtures substitute for.** `cbbackupmgr` is a real
+  backup tool with real restore semantics, available on every EE node. The whole
+  argument for fixtures (see the opening of this document) is that *Capella*
+  backups cannot be named, carry no metadata, and cannot be moved between
+  clusters on demand. That argument does not apply to EE.
+
+### Why the decision might be wrong
+
+- **A fixture is not a backup, on either plane.** The reason to want one is
+  reproducibility — "the exact dataset scenario 1.6 was measured against" — and
+  that need is identical on EE. `cbbackupmgr` answers recovery, not
+  reproducibility, and a tagged, hash-verified, diffable JSON Lines payload is a
+  different artifact from a binary backup.
+- **The container story cuts against it.** Disney runs this in a container, and
+  the hard rule is one container per plane. An operator running the EE container
+  sees four `capella_fixture_*` tools that cannot work for them. Under the
+  capability gating that is arguably correct — they should not be *loaded* at all
+  in EE mode — but "correct" and "explicable" are not the same thing, and nobody
+  has checked which of the two happens today.
+- **The manifest is already plane-neutral.** `schema`, `tags`, `files`,
+  `payload_sha256` and the integrity check say nothing about Capella. An
+  `ee_fixture_export` writing the same manifest would produce fixtures
+  interchangeable with Capella's, which is a genuinely valuable property: capture
+  on a laptop's EE cluster, import into Capella, compare like for like.
+
+### What would settle it
+
+Not an argument — a question to Disney: **do they need to reproduce a dataset on
+Enterprise Edition, or only on Capella?** If only Capella, this stays as it is
+and the naming already tells the truth. If both, the work is a sibling
+`ee_fixture_export` / `ee_fixture_import` pair sharing the manifest schema and
+`_fixture_integrity`, not a rewrite of the Capella path.
+
+**Open until then, and until it is answered this must not be described as "the
+fixture capability" without the word Capella in front of it.**
+
+### Checked and NOT yet verified
+
+Whether the `capella_fixture_*` tools are correctly excluded from the tool list
+in an EE-mode container, or merely present and failing at call time. The
+capability gating exists (`tests/test_one_container_one_surface.py` asserts the
+compose files keep the two modes apart), but nobody has run an EE-mode container
+and read back the tool list to confirm these four are absent from it. One run of
+`scripts/run-docker-verification.ps1` against the EE compose file answers it.

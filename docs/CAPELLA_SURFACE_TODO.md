@@ -48,33 +48,40 @@ index existence plus online state. Measured on 2026-09-14 against
 `fixtures/mcptest-data-1`: 188 documents exported, 188 counted on the cluster,
 both recorded indexes online, `verified: true` on both halves.
 
-`capella_fixture_import` remains unimplemented and still refuses. It is the one
-member of the family that writes to somebody's cluster, and a half-implemented
-importer is worse than none.
+`capella_fixture_import` is **implemented end to end** — structure, documents and
+indexes.
 
-The original blocking table, kept for the record:
+Document loading goes over the Data API's **KV document endpoint**, not SQL++:
 
-| Tool | Blocking | Note |
-|---|---|---|
-| `capella_env_status` | needs `env_name` | no environment exists to name |
-| `capella_env_connection_info` | needs `env_name` | same |
-| `capella_fixture_export` | needs `fixture_id`, `fixture_path` | `capella_fixture_*` is declared and not implemented |
-| `capella_fixture_verify` | needs `fixture_path` | same |
+```
+/v1/buckets/{bucket}/scopes/{scope}/collections/{collection}/documents/{key}
+```
 
-`capella_fixture_list` also reports UPSTREAM for the same reason. Both v4
-questions this family was waiting on were settled on 2026-09-01; nothing
-external blocks it.
+**Measured, not inferred.** `scripts/probe_data_api_kv.py` tried three candidate
+spellings against a live cluster on 2026-09-14; this is the one that routed, and
+every verb was measured: GET 404 `DocumentNotFound`, POST 200, GET 200 with the
+body returned byte for byte, PUT 200, GET 200 upserted, DELETE 200. The two
+rejected spellings stay recorded in that script so the next person sees what was
+tried rather than re-trying it.
 
-**Also at P0, because they are one call each away from closing:**
+**The route matters.** It was written as a SQL++ `UPSERT` first and
+`test_no_handler_embeds_a_mutating_sql_statement` caught it — correctly, since a
+literal UPSERT in handler source bypasses `is_dml_statement`, which only inspects
+statements arriving as *arguments*. The KV endpoint is the honest route: same
+host, same credential, same allowlist, no SQL++, and no dependency on the data
+plane's port 11210 that a container may not have.
 
-- `capella_cluster_onoff_schedule_update` — in `SHIPPED_UNVERIFIED` because its
-  only observed status is 404. `scripts/probe_onoff_schedule.py` now sends an
-  invalid body at a cluster that has a schedule and prints the 400/422 to
-  record.
-- `capella_cluster_audit_log_export_get` — stays unverified. The 200 body cannot
-  be produced by this organization: enabling audit logging is refused by
-  ENTITLEMENT (422, "your support package does not include audit logging"). An
-  Enterprise-plan org closes it in one run. Not our defect and not our fix.
+The importer writes with PUT (upsert, so it is re-runnable), escapes every key
+and keyspace component into the path, streams the payload rather than loading it,
+runs 8 writes in flight, and stops after 20 failures rather than repeating one
+diagnosable error a hundred thousand times.
+
+**Known fidelity gap: document EXPIRY is not restored.** The fixture records
+`META().expiration`, but how this endpoint accepts an expiry was not among the
+things the probe measured, so it is not sent rather than guessed — a document
+that expires at the wrong time is worse than one that does not expire. The
+importer counts and reports every document affected. *What closes it:* one more
+probe run measuring whether expiry is a query parameter, a header, or absent.
 
 ---
 
@@ -202,7 +209,7 @@ debt this repo just spent a night clearing gets recreated.
 
 **aiServices** (~25 ops, `:15573-16497`, `:21465-22001`). Models, providers,
 API keys, workflows, workflow runs. Same reasoning, plus it is new enough that
-the surface will move. **Reconsider when** it stabilises and someone names a use.
+the surface will move. **Reconsider when** it stabilizes and someone names a use.
 
 **`PUT .../organizations/{id}/configuration`** (`:17568`) and
 **`PUT .../clusters/{id}/bucketStorageMigration`** (`:27827`). Organization-wide
@@ -212,7 +219,7 @@ absent a specific request with a named reason.
 
 ---
 
-## Known behaviours worth encoding, from the same audit
+## Known behaviors worth encoding, from the same audit
 
 These are not missing operations; they are facts about operations we ship that
 callers get wrong.
@@ -258,6 +265,21 @@ knows less than its name suggests, each with what would close it.
   quietly, in exactly the kind of environment a fixture exists to reproduce
   faithfully.
 - **`capella_fixture_export` is annotated `readOnlyHint=True` and writes files.**
-  Read-only with respect to the CLUSTER, which is what the hint is about, but a
-  caller reading the annotation alone would not expect a filesystem write. Decide
-  deliberately rather than leave it as an accident.
+  **DECIDED 2026-09-14: the hint stays True.** In this server `readOnlyHint` is
+  not documentation — `server.py` uses it to decide which tools LOAD in read-only
+  mode, and read-only mode exists to protect the *cluster*. Flipping it would
+  remove fixture export from exactly the deployment that most wants it (a
+  read-only forensic posture, where capturing what a cluster looks like is the
+  whole job) in exchange for preventing a bounded write to a directory the
+  operator named. The filesystem write is now stated in the tool's own
+  description instead, where a caller reading annotations alone still sees it.
+- **The fixture family is Capella-only.** Decided 2026-09-14 with the argument
+  against recorded alongside it — see the "Scope: which planes the fixture family
+  covers" section of `docs/FIXTURE_DESIGN.md`. It turns on a question only Disney
+  can answer: do they need to reproduce a dataset on Enterprise Edition, or only
+  on Capella?
+- **Nobody has confirmed the `capella_fixture_*` tools are absent from an EE-mode
+  container's tool list.** The capability gating exists and is asserted at the
+  compose-file level, but the tool list itself has not been read back from a
+  running EE-mode container. One run of `scripts/run-docker-verification.ps1`
+  against the EE compose file answers it.

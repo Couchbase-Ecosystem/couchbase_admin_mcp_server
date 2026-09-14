@@ -95,10 +95,10 @@ from typing import Any
 from mcp.types import TextContent, Tool, ToolAnnotations
 
 from handlers.shared import err, ok
+from logging_config import get_logger
 
 from .client import build_path, capella_request
 from .spec import OPS_BY_NAME
-from logging_config import get_logger
 
 _log = get_logger("handlers.capella.fixture")
 
@@ -106,6 +106,26 @@ _log = get_logger("handlers.capella.fixture")
 #: the manifest shape; import validates against it and refuses a mismatch.
 MANIFEST_SCHEMA = "couchbase.capella.fixture/v1"
 
+#: READ-ONLY WITH RESPECT TO THE CLUSTER. That is what the hint governs here, and
+#: the distinction is deliberate rather than accidental.
+#:
+#: capella_fixture_export carries readOnlyHint=True and WRITES FILES -- a manifest
+#: and a JSON Lines payload under fixture_path. Judged against the MCP annotation's
+#: plain wording ("does not modify its environment") that is a contradiction, and
+#: the honest-looking fix is to flip the hint to False.
+#:
+#: It was NOT flipped, because in this server readOnlyHint is not documentation:
+#: server.py uses it to decide which tools LOAD in read-only mode, and read-only
+#: mode exists to protect the CLUSTER. Flipping it would remove fixture export from
+#: exactly the deployment that most wants it -- a read-only, forensic posture where
+#: capturing what a cluster currently looks like is the whole job -- in exchange for
+#: preventing a bounded write to a directory the operator named, under
+#: CB_ADMIN_FIXTURE_ROOT when one is set.
+#:
+#: So the hint stays True and the filesystem write is stated in the tool's own
+#: description, where a caller reading the annotation alone will still see it.
+#: Decided 2026-09-14; recorded here so the next reader finds a decision rather
+#: than an oversight.
 _READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 _DESTRUCTIVE = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False
@@ -157,7 +177,11 @@ TOOLS: list[Tool] = [
             "mode=mobile if the dataset is mobile-synced.\n\n"
             "Requires the Data API to be enabled on the cluster (enableDataApi via "
             "capella_cluster_update) and a cluster access credential in addition to "
-            "the organization API key."
+            "the organization API key.\n\n"
+            "WRITES TO THE LOCAL FILESYSTEM. This tool is annotated read-only, which "
+            "is true of the CLUSTER and not of the disk: it creates fixture_path and "
+            "writes a manifest plus one JSON Lines file per keyspace there. Set "
+            "CB_ADMIN_FIXTURE_ROOT to confine where that can be."
         ),
         inputSchema={
             "type": "object",
@@ -542,6 +566,93 @@ def _data_api_credential() -> tuple[tuple[str, str], str]:
 _QUERY_TIMEOUT_SECONDS = 45
 
 
+#: One document on the Data API's KV surface. MEASURED, NOT INFERRED.
+#:
+#: probe_data_api_kv.py tried three candidate spellings against a live cluster on
+#: 2026-09-14 and this is the one that routed. Every step was measured:
+#:
+#:     GET    -> 404 {"code":"DocumentNotFound", "message":"Document '...' not
+#:                    found in 'travel-sample/inventory/airline'."}
+#:     POST   -> 200   (create)
+#:     GET    -> 200   body returned byte for byte
+#:     PUT    -> 200   (upsert over the existing document)
+#:     GET    -> 200   upserted body
+#:     DELETE -> 200
+#:
+#: The two rejected spellings are recorded in that script rather than here, so
+#: the next person can see what was tried instead of re-trying it.
+#:
+#: THIS IS WHY DOCUMENT IMPORT IS NOT SQL++. A literal UPSERT in handler source
+#: bypasses is_dml_statement -- that guard only inspects statements arriving as
+#: ARGUMENTS -- so "nothing writes data through SQL++" would have become advisory.
+#: The importer WAS written that way first and
+#: test_no_handler_embeds_a_mutating_sql_statement caught it. This endpoint is the
+#: honest route: same host, same credential, same allowlist, no SQL++, and no
+#: dependency on the data plane's port 11210 that a container may not have.
+_DOCUMENT_PATH = (
+    "/v1/buckets/{bucket}/scopes/{scope}/collections/{collection}/documents/{key}"
+)
+
+#: Concurrent document writes. The Data API's KV surface is one request per
+#: document -- there is no documented bulk endpoint -- so a fixture of any size is
+#: latency-bound rather than throughput-bound, and sequential writes over HTTPS
+#: would put a 100k-document fixture into the hours.
+#:
+#: Kept deliberately modest. This is somebody's cluster and an importer is not
+#: entitled to saturate it; 8 in flight is enough to hide round-trip latency
+#: without behaving like a load generator.
+_IMPORT_CONCURRENCY = 8
+
+#: Stop after this many document failures. A fixture whose every write is failing
+#: -- wrong credential, revoked privilege, collection dropped mid-run -- should
+#: say so after twenty attempts, not after a hundred thousand.
+_IMPORT_FAILURE_LIMIT = 20
+
+
+def _put_document(base: str, credential: tuple[str, str], bucket: str, scope: str,
+                  collection: str, key: str, body: Any,
+                  timeout: int = 30) -> str:
+    """PUT one document. Returns "" on success, else the reason.
+
+    PUT rather than POST, because the importer is explicitly re-runnable: POST is
+    create and answers a conflict on a key that already exists, while PUT upserts.
+    Both were measured at 200.
+
+    Returns a string instead of raising because it runs inside a thread pool and a
+    per-document failure is data the caller aggregates, not an exception that
+    should unwind the batch.
+    """
+    import base64
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    path = _DOCUMENT_PATH.format(
+        bucket=urllib.parse.quote(bucket, safe=""),
+        scope=urllib.parse.quote(scope, safe=""),
+        collection=urllib.parse.quote(collection, safe=""),
+        # A DOCUMENT KEY IS NOT A PATH SEGMENT UNTIL IT IS ESCAPED. Couchbase keys
+        # routinely carry '/', ':' and '#' -- "_sync:user:alice", "order/2026/01" --
+        # and an unescaped one would silently address a different URL, or a
+        # different document.
+        key=urllib.parse.quote(str(key), safe=""),
+    )
+    payload = json.dumps(body).encode()
+    request = urllib.request.Request(base + path, data=payload, method="PUT")
+    token = base64.b64encode(f"{credential[0]}:{credential[1]}".encode()).decode()
+    request.add_header("Authorization", f"Basic {token}")
+    request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            if 200 <= response.status < 300:
+                return ""
+            return f"{response.status}"
+    except urllib.error.HTTPError as exc:
+        return f"{exc.code}: {exc.read().decode(errors='replace')[:200]}"
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+
+
 def _sql_query(base: str, credential: tuple[str, str], statement: str,
                parameters: dict | None = None,
                timeout: int = _QUERY_TIMEOUT_SECONDS) -> dict:
@@ -596,33 +707,6 @@ def _sql_query(base: str, credential: tuple[str, str], statement: str,
             f"A CONNECTION RESET instead usually means TLS interception; a "
             f"corporate proxy cannot sit in front of a Data API call."
         ) from exc
-
-
-#: Returned by every handler until the probe run lands. Deliberately an error
-#: response rather than a raised exception: the handler contract requires that no
-#: handler raises on empty arguments, and deliberately not a plausible empty
-#: success, because a fixture that reports success with no documents in it is the
-#: worst outcome available here.
-_BLOCKED = (
-    "capella_fixture_* is defined but not yet implemented. This is now IMPLEMENTATION "
-    "WORK, not an unknown: both v4 questions it was waiting on were settled against a "
-    "live control plane on 2026-09-01.\n"
-    "\n"
-    "  * The index-definition payload is at GET .../clusters/{id}/queryService/indexes "
-    "    (NOT /queryIndexes/definitions, which does not exist), takes a required "
-    "    `bucket` NAME plus optional scope and collection, and answers 200 with a "
-    "    `definitions` key. Shipped as capella_query_index_definitions_list.\n"
-    "  * The restore path dispute is settled in favour of "
-    "    POST .../clusters/{cluster_id}/backups/{backup_id}/restore, and more strongly "
-    "    than the path alone showed: the body requires BOTH sourceClusterID and "
-    "    targetClusterID, so cross-cluster restore is a single call with both ends "
-    "    named. Shipped as capella_backup_restore.\n"
-    "\n"
-    "What remains is writing the export/import/verify logic against those two, plus the "
-    "eventing and search definitions -- see the per-handler docstrings below and "
-    "docs/FIXTURE_DESIGN.md. Still refusing rather than half-implementing: a fixture "
-    "that reports success with no documents in it is the worst outcome available here."
-)
 
 
 def _export(args: dict) -> list[TextContent]:
@@ -999,33 +1083,666 @@ def _export(args: dict) -> list[TextContent]:
     return ok(result)
 
 
-def _import(args: dict) -> list[TextContent]:
-    """Import a fixture.
+#: The only manifest mode this importer can honour.
+#:
+#: A 'mobile' fixture carries _sync metadata that only the App Services bulk API
+#: can replay. Loading one over SQL++ would write the documents and silently drop
+#: the sync metadata, producing a cluster that looks populated and cannot serve a
+#: single mobile client. Refusing is the only honest option until the mobile path
+#: exists.
+_IMPORT_MODE_SUPPORTED = "server"
 
-    Sequence:
+#: Rows per UPSERT statement. Chosen for the Data API's payload cap rather than
+#: for throughput: each row carries a whole document, so a large batch can exceed
+#: the request limit on a fixture of fat documents long before it exceeds the
+#: statement limit on a fixture of thin ones.
+_IMPORT_BATCH_ROWS = 100
 
-      1. Read and validate the manifest. Refuse on schema mismatch, payload hash
-         mismatch, or a mode the target cannot honour.
-      2. Guardrails: project allowlist, name prefix on every bucket to be created,
-         confirm. Automation principals are NOT exempt from confirm here. Teardown
-         is exempt so CI can clean up after itself; there is no equivalent argument
-         for overwriting data in an existing bucket.
-      3. Create structure via v4, applying keyspace_map.
-      4. Load documents with INSERT INTO … (KEY, VALUE, OPTIONS) carrying
-         {"expiration": …} and {"xattrs": …}. Manifest expiry is an absolute Unix
-         timestamp, so use the absolute form. Batch inside single statements —
-         there is no bulk write on the KV side and batching is the only source of
-         throughput.
-      5. PUT each Search index definition.
-      6. POST each eventing function, PUT its /code, then PUT its /state.
-      7. CREATE INDEX for every GSI entry, BUILD INDEX, then poll
-         capella_query_index_build_status until all are online. If build_indexes is
-         false, say so loudly in the result and mark the target unsuitable for
-         measurement.
-      8. Return a per-step, per-keyspace result. Partial success is a normal
-         outcome and must not be collapsed into a single status.
+_NODES_CLAUSE = re.compile(r'"nodes"\s*:\s*\[[^\]]*\]\s*,?', re.IGNORECASE)
+
+
+def _strip_index_nodes(statement: str) -> tuple[str, bool]:
+    """Remove a recorded CREATE INDEX's `"nodes": [...]` placement list.
+
+    THIS IS NOT COSMETIC. A definition captured by the exporter carries the
+    SOURCE cluster's index nodes by hostname:
+
+        WITH { "defer_build":true,
+               "nodes":[ "svc-qi-node-004.vn1kiibitcyvwrw.cloud.couchbase.com:18091",
+                         "svc-qi-node-005.vn1kiibitcyvwrw.cloud.couchbase.com:18091" ],
+               "num_replica":1 }
+
+    Replayed verbatim onto a DIFFERENT cluster those hostnames do not exist, and
+    the index either fails to create or is pinned to nodes the target does not
+    have. The placement is a property of the machine the index came from, not of
+    the index, so it does not travel with the fixture.
+
+    `num_replica` is deliberately KEPT. It is a property of the index's intended
+    shape, and a target that cannot satisfy it should fail loudly rather than
+    quietly build a less redundant index than the fixture recorded.
     """
-    return err(_BLOCKED, tool="capella_fixture_import")
+    stripped = _NODES_CLAUSE.sub("", statement)
+    if stripped == statement:
+        return statement, False
+    # Tidy the punctuation the removal can leave behind: "{ , x }" or "{ x, }".
+    stripped = re.sub(r"\{\s*,", "{", stripped)
+    stripped = re.sub(r",\s*\}", " }", stripped)
+    stripped = re.sub(r",\s*,", ",", stripped)
+    return stripped, True
+
+
+def _remap_keyspace(keyspace: str, keyspace_map: dict) -> str:
+    """Apply a keyspace_map entry, exact match only."""
+    return str(keyspace_map.get(keyspace) or keyspace)
+
+
+def _rewrite_index_keyspace(statement: str, keyspace_map: dict) -> tuple[str, str]:
+    """(statement, why_not). Rewrites the bucket a CREATE INDEX targets.
+
+    CONSERVATIVE BY DESIGN. Rewriting SQL with regular expressions is how an
+    index quietly gets built against the wrong keyspace, so this only handles the
+    one form the exporter actually produces -- a backticked bucket name directly
+    after ON -- and REFUSES anything else rather than guessing. A refused index is
+    a reported problem; an index silently built somewhere else is a corrupted
+    environment that still reports success.
+    """
+    if not keyspace_map:
+        return statement, ""
+    sources = {k.split(".", 1)[0] for k in keyspace_map}
+    for source in sorted(sources):
+        token = f"`{source}`"
+        if token not in statement:
+            continue
+        targets = {
+            _remap_keyspace(k, keyspace_map).split(".", 1)[0]
+            for k in keyspace_map
+            if k.split(".", 1)[0] == source
+        }
+        if len(targets) != 1:
+            return statement, (
+                f"keyspace_map rewrites bucket {source!r} to more than one "
+                f"target ({sorted(targets)}), so the bucket this index belongs "
+                f"to is ambiguous"
+            )
+        statement = statement.replace(token, f"`{targets.pop()}`")
+    return statement, ""
+
+
+def _load_documents(source: pathlib.Path, base: str, credential: tuple[str, str],
+                    parts: tuple[str, str, str]) -> tuple[int, list[str], int, str]:
+    """Load one JSON Lines payload into one keyspace.
+
+    Returns (loaded, per-document failures, expiries dropped, fatal reason).
+
+    STREAMS. The payload is read a line at a time and handed to a bounded pool
+    rather than loaded into memory: a fixture is allowed to be larger than the
+    process, and an importer that reads a 4 GB file into a list to write it one
+    document at a time has chosen the worst of both.
+
+    A FATAL REASON STOPS THE KEYSPACE. Twenty consecutive-ish failures means the
+    credential, the privilege or the collection is wrong, and continuing would
+    turn one diagnosable error into a hundred thousand identical ones.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    bucket, scope, collection = parts
+    loaded = 0
+    failures: list[str] = []
+    expiries_dropped = 0
+
+    def write(row: dict) -> tuple[str, int]:
+        key = row.get("id")
+        if not key:
+            return "a row carries no id", 0
+        # EXPIRY IS NOT SENT. The fixture records META().expiration as an absolute
+        # Unix timestamp, and how this endpoint accepts one -- query parameter,
+        # header, or not at all -- was NOT among the things probe_data_api_kv.py
+        # measured. Sending a guessed parameter would either be ignored silently
+        # or set the wrong expiry, and a document that expires at the wrong time
+        # is worse than one that does not expire. The caller is told the count.
+        dropped = 1 if isinstance(row.get("exp"), int) and row["exp"] > 0 else 0
+        reason = _put_document(base, credential, bucket, scope, collection,
+                               key, row.get("doc"))
+        return reason, dropped
+
+    try:
+        with source.open("r", encoding="utf-8") as handle:
+            with ThreadPoolExecutor(max_workers=_IMPORT_CONCURRENCY) as pool:
+                batch: list[dict] = []
+                for number, line in enumerate(handle, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        batch.append(json.loads(line))
+                    except ValueError as exc:
+                        return loaded, failures, expiries_dropped, (
+                            f"line {number} of {source.name} is not JSON: {exc}"
+                        )
+                    if len(batch) >= _IMPORT_CONCURRENCY:
+                        for reason, dropped in pool.map(write, batch):
+                            expiries_dropped += dropped
+                            if reason:
+                                failures.append(reason)
+                            else:
+                                loaded += 1
+                        batch = []
+                        if len(failures) >= _IMPORT_FAILURE_LIMIT:
+                            return loaded, failures, expiries_dropped, (
+                                f"stopped after {len(failures)} failures -- the "
+                                f"first was: {failures[0]}"
+                            )
+                if batch:
+                    for reason, dropped in pool.map(write, batch):
+                        expiries_dropped += dropped
+                        if reason:
+                            failures.append(reason)
+                        else:
+                            loaded += 1
+    except OSError as exc:
+        return loaded, failures, expiries_dropped, f"{source.name}: {exc}"
+
+    return loaded, failures, expiries_dropped, ""
+
+
+def _import(args: dict) -> list[TextContent]:
+    """Import a fixture into a Capella cluster.
+
+    IMPLEMENTED 2026-09-14. This refused for the whole life of the module, and
+    the refusal was correct while the Data API layer did not exist: "a fixture
+    that reports success with no documents in it is the worst outcome available
+    here". The read path is now proven end to end -- export wrote 188 documents
+    and capella_fixture_verify counted 188 on the cluster -- so the write path
+    has something to be checked against.
+
+    ORDER OF OPERATIONS, and why this order:
+
+      1. Integrity FIRST, before a single call to the cluster. Every recorded
+         hash is recomputed from the bytes on disk. A fixture whose files have
+         changed since it was written is not a fixture, and finding that out
+         after creating three buckets is finding out too late.
+      2. Mode. A 'mobile' manifest is refused outright rather than loaded
+         without its sync metadata.
+      3. Guardrails, through the same functions every other destructive Capella
+         tool uses -- project allowlist, and the name prefix on every bucket
+         this call would CREATE. Buckets that already exist are not prefix
+         checked, because the prefix rule governs what this server creates.
+      4. Structure, then documents, then indexes. Documents before indexes is
+         deliberate: building an index over a populated collection is one pass,
+         while loading into an already-built index pays the maintenance cost on
+         every batch.
+      5. Indexes are created deferred and built in one BUILD INDEX per keyspace,
+         then polled until online. An index that exists but is not online makes
+         the cluster look slow in a way that reads as a Couchbase performance
+         problem, which is why this tool's own description calls the build gate
+         not optional.
+
+    PARTIAL SUCCESS IS A NORMAL OUTCOME and is reported per step and per
+    keyspace. It is never collapsed into a single status: "it failed" tells an
+    operator nothing about whether the documents landed.
+
+    NOT VERIFIED AGAINST A LIVE CLUSTER AT THE TIME OF WRITING. The read path
+    was; this write path was implemented against the same API surface but has
+    not yet been run end to end. Anything it reports about a live cluster should
+    be confirmed with capella_fixture_verify --cluster_id, which recomputes the
+    counts independently rather than believing this tool's own report.
+    """
+    from . import environment as _env  # local imports: avoid a package cycle
+    from . import guardrails as g
+
+    try:
+        directory = _resolve_under_root(
+            args.get("fixture_path"), field="fixture_path",
+            tool="capella_fixture_import",
+        )
+    except ValueError as exc:
+        return err(str(exc), tool="capella_fixture_import")
+    if directory.name == "manifest.json":
+        directory = directory.parent
+
+    entry = _read_manifest(directory)
+    if not entry.get("readable"):
+        return err(entry.get("error", "manifest could not be read"),
+                   tool="capella_fixture_import", fixture_path=str(directory))
+    manifest = entry["manifest"]
+
+    if manifest.get("schema") != MANIFEST_SCHEMA:
+        return err(
+            f"schema is {manifest.get('schema')!r}, expected {MANIFEST_SCHEMA!r}. "
+            f"A manifest written by a different version is not importable by "
+            f"this one.",
+            tool="capella_fixture_import", fixture_path=str(directory),
+        )
+
+    # ── 1. integrity, before touching the cluster ────────────────────────
+    checks, problems, _payload = _fixture_integrity(directory, manifest)
+    if problems:
+        return err(
+            "the fixture does not verify, so NOTHING was imported:\n  - "
+            + "\n  - ".join(problems)
+            + "\nRun capella_fixture_verify for the full report. A fixture whose "
+              "bytes have changed since it was written is not a fixture, and "
+              "importing one would put unlabelled data on a cluster.",
+            tool="capella_fixture_import", fixture_path=str(directory),
+            files_checked=checks,
+        )
+
+    # ── 2. mode ──────────────────────────────────────────────────────────
+    mode = str(manifest.get("mode") or "server")
+    if mode != _IMPORT_MODE_SUPPORTED:
+        return err(
+            f"this fixture's mode is {mode!r} and only {_IMPORT_MODE_SUPPORTED!r} "
+            f"can be imported. A mobile fixture carries _sync metadata that only "
+            f"the App Services bulk API can replay; loading it over SQL++ would "
+            f"write the documents and drop the sync metadata, producing a cluster "
+            f"that looks populated and cannot serve a single mobile client.",
+            tool="capella_fixture_import", fixture_path=str(directory),
+        )
+
+    # ── 3. context and guardrails ────────────────────────────────────────
+    try:
+        org, project, policy = _env._resolve_context(args)
+    except Exception as exc:
+        return err(str(exc), tool="capella_fixture_import")
+
+    cluster_id = str(args.get("cluster_id") or "").strip()
+    if not cluster_id:
+        return err("cluster_id is required", tool="capella_fixture_import")
+
+    keyspace_map = args.get("keyspace_map") or {}
+    if not isinstance(keyspace_map, dict):
+        return err("keyspace_map must be an object of "
+                   "bucket.scope.collection -> bucket.scope.collection",
+                   tool="capella_fixture_import")
+    keyspace_map = {str(k): str(v) for k, v in keyspace_map.items()}
+
+    try:
+        g.assert_project_allowed(project, policy)
+    except Exception as exc:
+        return err(str(exc), tool="capella_fixture_import")
+
+    ids = {"organization_id": org, "project_id": project, "cluster_id": cluster_id}
+
+    structure = manifest.get("structure")
+    if not isinstance(structure, list):
+        structure = []
+
+    # Which buckets would this call CREATE? Only those get the prefix check: the
+    # rule governs what this server brings into existence, not what it finds.
+    try:
+        existing_buckets = _env._items(
+            _env._invoke("capella_buckets_list", ids,
+                         composite="capella_fixture_import")
+        )
+    except Exception as exc:
+        return err(f"could not list buckets on the target: {exc}",
+                   tool="capella_fixture_import")
+    existing_by_name = {str(b.get("name") or ""): b for b in existing_buckets}
+
+    planned_buckets: list[str] = []
+    for bucket in structure:
+        source_name = str(bucket.get("name") or "")
+        if not source_name:
+            continue
+        target_name = source_name
+        for source_keyspace, target_keyspace in keyspace_map.items():
+            if source_keyspace.split(".", 1)[0] == source_name:
+                target_name = target_keyspace.split(".", 1)[0]
+                break
+        if target_name not in planned_buckets:
+            planned_buckets.append(target_name)
+
+    for name in planned_buckets:
+        if name in existing_by_name:
+            continue
+        try:
+            g.assert_name_allowed(name, policy)
+        except Exception as exc:
+            return err(
+                f"{exc}\nNothing was imported. This bucket does not exist on the "
+                f"target, so importing would CREATE it, and a bucket created "
+                f"without the configured prefix could never be torn down by this "
+                f"server.",
+                tool="capella_fixture_import",
+            )
+
+    steps: list[dict] = []
+    created_buckets: list[str] = []
+    created_scopes: list[str] = []
+    created_collections: list[str] = []
+    step_problems: list[str] = []
+
+    # ── 4. structure ─────────────────────────────────────────────────────
+    bucket_ids: dict[str, str] = {}
+    for bucket in structure:
+        source_name = str(bucket.get("name") or "")
+        if not source_name:
+            continue
+        target_name = source_name
+        for source_keyspace, target_keyspace in keyspace_map.items():
+            if source_keyspace.split(".", 1)[0] == source_name:
+                target_name = target_keyspace.split(".", 1)[0]
+                break
+
+        found = existing_by_name.get(target_name)
+        if found is None:
+            body = {"name": target_name,
+                    "type": bucket.get("type") or "couchbase",
+                    "storageBackend": bucket.get("storageBackend") or "couchstore",
+                    "memoryAllocationInMb": bucket.get("memoryAllocationInMb") or 100}
+            try:
+                created = _env._invoke("capella_bucket_create", ids, body=body,
+                                       composite="capella_fixture_import")
+            except Exception as exc:
+                step_problems.append(f"bucket {target_name} could not be created: {exc}")
+                continue
+            created_buckets.append(target_name)
+            bucket_ids[target_name] = str(
+                (created or {}).get("id") if isinstance(created, dict) else ""
+            ) or target_name
+        else:
+            bucket_ids[target_name] = str(found.get("id") or target_name)
+
+        bucket_ref = dict(ids, bucket_id=bucket_ids[target_name])
+
+        for scope in bucket.get("scopes") or []:
+            scope_name = str(scope.get("name") or "")
+            if not scope_name:
+                continue
+            if scope_name != "_default":
+                try:
+                    _env._invoke("capella_scope_create", bucket_ref,
+                                 body={"name": scope_name},
+                                 composite="capella_fixture_import")
+                    created_scopes.append(f"{target_name}.{scope_name}")
+                except Exception as exc:
+                    # An existing scope is not a failure -- this tool is
+                    # explicitly re-runnable. Anything else is.
+                    if "already exists" not in str(exc).lower():
+                        step_problems.append(
+                            f"scope {target_name}.{scope_name} could not be "
+                            f"created: {exc}"
+                        )
+                        continue
+            scope_ref = dict(bucket_ref, scope_name=scope_name)
+            for collection in scope.get("collections") or []:
+                collection_name = str(collection.get("name") or "")
+                if not collection_name or collection_name == "_default":
+                    continue
+                body = {"name": collection_name}
+                if collection.get("maxTTL"):
+                    body["maxTTL"] = collection["maxTTL"]
+                try:
+                    _env._invoke("capella_collection_create", scope_ref, body=body,
+                                 composite="capella_fixture_import")
+                    created_collections.append(
+                        f"{target_name}.{scope_name}.{collection_name}"
+                    )
+                except Exception as exc:
+                    if "already exists" not in str(exc).lower():
+                        step_problems.append(
+                            f"collection {target_name}.{scope_name}."
+                            f"{collection_name} could not be created: {exc}"
+                        )
+
+    steps.append({
+        "step": "structure",
+        "buckets_created": created_buckets,
+        "scopes_created": created_scopes,
+        "collections_created": created_collections,
+        "note": (
+            "Existing buckets, scopes and collections are REUSED, not "
+            "recreated. This tool is re-runnable by design."
+        ),
+    })
+
+    # ── 5. documents ─────────────────────────────────────────────────────
+    #
+    # Over the Data API's KV document endpoint, NOT SQL++. See _DOCUMENT_PATH for
+    # the measurement that established it and for why the SQL++ route was removed.
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        files = []
+
+    documents_loaded = 0
+    document_report: list[dict] = []
+    base = ""
+    credential: tuple[str, str] = ("", "")
+    if files:
+        base, why = _data_api_base(ids)
+        credential, cred_why = _data_api_credential()
+        blocker = why or cred_why
+        if blocker:
+            return err(
+                f"the structure was created and the documents CANNOT be loaded, so "
+                f"this import is incomplete and the target must not be treated as a "
+                f"populated environment.\n{blocker}\n"
+                f"An import that creates empty collections and reports success is "
+                f"the failure this family exists to prevent. Fix the Data API "
+                f"access and re-run -- every step of this tool is re-runnable.",
+                tool="capella_fixture_import",
+                steps=steps,
+                structure_created=True,
+                documents_loaded=0,
+            )
+
+        for record in files:
+            if not isinstance(record, dict):
+                continue
+            relative = str(record.get("path") or "")
+            source_keyspace = str(record.get("keyspace") or "")
+            target_keyspace = _remap_keyspace(source_keyspace, keyspace_map)
+            report: dict[str, Any] = {
+                "keyspace": target_keyspace,
+                "source_keyspace": source_keyspace,
+                "expected": record.get("document_count"),
+                "loaded": 0,
+            }
+            parts = _split_keyspace(target_keyspace)
+            if parts is None:
+                report["error"] = (
+                    f"{target_keyspace!r} is not a bucket.scope.collection keyspace"
+                )
+                step_problems.append(report["error"])
+                document_report.append(report)
+                continue
+
+            loaded, failures, expiries_dropped, fatal = _load_documents(
+                directory / relative, base, credential, parts
+            )
+            report["loaded"] = loaded
+            documents_loaded += loaded
+            if expiries_dropped:
+                # NOT A FOOTNOTE. A document that carried a TTL and arrives without
+                # one never expires, so the target diverges from the fixture's
+                # source over time rather than at import.
+                report["expiries_not_restored"] = expiries_dropped
+            if fatal:
+                report["error"] = fatal
+                step_problems.append(f"{target_keyspace}: {fatal}")
+            elif failures:
+                report["failures"] = failures[:10]
+                report["failure_count"] = len(failures)
+                step_problems.append(
+                    f"{target_keyspace}: {len(failures)} document(s) failed to load"
+                )
+            elif isinstance(record.get("document_count"), int) and \
+                    loaded != record["document_count"]:
+                report["error"] = (
+                    f"loaded {loaded} of {record['document_count']} documents"
+                )
+                step_problems.append(f"{target_keyspace}: {report['error']}")
+            document_report.append(report)
+
+    dropped_total = sum(
+        r.get("expiries_not_restored") or 0 for r in document_report
+    )
+    document_step: dict[str, Any] = {
+        "step": "documents",
+        "keyspaces": document_report,
+        "documents_loaded": documents_loaded,
+    }
+    if dropped_total:
+        document_step["WARNING"] = (
+            f"{dropped_total} document(s) carried an expiry in the fixture and were "
+            f"written WITHOUT one, because how this endpoint accepts an expiry has "
+            f"not been measured and this module does not ship unmeasured "
+            f"parameters. Those documents will not expire on the target. If the "
+            f"scenario depends on expiry, this target is wrong for it."
+        )
+    steps.append(document_step)
+
+    # ── 6. indexes ───────────────────────────────────────────────────────
+    build_indexes = bool(args.get("build_indexes", True))
+    definitions = manifest.get("gsi_definitions")
+    if not isinstance(definitions, list):
+        definitions = []
+
+    index_report: list[dict] = []
+    seen_statements: set[str] = set()
+    if definitions and not base:
+        base, why = _data_api_base(ids)
+        credential, cred_why = _data_api_credential()
+        if why or cred_why:
+            step_problems.append(
+                f"index definitions could not be applied: {why or cred_why}"
+            )
+            definitions = []
+
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
+        raw_name = str(definition.get("indexName") or definition.get("name") or "")
+        # A replica entry is the SAME index. Creating it twice is an error, not
+        # a second index -- see _REPLICA_SUFFIX.
+        if _REPLICA_SUFFIX.search(raw_name):
+            continue
+        statement = str(definition.get("definition") or "")
+        if not statement:
+            index_report.append({"name": raw_name, "created": False,
+                                 "error": "no definition statement recorded"})
+            step_problems.append(f"index {raw_name} has no recorded definition")
+            continue
+
+        statement, stripped = _strip_index_nodes(statement)
+        statement, why_not = _rewrite_index_keyspace(statement, keyspace_map)
+        if why_not:
+            index_report.append({"name": raw_name, "created": False,
+                                 "error": why_not})
+            step_problems.append(f"index {raw_name}: {why_not}")
+            continue
+        if statement in seen_statements:
+            continue
+        seen_statements.add(statement)
+
+        record: dict[str, Any] = {"name": _base_index_name(raw_name),
+                                  "placement_stripped": stripped}
+        try:
+            _sql_query(base, credential, statement)
+            record["created"] = True
+        except RuntimeError as exc:
+            message = str(exc)
+            if "already exist" in message.lower():
+                record.update(created=False, existing=True)
+            else:
+                record.update(created=False, error=message)
+                step_problems.append(f"index {raw_name} could not be created: {exc}")
+        index_report.append(record)
+
+    built: list[str] = []
+    created_names = [r["name"] for r in index_report if r.get("created")]
+    if build_indexes and created_names:
+        # BUILD INDEX names a bucket, and the recorded definitions can span
+        # several, so the buckets are derived from the data files rather than
+        # assumed to be one. A fixture with no data files falls back to the
+        # buckets the structure step planned.
+        build_buckets: list[str] = []
+        for record in files:
+            if not isinstance(record, dict):
+                continue
+            parts = _split_keyspace(
+                _remap_keyspace(str(record.get("keyspace") or ""), keyspace_map)
+            )
+            if parts and parts[0] not in build_buckets:
+                build_buckets.append(parts[0])
+        if not build_buckets:
+            build_buckets = list(planned_buckets)
+
+        names = ", ".join(f"`{n}`" for n in created_names)
+        for bucket_name in build_buckets:
+            try:
+                _sql_query(base, credential,
+                           f"BUILD INDEX ON `{bucket_name}` ({names})")
+                built.append(bucket_name)
+            except RuntimeError as exc:
+                # An index that belongs to a different bucket is not an error
+                # for THIS bucket's build; a real failure is.
+                if "not found" in str(exc).lower():
+                    continue
+                step_problems.append(
+                    f"BUILD INDEX on {bucket_name} failed: {exc}"
+                )
+
+    index_step: dict[str, Any] = {
+        "step": "indexes",
+        "indexes": index_report,
+        "built_on": built,
+        "build_requested": build_indexes,
+    }
+    if not build_indexes:
+        index_step["WARNING"] = (
+            "build_indexes=false. The indexes exist as definitions and are NOT "
+            "online. THIS TARGET MUST NOT BE USED FOR MEASUREMENT: a load test "
+            "against a cluster whose indexes are still deferred produces numbers "
+            "that read as a Couchbase performance problem and are an artifact of "
+            "this flag."
+        )
+    steps.append(index_step)
+
+    # ── 7. what this importer does NOT do ────────────────────────────────
+    fidelity = manifest.get("fidelity") or {}
+    not_applied: list[str] = []
+    if manifest.get("eventing_functions"):
+        not_applied.append(
+            f"{len(manifest['eventing_functions'])} eventing function(s) recorded "
+            f"in the fixture were NOT created. Eventing deployment is a three-call "
+            f"sequence (create, set code, set state) whose failure modes are not "
+            f"yet measured, and a half-deployed function is worse than none."
+        )
+    if not fidelity.get("search_definitions", False):
+        not_applied.append(
+            "Search index definitions are not present in the fixture at all -- the "
+            "exporter does not capture them yet -- so none were applied."
+        )
+    if not fidelity.get("xattrs", False):
+        not_applied.append(
+            "No user xattrs were carried by this fixture, so none were restored."
+        )
+    not_applied.append(
+        "Document EXPIRY is not restored. The fixture records it, and how this "
+        "endpoint accepts an expiry was not measured, so it is not sent rather "
+        "than guessed -- see _load_documents. Any document that carried a TTL is "
+        "on the target without one."
+    )
+
+    result: dict[str, Any] = {
+        "fixture_path": str(directory),
+        "fixture_id": manifest.get("fixture_id"),
+        "cluster_id": cluster_id,
+        "mode": mode,
+        "steps": steps,
+        "documents_loaded": documents_loaded,
+        "not_applied": not_applied,
+        "imported": not step_problems,
+        "problems": step_problems,
+        "verify_with": (
+            "capella_fixture_verify with this fixture_path AND cluster_id. It "
+            "recomputes the counts from the cluster rather than believing this "
+            "tool's own report, which is the only check that can catch an import "
+            "that thought it succeeded."
+        ),
+    }
+    return ok(result)
 
 
 def _list(args: dict) -> list[TextContent]:
@@ -1172,6 +1889,86 @@ def _split_keyspace(keyspace: str) -> tuple[str, str, str] | None:
     if len(parts) != 3 or not all(parts):
         return None
     return parts[0], parts[1], parts[2]
+
+
+def _fixture_integrity(directory: pathlib.Path,
+                       manifest: dict) -> tuple[list[dict], list[str], str | None]:
+    """(file checks, problems, payload hash) for a fixture on disk.
+
+    EXTRACTED so that _verify and _import run the SAME check rather than two
+    that agree today and drift later. The importer needs exactly this answer
+    before it touches a cluster, and a second implementation of it would be a
+    second place for the hash comparison to be subtly wrong.
+
+    Every check here is decidable from the filesystem alone:
+      * every data file named in the manifest exists
+      * each file's sha256 recomputes to the recorded value
+      * each file's line count matches the recorded document_count
+      * the payload hash recomputes over the per-file hashes
+
+    A MISMATCH IS NOT A WARNING. A fixture whose bytes have changed since it was
+    written is not a fixture, it is an unlabelled dataset, and the whole point of
+    the manifest is that it can say so.
+    """
+    problems: list[str] = []
+    checks: list[dict] = []
+
+    files = manifest.get("files")
+    if files is None:
+        files = []
+    if not isinstance(files, list):
+        problems.append("manifest 'files' is not a list")
+        files = []
+
+    file_hashes: list[str] = []
+    for record in files:
+        if not isinstance(record, dict):
+            problems.append(f"file entry is not an object: {record!r}")
+            continue
+        rel = str(record.get("path") or "")
+        check: dict[str, Any] = {"path": rel}
+        target = directory / rel
+        if not rel:
+            problems.append("a file entry has no path")
+            continue
+        if not target.is_file():
+            check.update(present=False, ok=False)
+            problems.append(f"{rel} is named in the manifest and does not exist")
+            checks.append(check)
+            continue
+
+        actual_hash = _sha256_file(target)
+        expected_hash = record.get("sha256")
+        file_hashes.append(actual_hash)
+        check.update(present=True, sha256=actual_hash)
+        if expected_hash and actual_hash != expected_hash:
+            check["ok"] = False
+            problems.append(
+                f"{rel} sha256 is {actual_hash}, manifest says {expected_hash} "
+                f"-- the file has changed since the fixture was written"
+            )
+        expected_count = record.get("document_count")
+        if isinstance(expected_count, int):
+            actual_count = _count_lines(target)
+            check["document_count"] = actual_count
+            if actual_count != expected_count:
+                check["ok"] = False
+                problems.append(
+                    f"{rel} holds {actual_count} documents, manifest says "
+                    f"{expected_count}"
+                )
+        check.setdefault("ok", True)
+        checks.append(check)
+
+    expected_payload = manifest.get("payload_sha256")
+    payload_sha = hashlib.sha256(
+        "".join(sorted(file_hashes)).encode()
+    ).hexdigest() if file_hashes else None
+    if expected_payload and payload_sha and expected_payload != payload_sha:
+        problems.append(
+            f"payload_sha256 is {payload_sha}, manifest says {expected_payload}"
+        )
+    return checks, problems, payload_sha
 
 
 #: Trailing " (replica 1)" on a control-plane index definition's indexName.
@@ -1351,6 +2148,7 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
 
     if index_rows is not None:
         on_cluster: dict[str, list[str]] = {}
+        keyspace_of: dict[str, str] = {}
         replica_field = ""
         for row in index_rows:
             if not isinstance(row, dict):
@@ -1358,7 +2156,25 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
             name = _base_index_name(str(row.get("name") or ""))
             if not name:
                 continue
+            # KEYSPACE, NOT JUST STATE. Reporting "mcptest_idx_meta is deferred"
+            # without saying where it lives is not actionable: the operator's next
+            # move is BUILD INDEX, which names a keyspace. Finding that keyspace
+            # then costs a round of guessing -- and guessing it from an index
+            # DEFINITIONS listing is worse than useless, because that endpoint
+            # silently defaults scope and collection to _default and will happily
+            # report an empty list for a bucket whose indexes all live elsewhere.
+            # system:indexes already carries the answer; this keeps it.
+            scope = str(row.get("scope_id") or "_default")
+            collection = str(row.get("keyspace_id") or "")
+            bucket = str(row.get("bucket_id") or "")
+            if not bucket:
+                # Pre-collections rows put the bucket in keyspace_id and carry no
+                # bucket_id at all, so the fields mean different things depending
+                # on which shape arrived.
+                bucket, collection = collection, "_default"
             on_cluster.setdefault(name, []).append(str(row.get("state") or ""))
+            keyspace_of.setdefault(
+                name, f"{bucket}.{scope}.{collection or '_default'}")
             if not replica_field:
                 for candidate in ("replica_id", "replicaId"):
                     if candidate in row:
@@ -1366,7 +2182,14 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                         break
 
         not_online = [
-            {"name": name, "state": state}
+            {"name": name, "state": state,
+             "keyspace": keyspace_of.get(name, "unknown"),
+             "build_with": (
+                 f"BUILD INDEX ON `{keyspace_of[name].split('.', 2)[0]}`"
+                 f".`{keyspace_of[name].split('.', 2)[1]}`"
+                 f".`{keyspace_of[name].split('.', 2)[2]}` (`{name}`)"
+                 if keyspace_of.get(name, "").count(".") == 2 else ""
+             )}
             for name, states in sorted(on_cluster.items())
             for state in states
             if state.lower() != "online"
@@ -1384,10 +2207,11 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                 continue
             offline = [s for s in states if s.lower() != "online"]
             if offline:
+                where = keyspace_of.get(name, "an unknown keyspace")
                 problems.append(
-                    f"index {name} is {', '.join(offline)}, not online -- the "
-                    f"cluster is not yet performance-comparable to the "
-                    f"fixture's source"
+                    f"index {name} on {where} is {', '.join(offline)}, not "
+                    f"online -- the cluster is not yet performance-comparable "
+                    f"to the fixture's source"
                 )
 
         details: dict[str, Any] = {
@@ -1484,7 +2308,6 @@ def _verify(args: dict) -> list[TextContent]:
 
     manifest = entry["manifest"]
     problems: list[str] = []
-    checks: list[dict] = []
 
     schema = manifest.get("schema")
     if schema != MANIFEST_SCHEMA:
@@ -1493,61 +2316,9 @@ def _verify(args: dict) -> list[TextContent]:
             f"written by a different version is not verifiable by this one."
         )
 
-    files = manifest.get("files")
-    if files is None:
-        files = []
-    if not isinstance(files, list):
-        problems.append("manifest 'files' is not a list")
-        files = []
-
-    file_hashes: list[str] = []
-    for record in files:
-        if not isinstance(record, dict):
-            problems.append(f"file entry is not an object: {record!r}")
-            continue
-        rel = str(record.get("path") or "")
-        check: dict[str, Any] = {"path": rel}
-        target = directory / rel
-        if not rel:
-            problems.append("a file entry has no path")
-            continue
-        if not target.is_file():
-            check.update(present=False, ok=False)
-            problems.append(f"{rel} is named in the manifest and does not exist")
-            checks.append(check)
-            continue
-
-        actual_hash = _sha256_file(target)
-        expected_hash = record.get("sha256")
-        file_hashes.append(actual_hash)
-        check.update(present=True, sha256=actual_hash)
-        if expected_hash and actual_hash != expected_hash:
-            check["ok"] = False
-            problems.append(
-                f"{rel} sha256 is {actual_hash}, manifest says {expected_hash} "
-                f"-- the file has changed since the fixture was written"
-            )
-        expected_count = record.get("document_count")
-        if isinstance(expected_count, int):
-            actual_count = _count_lines(target)
-            check["document_count"] = actual_count
-            if actual_count != expected_count:
-                check["ok"] = False
-                problems.append(
-                    f"{rel} holds {actual_count} documents, manifest says "
-                    f"{expected_count}"
-                )
-        check.setdefault("ok", True)
-        checks.append(check)
-
-    expected_payload = manifest.get("payload_sha256")
-    payload_sha = hashlib.sha256(
-        "".join(sorted(file_hashes)).encode()
-    ).hexdigest() if file_hashes else None
-    if expected_payload and payload_sha and expected_payload != payload_sha:
-        problems.append(
-            f"payload_sha256 is {payload_sha}, manifest says {expected_payload}"
-        )
+    checks, file_problems, payload_sha = _fixture_integrity(directory, manifest)
+    problems.extend(file_problems)
+    files = manifest.get("files") or []
 
     result: dict[str, Any] = {
         "fixture_path": str(directory),

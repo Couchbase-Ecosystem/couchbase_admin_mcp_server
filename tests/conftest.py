@@ -69,6 +69,15 @@ def _restore_environ():
 #: CB_PASSWORD -- nothing has been observed leaking through those, and clearing
 #: them on no evidence is the kind of change that turns a green suite red for a
 #: reason nobody can reconstruct later.
+#: CB_ADMIN_CATALOG_ROOT is not a credential and it is here for a related reason:
+#: it is a WRITE DESTINATION an operator exports for their own use, and
+#: test_handler_contract calls every tool in every group with synthesised
+#: arguments. On 2026-09-14 that wrote two real backup-catalogue entries into the
+#: working tree -- backup_id "sample", the value that harness invents for a string
+#: field. handlers/backup_catalog.py now refuses a write with no configured root,
+#: which stops it when the variable is UNSET; it cannot stop it when a developer
+#: has exported one, and "the suite writes files on your machine but not in CI" is
+#: exactly the class of difference the block above exists to remove.
 AMBIENT_CREDENTIALS = (
     "CAPELLA_ORG_ID",
     "CAPELLA_API_KEY_SECRET",
@@ -77,6 +86,7 @@ AMBIENT_CREDENTIALS = (
     "CB_CAPELLA_API_KEY",
     "CB_CAPELLA_API_URL",
     "CB_BUCKET",
+    "CB_ADMIN_CATALOG_ROOT",
 )
 
 

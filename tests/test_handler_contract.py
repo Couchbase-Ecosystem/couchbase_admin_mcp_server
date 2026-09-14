@@ -50,6 +50,10 @@ from handlers.shared import ERROR_MARKER
 #: below fails if the two ever disagree.
 MODULE_NAMES = [
     "backup",
+    # Added 2026-09-14. The guard below did exactly its job: six new tools shipped
+    # in a new handler group and every one of the ~134 parametrisations would have
+    # passed while testing none of them.
+    "backup_catalog",
     "buckets",
     "capella",
     "cluster",

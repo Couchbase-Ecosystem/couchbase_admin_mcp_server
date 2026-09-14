@@ -299,7 +299,15 @@ def test_capella_list_follows_the_cursor_to_the_last_page(monkeypatch):
         },
     }
 
-    def fake_request(method, path, *, params=None, body=None):
+# THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
+#
+# capella_request grew a content_type parameter on 2026-09-14, when the App
+# Endpoint access control function turned out to want raw JavaScript rather than
+# JSON. Every stub of it here is a test double of that signature, so each one
+# grew the same keyword with the same default. Five tests in this file failed
+# with "request() got an unexpected keyword argument 'content_type'" until they
+# did -- a signature mismatch in a double, not a defect in the code under test.
+    def fake_request(method, path, *, params=None, body=None, content_type="application/json"):
         return pages[params["page"]]
 
     monkeypatch.setattr(client, "capella_request", fake_request)
@@ -312,7 +320,7 @@ def test_capella_list_follows_the_cursor_to_the_last_page(monkeypatch):
 
 
 def test_capella_list_reports_truncation_rather_than_silently_shortening(monkeypatch):
-    def fake_request(method, path, *, params=None, body=None):
+    def fake_request(method, path, *, params=None, body=None, content_type="application/json"):
         page = params["page"]
         return {
             "data": [{"id": f"{page}-{i}"} for i in range(100)],
@@ -1210,24 +1218,47 @@ def test_the_parked_registry_is_allowed_to_be_empty():
     assert all(hasattr(op, "path") for op in spec_pending.PENDING_OPS)
 
 
-def test_the_only_scalar_body_is_the_one_that_needs_to_be():
-    """`body_scalar` exists for PUT .../eventingFunctions/{name}/code, whose request body
-    is the JavaScript source as a bare JSON string rather than an object.
+def test_the_only_scalar_bodies_are_the_ones_that_need_to_be():
+    """`body_scalar` is for the operations whose request body is JavaScript source as a
+    bare JSON string rather than an object. There are two, and the second one arrived the
+    hard way.
 
-    Pinned narrowly because the field is an escape hatch. If a second operation acquires
+    Pinned narrowly because the field is an escape hatch. If a THIRD operation acquires
     one, that is worth a look — either v4 has more non-object bodies than we thought, or
     someone reached for the hatch instead of writing a schema.
+
+    THE SECOND ENTRY IS A BUG FIX, NOT A SHORTCUT, and this test is what forced it to be
+    argued rather than assumed. capella_app_endpoint_access_control_function_set shipped
+    with an object body, {"function": "<source>"}, and every call answered:
+
+        400 bad request: 1 errors:
+        collection "airline" sync function error: invalid javascript syntax:
+        JavaScript source does not evaluate to a function
+
+    Three distinct inputs were tried against a live App Service on 2026-09-14: a
+    `function (doc, oldDoc, meta) {...}` declaration, the same source wrapped in
+    parentheses, and the function Capella itself had stored — read out of
+    capella_app_endpoint_get and sent back verbatim. All three produced that identical
+    error. A real syntax validator would have accepted the server's own function, so the
+    source was never reaching the validator: the object wrapper meant it saw nothing.
+    App Services wants the bare string, exactly as the eventing code setter does.
     """
     scalar = {op.name for op in OPS if op.body_scalar}
-    assert scalar == {"capella_eventing_function_code_set"}, scalar
+    assert scalar == {
+        "capella_eventing_function_code_set",
+        "capella_app_endpoint_access_control_function_set",
+    }, scalar
 
-    op = OPS_BY_NAME["capella_eventing_function_code_set"]
-    assert op.body_scalar["type"] == "string"
-    assert not op.body, "an operation declares either an object body or a scalar one"
+    for name in sorted(scalar):
+        op = OPS_BY_NAME[name]
+        assert op.body_scalar["type"] == "string", name
+        assert not op.body, (
+            f"{name}: an operation declares either an object body or a scalar one"
+        )
 
-    schema = build_input_schema(op)
-    assert schema["properties"]["body"]["type"] == "string"
-    assert "body" in schema["required"]
+        schema = build_input_schema(op)
+        assert schema["properties"]["body"]["type"] == "string", name
+        assert "body" in schema["required"], name
 
 
 def test_replication_create_records_the_stronger_evidence():

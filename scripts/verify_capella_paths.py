@@ -1510,10 +1510,14 @@ def discover(token: str, args) -> dict:
                 ids[id_key] = found
                 print(f"  {label}: {found}")
             else:
+                # Same distinction as the cluster-level loop -- see
+                # _absence_detail. This branch kept the old wording through the
+                # 2026-09-14 fix, which is exactly how the pattern survived
+                # three times: each site was corrected on its own.
                 print(
-                    f"  {label}: HTTP {status} with no items — path looks right, and "
-                    f"none exist ON THIS CLUSTER. Pass --project/--cluster to probe the "
-                    f"one that has them. {id_key} paths SKIPPED"
+                    f"  {label}: HTTP {status}; {_absence_detail(rbody, keys)}. "
+                    f"Pass --project/--cluster to probe a cluster that has them. "
+                    f"{id_key} paths SKIPPED"
                 )
 
     # ── An index, wherever one happens to live ──────────────────────────────

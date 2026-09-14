@@ -225,17 +225,6 @@ PENDING_OPS: tuple[Op, ...] = (
         guarded=True,
     ),
     Op(
-        name="capella_bucket_backup_cycle_get",
-        method="GET",
-        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/cycles/{cycle_id}",
-        summary=(
-            "Read one backup cycle. [TF openapi.gen.go:28558]"
-        ),
-        group="backup",
-        read_only=True,
-        idempotent=True,
-    ),
-    Op(
         name="capella_app_endpoint_audit_log_get",
         method="GET",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",

@@ -2434,7 +2434,55 @@ def test_an_empty_list_leaves_the_identifier_absent(script, capsys):
     ids = script.discover("fake-secret", _Args(include_pending=True))
     assert "export_id" not in ids
     out = capsys.readouterr().out
-    assert "none exist ON THIS CLUSTER" in out
+    assert "genuinely has none" in out
+
+
+def test_absence_says_which_kind_of_nothing_it_found():
+    """"I could not find one" and "there is not one" are different claims, and this
+    script reported the first AS the second three times running.
+
+    A nested data-inside-data response read as an empty list. app_endpoint_name was
+    never discovered at all, so twenty operations reported no identifier available.
+    The backup-cycle step looked for `cycleId` while the rows carried `cycleID`, and
+    printed "this bucket has no cycles" in the same run where the cycles list
+    returned rows.
+
+    Every one of those read as a statement about the customer's cluster, and the
+    old message even ended by telling the operator to provision the thing they
+    already had. The distinction is now explicit, and this pins it.
+    """
+    import importlib.util
+    import pathlib as _pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "_vcp", _pathlib.Path(__file__).resolve().parent.parent
+        / "scripts" / "verify_capella_paths.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    # Genuinely empty: a fact about the cluster.
+    empty = module._absence_detail('{"data":[]}', ("cycleId",))
+    assert "genuinely has none" in empty
+    assert "LIMITATION" not in empty.upper() or "THIS SCRIPT" not in empty
+
+    # Rows present, key spelled differently: a fact about THIS SCRIPT. The exact
+    # case that shipped -- cycleID with a capital ID.
+    mismatch = module._absence_detail(
+        '{"data":[{"createdAt":"2026-09-14","cycleID":"abc"}]}', ("cycleId", "id")
+    )
+    assert "ROWS WERE RETURNED" in mismatch
+    assert "limitation of THIS SCRIPT" in mismatch
+    # It must name what IS there, or the reader cannot fix it.
+    assert "cycleID" in mismatch
+    # And it must steer AWAY from provisioning. The old message ended with
+    # "provision one and re-run", which would have sent the operator off to
+    # create a backup schedule they already had.
+    assert "rather than provisioning" in mismatch
+    assert "provision one and re-run" not in mismatch.lower()
+
+    # A body that is not JSON at all is not rows.
+    assert "genuinely has none" in module._absence_detail("<html>", ("id",))
 
 
 def test_a_404_on_a_parked_list_path_is_reported_as_a_finding(script, capsys):

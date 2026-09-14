@@ -428,6 +428,11 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_bucket_backup_schedules_list": "404",
     "capella_bucket_backup_schedule_delete": "405",
     "capella_bucket_backup_cycles_list": "200",
+    # 200, 2026-09-14 -- promoted only AFTER the discovery casing bug was
+    # fixed. The step had looked for `cycleId`, found nothing, and reported
+    # this bucket as having no cycles; the rows carry `cycleID`. One run
+    # after the fix it discovered 83bfa14c-d0cd-433f-82bc-9599ccbf7aa6.
+    "capella_bucket_backup_cycle_get": "200",
     "capella_app_endpoint_resync_stop": "405",
     # 405 from the OPTIONS probe, 2026-09-14, scripts/verify_capella_paths.py
     # --only. Route confirmed, nothing sent, nothing changed -- the same
@@ -2364,6 +2369,24 @@ OPS: tuple[Op, ...] = (
             "Capella error instead. Same subsystem, different path, opposite "
             "verdict, and the difference is entirely which source it was read "
             "from -- CLAUDE.md rule 1.5 earning its keep.]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_bucket_backup_cycle_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/cycles/{cycle_id}",
+        summary=(
+            "Read one backup cycle: when it ran, how long it took, what it "
+            "produced, and how long its output is restorable for.\n"
+            "[LIVE+METHOD 200, 2026-09-14. The response carries bucketID, "
+            "bucketName, clusterID, cycleID, date, elapsedTimeInSeconds, id, "
+            "method, projectID, provider, restoreBefore, scheduleInfo, source, "
+            "stats, status and tenantID -- note restoreBefore, which is the "
+            "retention horizon, and scheduleInfo, which ties the cycle back to "
+            "the schedule that produced it.]"
         ),
         group="backup",
         read_only=True,

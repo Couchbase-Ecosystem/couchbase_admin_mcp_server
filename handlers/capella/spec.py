@@ -301,6 +301,85 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
 #: so a model calling one is told the path is unconfirmed. Clear entries as evidence
 #: arrives; a name here for long is a question nobody went back to.
 SHIPPED_UNVERIFIED: dict[str, str] = {
+    # ── In-place updates, shipped 2026-09-14 ─────────────────────────────────
+    #
+    # Four PUTs whose absence made every one of these settings a
+    # delete-and-recreate. Paths and bodies from the provider's generated client
+    # per CLAUDE.md rule 1.5. Each carries its own promotion path, because they
+    # are not equally cheap to verify and pretending otherwise is how the easy
+    # one gets done and the other three sit here for a year.
+    "capella_bucket_update": (
+        "2026-09-14. PATH, METHOD and BODY from openapi.gen.go:28401 "
+        "(durabilityLevel, memoryAllocationInMb, replicas, "
+        "timeToLiveInSeconds, flush). Not yet exercised live.\n"
+        "PROMOTE WITH A REFUSAL, not a success. memoryAllocationInMb far beyond "
+        "the cluster's free quota answers 422 and changes nothing -- the same "
+        "refusal the create path already produces, so the behaviour is known. "
+        "Do NOT promote it by performing a real resize: `replicas` triggers a "
+        "rebalance and shrinking the quota makes the bucket eject to fit, and "
+        "both return before the work finishes."
+    ),
+    "capella_collection_update": (
+        "2026-09-14. PATH and METHOD from openapi.gen.go:29516; the body is "
+        "maxTTL alone. Not yet exercised live. THE CHEAPEST OF THE FOUR TO "
+        "VERIFY HONESTLY: setting maxTTL on a throwaway collection is reversible "
+        "by setting it back, affects no existing document (the new maximum "
+        "applies only to documents written afterwards), and needs no rebalance. "
+        "A negative maxTTL should earn a 422 without writing anything, which "
+        "promotes it with no change at all."
+    ),
+    "capella_database_credential_update": (
+        "2026-09-14. PATH and METHOD from openapi.gen.go:33681. Not yet "
+        "exercised live, and NOT safe to verify on a credential anything "
+        "depends on: `access` REPLACES the existing grants, so a call that omits "
+        "one revokes it, and a password change breaks every client holding the "
+        "old one at its next connection. The test organization's mcptest-data "
+        "credential is what the fixture tools authenticate with.\n"
+        "Promote it against a throwaway credential created for the purpose, or "
+        "with a deliberately malformed `access` array that earns a 422."
+    ),
+    "capella_project_update": (
+        "2026-09-14. PATH and METHOD from openapi.gen.go:18127; the body is "
+        "name and description. Not yet exercised live. Verifying it means "
+        "renaming a real project, and the project this organization uses is the "
+        "one named in CAPELLA_ALLOWED_PROJECTS -- renaming it does NOT move it "
+        "out of the allowlist, which holds UUIDs, but it does change what a "
+        "human reads when deciding whether a destructive call is safe. Promote "
+        "it on a scratch project, created and deleted for the purpose."
+    ),
+    "capella_app_service_update": (
+        "2026-09-14. PATH, METHOD and BODY from the Terraform provider's "
+        "generated client, openapi.gen.go:5811 (UpdateAppServiceRequest = "
+        "{compute: {cpu, ram}, nodes}), per CLAUDE.md rule 1.5. Not yet "
+        "exercised against a live App Service.\n"
+        "WHY IT IS NOT CHEAPLY VERIFIABLE, unlike the import filter's setter. "
+        "The invalid-body trick that promoted that op works because the App "
+        "Endpoint validator refuses bad input without acting. Here the plausible "
+        "refusals are 422s on capacity -- nodes outside 2-12, or a cpu/ram pair "
+        "the provider does not offer -- and the test organization has exactly "
+        "ONE App Service, which capella_env_* depends on. A 422 is safe, but a "
+        "typo that happens to be VALID resizes a live App Service "
+        "asynchronously, and the resize cannot be cancelled mid-flight.\n"
+        "Promote it with a deliberate 422: nodes=1 is refused with 'The "
+        "instance desired capacity must be between 2 and 12', which is measured "
+        "on the create path and writes nothing. Do that against a throwaway App "
+        "Service, not the one the environment tools use."
+    ),
+    # ── App Endpoint import filter DELETE, shipped 2026-09-14 ────────────────
+    #
+    # Its two siblings were promoted to LIVE_VERIFIED the same day, on a 200 and a
+    # 400 measured against a live App Service. This one stays because the cheap
+    # proof does not exist for it -- see the entry.
+    "capella_app_endpoint_import_filter_delete": (
+        "2026-09-14. PATH AND METHOD from openapi.gen.go:24036. Unverified, and "
+        "the HARDEST of the three to verify honestly: a DELETE that succeeds "
+        "removes the filter, which WIDENS the endpoint so every document in the "
+        "collection becomes eligible for import, and re-adding the filter does "
+        "not undo it -- documents already imported stay until a resync. So the "
+        "cheap proof used elsewhere, perform it and then put it back, does not "
+        "apply here. Promote it only against a collection whose filter can be "
+        "lost, or leave it here and say so."
+    ),
     "capella_cluster_audit_log_export_get": (
         "RETRACTION AND RE-MEASUREMENT, 2026-09-13. The note here said an export job "
         "'WAS created successfully and did not persist to the list'. The second half "
@@ -344,6 +423,26 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_allowed_cidr_delete": "405",
     "capella_allowed_cidrs_list": "200",
     "capella_app_endpoint_access_control_function_get": "200",
+    # 200 WITH AN EMPTY BODY, 2026-09-14, exactly as its twin above -- the
+    # prediction in this op's description was made before the call and held.
+    "capella_app_endpoint_import_filter_get": "200",
+    # 400 "collection \"airline\" import filter error: invalid javascript
+    # syntax: (anonymous): Line 1:7 Unexpected identifier (and 3 more errors)",
+    # 2026-09-14, from a PUT carrying the text "this is not javascript at all".
+    #
+    # THIS IS A STRONGER RESULT THAN A PATH PROOF, and the difference from the
+    # twin is the whole point. capella_app_endpoint_access_control_function_set
+    # answers "JavaScript source does not evaluate to a function" for every
+    # input INCLUDING text that is not JavaScript -- boilerplate, proving the
+    # source never reached a validator. This op answers with a LINE AND COLUMN
+    # pointing at the offending token, which is a real parse. So the raw
+    # application/javascript body reached the JavaScript engine: the handling
+    # inherited from the twin is now MEASURED on this op, not assumed.
+    #
+    # It also corroborates the retraction recorded against the twin: a
+    # validator at this level of this resource clearly can report real syntax
+    # errors, so the twin's refusal to do so was never a verdict on the source.
+    "capella_app_endpoint_import_filter_set": "400",
     "capella_app_endpoint_access_control_function_set": "405",
     "capella_app_endpoint_cors_set": "405",
     "capella_app_endpoint_create": "405",
@@ -773,10 +872,139 @@ _DB_CREDENTIAL_BODY: dict[str, Any] = {
     },
 }
 
+#: Body for capella_bucket_update. FIVE FIELDS, from openapi.gen.go:28401.
+#:
+#: NOT A SUBSET OF THE CREATE BODY, and the omissions decide what a caller can
+#: and cannot change without destroying the data:
+#:
+#:   * NO `name`. A bucket cannot be renamed.
+#:   * NO `type`, NO `storageBackend`, NO `bucketConflictResolution`,
+#:     NO `evictionPolicy`. These are fixed at creation. Changing storage engine
+#:     is a migration (there is a separate bucketStorageMigration endpoint, which
+#:     this server deliberately does not ship -- see P3 in the surface TODO).
+#:
+#: Every field here is otherwise a delete-and-recreate today, which on a bucket
+#: means destroying every document in it to change a setting.
+_BUCKET_UPDATE_BODY: dict[str, Any] = {
+    "memoryAllocationInMb": {
+        "type": "integer",
+        "description": (
+            "Per-node RAM quota. Must fit the cluster's free quota or v4 answers "
+            "422. SHRINKING one is not free: the bucket ejects to fit, so a "
+            "reduction on a loaded bucket is a latency event, not a config edit."
+        ),
+    },
+    "durabilityLevel": {
+        "type": "string",
+        "enum": ["none", "majority", "majorityAndPersistActive", "persistToMajority"],
+        "description": (
+            "Raising this makes every subsequent write slower and more durable. "
+            "It does NOT retroactively harden writes already acknowledged."
+        ),
+    },
+    "replicas": {
+        "type": "integer",
+        "description": (
+            "Changing this triggers a REBALANCE. The call returns before the "
+            "rebalance finishes, and the cluster is degraded in throughput until "
+            "it does."
+        ),
+    },
+    "flush": {"type": "boolean", "description": "Enable or disable flush."},
+    "timeToLiveInSeconds": {
+        "type": "integer",
+        "description": (
+            "Bucket-level maximum TTL. Applies to documents written AFTER the "
+            "change; existing documents keep the expiry they were written with, "
+            "so setting this does not retroactively expire anything."
+        ),
+    },
+}
+
+#: Body for capella_collection_update. ONE FIELD, from openapi.gen.go:29516.
+#:
+#: maxTTL and nothing else -- a collection cannot be renamed, and its scope
+#: cannot be changed.
+_COLLECTION_UPDATE_BODY: dict[str, Any] = {
+    "maxTTL": {
+        "type": "integer",
+        "description": (
+            "Maximum TTL in seconds for documents in this collection. Applies to "
+            "documents written AFTER the change; it does not retroactively "
+            "expire what is already there. 0 means no collection-level maximum."
+        ),
+    },
+}
+
+#: Body for capella_database_credential_update, from openapi.gen.go:33681.
+#:
+#: ROTATES A PASSWORD IN PLACE, which is the point: today rotating a credential
+#: means deleting and recreating it, and every client holding the old password
+#: fails in the window between.
+_DB_CREDENTIAL_UPDATE_BODY: dict[str, Any] = {
+    "password": {
+        "type": "string",
+        "description": (
+            "New password. UNLIKE THE CREATE OP, omitting this does not have "
+            "Capella generate one -- create returns a generated password in its "
+            "response and this operation has no such response to put one in. "
+            "Supply a password, and note that every client using the old one "
+            "fails on its next connection: rotation is not zero-downtime unless "
+            "the application is holding two credentials."
+        ),
+    },
+    "access": {
+        "type": "array",
+        "description": (
+            "Privilege grants, REPLACING the existing set outright rather than "
+            "adding to it. Same shape as the create op: [{'privileges': "
+            "['data_reader'], 'resources': {...}}]. An update that omits a grant "
+            "the credential currently has REVOKES it."
+        ),
+        "items": {"type": "object"},
+    },
+}
+
 #: The node range Capella accepts for an App Service. Named, because the wrong value was
 #: hard-coded in three places and a live 422 was the only thing that found it.
 MIN_APP_SERVICE_NODES = 2
 MAX_APP_SERVICE_NODES = 12
+
+#: Body for capella_app_service_update. DELIBERATELY NARROWER THAN THE CREATE BODY.
+#:
+#: UpdateAppServiceRequest is {compute: {cpu, ram}, nodes} and nothing else
+#: (openapi.gen.go:5811). It is not a partial version of the create body, and the
+#: omissions are the interesting part:
+#:
+#:   * NO `version`. A PUT cannot upgrade an App Service. See the op summary --
+#:     this is the single most misleading thing about the word "update" here.
+#:   * NO `name`, NO `description`. So the mcp-env marker an environment writes
+#:     into the description at create time CANNOT be changed by this op, and any
+#:     tool that needs to re-mark an App Service has to delete and recreate it.
+#:
+#: Shipping the create body here with fields quietly dropped on the wire would be
+#: worse than not shipping the op: the caller would set `version`, get a 204, and
+#: reasonably conclude the upgrade happened.
+_APP_SERVICE_UPDATE_BODY: dict[str, Any] = {
+    "nodes": {
+        "type": "integer",
+        "description": (
+            f"New node count, {MIN_APP_SERVICE_NODES}-{MAX_APP_SERVICE_NODES}. "
+            f"Outside that range Capella answers 422 'The instance desired "
+            f"capacity must be between 2 and 12', measured on the create path."
+        ),
+    },
+    "compute": {
+        "type": "object",
+        "description": (
+            "{'cpu': 2, 'ram': 4} -- must be a combination the cloud provider "
+            "offers, or Capella answers 422 naming the offending field."
+        ),
+        "properties": {"cpu": {"type": "integer"}, "ram": {"type": "integer"}},
+        "required": ["cpu", "ram"],
+    },
+}
+
 
 _APP_SERVICE_CREATE_BODY: dict[str, Any] = {
     "name": {"type": "string"},
@@ -1349,6 +1577,33 @@ _ACCESS_CONTROL_FUNCTION_BODY: dict[str, Any] = {
 }
 
 
+#: Body schema for capella_app_endpoint_import_filter_set.
+#:
+#: THE EXACT TWIN of _ACCESS_CONTROL_FUNCTION_BODY, and it inherits that finding
+#: rather than rediscovering it. Sent RAW as application/javascript -- see
+#: Op.body_content_type -- because json.Marshal would add escape characters to the
+#: payload and make it invalid JavaScript, which is the Terraform provider's own
+#: stated reason for special-casing this content type.
+#:
+#: The cost of NOT inheriting it is on the record: the access control function took
+#: 43 measured attempts and produced two retracted claims before the provider's
+#: client was read. This op is the same shape at the same level of the same
+#: resource, so it is shipped with the same handling from the start. If it turns
+#: out to differ, that is a measurement to record here -- not a reason to have
+#: started from scratch.
+_IMPORT_FILTER_BODY: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "The complete JavaScript source of the import filter, as a bare JSON "
+        "string -- NOT wrapped in an object. A filter returning false for a "
+        "document keeps that document OUT of the App Endpoint. Replaces the "
+        "existing filter outright. Read the current source from "
+        "capella_app_endpoint_get at scopes.<scope>.collections.<collection>."
+        "importFilter."
+    ),
+}
+
+
 OPS: tuple[Op, ...] = (
     # ── Organizations ────────────────────────────────────────────────────────
     Op(
@@ -1401,6 +1656,27 @@ OPS: tuple[Op, ...] = (
         body={"name": {"type": "string"}, "description": {"type": "string"}},
         body_required=("name",),
         guarded=True,
+    ),
+    Op(
+        name="capella_project_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}",
+        summary=(
+            "Rename a project or change its description, in place.\n"
+            "RENAMING A PROJECT DOES NOT MOVE IT OUT OF, OR INTO, THE GUARDRAIL "
+            "ALLOWLIST. CAPELLA_ALLOWED_PROJECTS holds project UUIDs, and the "
+            "UUID does not change here — so a project renamed to look like "
+            "production is still reapable, and one renamed to look like a test "
+            "project is still protected. That is the correct behaviour and it is "
+            "worth stating, because the name is what a human reads when deciding "
+            "whether a destructive call is safe. "
+            "UNVERIFIED PATH: from the provider's generated client "
+            "(openapi.gen.go:18127), not yet exercised live. A 404 here "
+            "may be the path rather than the id. [TF]"
+        ),
+        group="projects",
+        guarded=True,
+        body={"name": {"type": "string"}, "description": {"type": "string"}},
     ),
     Op(
         name="capella_project_delete",
@@ -1743,6 +2019,30 @@ OPS: tuple[Op, ...] = (
         guarded=True,
     ),
     Op(
+        name="capella_bucket_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}",
+        summary=(
+            "Change a bucket's settings IN PLACE: memory quota, durability, "
+            "replicas, flush, TTL. Without this every one of those is a "
+            "delete-and-recreate, which on a bucket means destroying every "
+            "document in it to change a setting.\n"
+            "WHAT IT CANNOT CHANGE: name, type, storageBackend, conflict "
+            "resolution, eviction policy. Those are fixed at creation.\n"
+            "TWO OF THESE FIELDS ARE OPERATIONS, NOT SETTINGS. Changing "
+            "`replicas` triggers a REBALANCE, and shrinking "
+            "`memoryAllocationInMb` makes the bucket eject to fit. Both return "
+            "before the work finishes and both degrade the cluster while it "
+            "runs, so neither belongs in an unattended loop. "
+            "UNVERIFIED PATH: from the provider's generated client "
+            "(openapi.gen.go:28401), not yet exercised live. A 404 here "
+            "may be the path rather than the id. [TF]"
+        ),
+        group="buckets",
+        guarded=True,
+        body=_BUCKET_UPDATE_BODY,
+    ),
+    Op(
         name="capella_bucket_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}",
@@ -1827,6 +2127,26 @@ OPS: tuple[Op, ...] = (
         guarded=True,
     ),
     Op(
+        name="capella_collection_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/scopes/{scope_name}/collections/{collection_name}",
+        summary=(
+            "Change a collection's maxTTL in place. That is the only field "
+            "UpdateCollectionRequest carries -- a collection cannot be renamed "
+            "and cannot be moved between scopes.\n"
+            "IT DOES NOT RETROACTIVELY EXPIRE ANYTHING. The new maximum applies "
+            "to documents written after the change; documents already in the "
+            "collection keep the expiry they were written with. Lowering it to "
+            "clear out old data does not work and looks like it should. "
+            "UNVERIFIED PATH: from the provider's generated client "
+            "(openapi.gen.go:29516), not yet exercised live. A 404 here "
+            "may be the path rather than the id. [TF]"
+        ),
+        group="buckets",
+        guarded=True,
+        body=_COLLECTION_UPDATE_BODY,
+    ),
+    Op(
         name="capella_collection_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/scopes/{scope_name}/collections/{collection_name}",
@@ -1903,6 +2223,30 @@ OPS: tuple[Op, ...] = (
         body_required=("name", "access"),
         sensitive_response=True,
         guarded=True,
+    ),
+    Op(
+        name="capella_database_credential_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/users/{user_id}",
+        summary=(
+            "Rotate a database credential's password, or replace its access "
+            "grants, IN PLACE. Today rotation means delete and recreate, and "
+            "every client holding the old password fails in the window between.\n"
+            "`access` REPLACES the existing grants rather than adding to them, "
+            "so an update that omits a privilege the credential currently has "
+            "REVOKES it. Read the current grants with "
+            "capella_database_credential_get first.\n"
+            "UNLIKE THE CREATE OP, omitting `password` does not have Capella "
+            "generate one: create returns a generated password in its response "
+            "and this operation has no such response to carry one. "
+            "UNVERIFIED PATH: from the provider's generated client "
+            "(openapi.gen.go:33681), not yet exercised live. A 404 here "
+            "may be the path rather than the id. [TF]"
+        ),
+        group="credentials",
+        guarded=True,
+        sensitive_response=True,
+        body=_DB_CREDENTIAL_UPDATE_BODY,
     ),
     Op(
         name="capella_database_credential_delete",
@@ -2013,6 +2357,33 @@ OPS: tuple[Op, ...] = (
         group="app_services",
         body=_APP_SERVICE_CREATE_BODY,
         body_required=("name", "compute"),
+        guarded=True,
+    ),
+    Op(
+        name="capella_app_service_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}",
+        summary=(
+            "RESIZE an App Service: node count and compute, nothing else.\n"
+            "THIS CANNOT UPGRADE AN APP SERVICE, and the name says otherwise. "
+            "UpdateAppServiceRequest carries no `version` field at all "
+            "(openapi.gen.go:5811), and version is immutable after creation. "
+            "Upgrading means DELETE AND RECREATE at the new version — which "
+            "destroys the App Service's App Endpoints along with it. Anyone "
+            "planning an upgrade needs capella_app_endpoint_create and "
+            "capella_app_endpoint_update as part of the procedure, not as an "
+            "afterthought: read every endpoint's definition first, because "
+            "nothing else holds a copy.\n"
+            "It also cannot change `name` or `description`, so an App Service's "
+            "mcp-env marker cannot be re-written by this op.\n"
+            "Asynchronous, like create: a 204 means accepted, not resized. Poll "
+            "capella_app_service_get until currentState leaves its transitional "
+            "value. [TF openapi.gen.go:5811 — UNVERIFIED PATH: not yet exercised "
+            "against a live App Service, so a 404 here may be the path rather "
+            "than the id.]"
+        ),
+        group="app_services",
+        body=_APP_SERVICE_UPDATE_BODY,
         guarded=True,
     ),
     Op(
@@ -2360,6 +2731,103 @@ OPS: tuple[Op, ...] = (
         group="app_endpoints",
         read_only=True,
         idempotent=True,
+    ),
+    # ── App Endpoint import filter ───────────────────────────────────────────
+    #
+    # THE MATCHED PAIR. An App Endpoint's per-collection JavaScript comes in two
+    # halves: the access control function decides what a document may do once it
+    # is in, and the import filter decides whether it comes in at all. Shipping
+    # only the first is what this server did until now, and the consequence is
+    # not cosmetic: an App Endpoint with NO import filter imports every document
+    # in the collection. On a shared bucket that is a correctness problem and a
+    # cost problem at once, with no way to narrow it through this server.
+    #
+    # Paths from the Terraform provider's generated client
+    # (openapi.gen.go:24098 GET / 24160 PUT / 24036 DELETE). Same keyspace
+    # segment as the access control function, same raw application/javascript
+    # body, same expected 204 on write.
+    Op(
+        name="capella_app_endpoint_import_filter_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/importFilter",
+        summary=(
+            "Upsert the import filter — the JavaScript that decides which "
+            "documents in the collection enter the App Endpoint at all. A filter "
+            "returning false keeps the document out.\n"
+            "THE BODY IS RAW JAVASCRIPT, SENT AS application/javascript, exactly "
+            "as capella_app_endpoint_access_control_function_set. It is not a "
+            "JSON object and not a JSON string: the source goes on the wire "
+            "unquoted and unescaped, because JSON encoding would add escape "
+            "characters and make it invalid JavaScript. That finding cost 43 "
+            "measured attempts on its twin; this op inherits it rather than "
+            "repeating it.\n"
+            "THE KEYSPACE IS NOT THE APP ENDPOINT NAME. It is "
+            "`<endpoint>.<scope>.<collection>` — the filter is per COLLECTION. "
+            "Sending the endpoint name alone answers 404 'App Endpoint keyspace "
+            "<name> not found', which reads as a missing endpoint and is not. "
+            "MEASURED 2026-09-14. A PUT carrying the text 'this is not "
+            "javascript at all' answered 400 'invalid javascript syntax: "
+            "(anonymous): Line 1:7 Unexpected identifier' -- a REAL parse, "
+            "with a line and column. That is stronger than a path proof: it "
+            "shows the raw body reached the JavaScript engine, so the "
+            "application/javascript handling inherited from the twin is "
+            "measured on this op rather than assumed. Note the twin answers "
+            "boilerplate for the same input and never parses at all. "
+            "[LIVE+METHOD 400]"
+        ),
+        group="app_endpoints",
+        body_scalar=_IMPORT_FILTER_BODY,
+        body_content_type="application/javascript",
+        guarded=True,
+    ),
+    Op(
+        name="capella_app_endpoint_import_filter_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/importFilter",
+        summary=(
+            "Get the current import filter for a COLLECTION. The path segment is "
+            "a keyspace (endpoint.scope.collection), not a bare App Endpoint "
+            "name — see app_endpoint_keyspace.\n"
+            "EXPECT THE SAME EMPTY-BODY BEHAVIOUR AS ITS TWIN until measured "
+            "otherwise: capella_app_endpoint_access_control_function_get answers "
+            "200 with an EMPTY body on App Service 4.1.1 even for a collection "
+            "that demonstrably has a function. If this getter does the same, a "
+            "200 with nothing in it is NOT evidence that no filter is "
+            "configured — read capella_app_endpoint_get instead, at "
+            "scopes.<scope>.collections.<collection>.importFilter. "
+            "MEASURED 2026-09-14: answers 200 WITH AN EMPTY BODY, exactly as "
+            "its twin does. The empty body was PREDICTED from the twin before "
+            "the call and the prediction held, which is why the warning above "
+            "is worth trusting: a 200 here is not evidence that no filter is "
+            "configured. [LIVE+METHOD 200, EMPTY BODY]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_import_filter_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/importFilter",
+        summary=(
+            "Remove the import filter from a COLLECTION.\n"
+            "DESTRUCTIVE IN A WAY THAT DOES NOT LOOK DESTRUCTIVE. Deleting a "
+            "filter does not delete data — it WIDENS the endpoint, so every "
+            "document in the collection becomes eligible for import where "
+            "previously some were excluded. On a shared bucket that can pull in "
+            "documents the endpoint's users were never meant to see, and it is "
+            "not undone by re-adding the filter: documents already imported stay "
+            "imported until a resync. Read the current source with "
+            "capella_app_endpoint_get before removing it, because there is no "
+            "other copy. "
+            "UNVERIFIED PATH: from the provider's generated client "
+            "(openapi.gen.go:24036), not yet exercised against a live App "
+            "Service. A 404 from this op may be the path rather than the "
+            "keyspace. [TF]"
+        ),
+        group="app_endpoints",
+        destructive=True,
+        guarded=True,
     ),
     Op(
         name="capella_app_endpoint_cors_set",

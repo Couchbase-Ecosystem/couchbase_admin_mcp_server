@@ -593,7 +593,26 @@ uv run python scripts\dump_tool.py admin_scope_delete `
 | Plane | Round trip run? |
 |---|---|
 | Capella | **Yes** — and it is what found the key bug. The fix is in; a confirming re-run is outstanding. |
-| Enterprise Edition | **No.** `handlers/fixture.py` has never been run against a live EE cluster. |
+| Enterprise Edition | **Yes, clean.** 187 documents out and back, keys, bodies and expiries identical. |
 
-Until the EE row says yes, treat `admin_fixture_export`, `admin_fixture_import`,
-`admin_fixture_list` and `admin_fixture_verify` as written rather than verified — `tests/test_ee_fixture.py` asserts that the module keeps saying so.
+The EE run passed on its first attempt **and still found four defects in the
+index step**, which the document comparison does not cover: a Search index
+rendered as a `CREATE INDEX`, definitions captured for the whole bucket rather
+than the fixture's keyspaces, a `keyspace_map` that rewrote only the bucket, and
+`defer_build` skipped on exactly the indexes that need it. All four are fixed,
+and `docs/FIXTURE_DESIGN.md` records each with the run that found it.
+
+**What is still not established**: the index step against a FRESH target. That
+round trip mapped within one bucket where every recorded index already existed,
+so the import reported `already exists` and created nothing. Run one into a
+second bucket to exercise it:
+
+```powershell
+uv run python scripts\fixture_round_trip.py --plane ee `
+    --keyspace travel-sample.inventory.airline `
+    --scratch  scratch.inventory.airline `
+    --work     C:\Work\Development\roundtrip-ee-2 --perform
+```
+
+That needs the `scratch` bucket to exist first — the importer will not create
+one, by design.

@@ -273,7 +273,43 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("DELETE", f"/pools/default/remoteClusters/{cname}"))
 
         if name == "admin_xdcr_replications_list":
-            return ok(admin_request("GET", "/settings/replications/"))
+            # TWO TOOLS, ONE ENDPOINT -- AND THIS ONE WAS WRONG.
+            #
+            # admin_xdcr_settings_get, further down this same function, issues
+            # GET /settings/replications/ and is RIGHT to: that path returns the
+            # global XDCR tuning document. This tool issued the identical
+            # request and returned the identical document, so it never listed a
+            # replication in its life. It answered 200 every time, which is why
+            # verify_mcp_surface.py recorded it `ok` on every run -- the same
+            # false green as admin_backup_run, which could not work and passed
+            # 129 times.
+            #
+            # MEASURED 2026-09-14 with a REAL replication running, which is what
+            # makes this a fix rather than another guess:
+            #
+            #   GET /settings/replications/   -> {"cLogConnPoolLimit": 30,
+            #        "checkpointInterval": 600, "compressionType": "Auto", ...}
+            #        No replication anywhere in it.
+            #
+            #   GET /pools/default/tasks      -> [{"type":"rebalance",...},
+            #        {"type":"xdcr","status":"running","continuous":true,
+            #         "id":"dac483bb.../travel-sample/mcptest-xdcr-target",
+            #         "source":"travel-sample",
+            #         "target":"/remoteClusters/dac483bb.../buckets/...",
+            #         "docsWritten":31591, "changesLeft":0, "errors":[...]}]
+            #
+            # /pools/default/tasks is the REBALANCE-AND-EVERYTHING-ELSE feed, so
+            # it must be filtered: returning it whole would hand the caller a
+            # rebalance entry and call it a replication. `id` here is exactly
+            # the replication_id that pause, resume, delete and the settings
+            # tools take, so filtering makes those addressable for the first
+            # time.
+            tasks = admin_request("GET", "/pools/default/tasks")
+            replications = [
+                t for t in (tasks if isinstance(tasks, list) else [])
+                if isinstance(t, dict) and t.get("type") == "xdcr"
+            ]
+            return ok(replications)
 
         if name == "admin_xdcr_replication_create":
             data = {

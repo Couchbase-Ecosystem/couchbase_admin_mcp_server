@@ -55,6 +55,139 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+#: THE EXPORT ROW FORMAT, AND WHY IT IS SHARED.
+#:
+#: Both planes read documents with SQL++ and both write the same JSON Lines row,
+#: so the aliases and the query shape are the same code. They have to be: a
+#: fixture exported on Enterprise Edition and imported into Capella is only
+#: meaningful if the two agree on which column carries the document key, and two
+#: copies of these four names is exactly how they would come to disagree.
+
+#: Key-range pagination, deliberately not LIMIT/OFFSET. OFFSET re-scans on every
+#: page, degrades quadratically across a large collection, and is unstable if
+#: anything mutates mid-export. The last key is the only cursor state to persist,
+#: which also makes a failed export resumable.
+#: Aliases for the METADATA columns. THE LEADING UNDERSCORES ARE LOAD-BEARING.
+#:
+#: This query used to read `SELECT META().id AS id, META().expiration AS exp,
+#: d.*`, and `d.*` COMES LAST -- so any document carrying its own `id` or `exp`
+#: FIELD overwrote the metadata alias. The consequences were silent and severe:
+#:
+#:   * The recorded key was the document's own `id` field rather than its actual
+#:     document key. travel-sample's airline documents have {"id": 10, ...} and
+#:     the key `airline_10`; every exported fixture recorded `10`.
+#:   * Popping `id` out of the row to use as the key then STRIPPED that field
+#:     from the document body, so the body was lossy as well as the key wrong.
+#:
+#: Nothing caught it. Per-file hashes matched, line counts matched, and
+#: capella_fixture_verify's COUNT(*) matched, because every one of those checks
+#: compares a fixture against itself. It was found on 2026-09-14 by a round trip
+#: -- export, import into a scratch keyspace, export back, compare -- which
+#: showed 187 of 188 keys differing while zero document BODIES differed. The one
+#: key that matched was `_sync:syncInfo`, whose body has no fields at all.
+#:
+#: A field beginning with a double underscore can still collide in principle.
+#: These names are chosen to make that vanishingly unlikely rather than
+#: impossible, and _export now REFUSES a row where the collision would happen
+#: instead of silently preferring one.
+META_ID_ALIAS = "__fixture_meta_id"
+
+
+META_EXP_ALIAS = "__fixture_meta_exp"
+
+
+def export_statement(bucket: str, scope: str, collection: str, *,
+                     page_size: int, user_xattrs: list[str] | None = None) -> str:
+    """The SELECT both planes page a collection with.
+
+    A CONSTANT WAS NOT ENOUGH, and the gap is why this is a function. The
+    template that used to live here could not express the xattr columns, so the
+    Capella exporter built its own statement inline and the template went unused
+    -- a second definition of the export query, sitting next to the real one,
+    agreeing with it in the only case it covered. That is the shape of the bug
+    this module exists to prevent, in this module.
+
+    KEY-RANGE PAGINATION, deliberately not LIMIT/OFFSET. OFFSET re-scans on every
+    page, degrades quadratically across a large collection, and is unstable if
+    anything mutates mid-export. The last key is the only cursor state to
+    persist, which also makes a failed export resumable.
+
+    `$last_key` is a named parameter, supplied per page. `page_size` is
+    interpolated because LIMIT does not accept one on every server version this
+    has to run against; it is coerced to an int here so the interpolation cannot
+    carry anything else.
+    """
+    select = [
+        f"META().id AS {META_ID_ALIAS}",
+        f"META().expiration AS {META_EXP_ALIAS}",
+        "d.*",
+    ]
+    for name in user_xattrs or []:
+        select.append(XATTR_SELECT.format(name=name))
+    # Identifier quoting: a bucket, scope or collection name may contain a
+    # backtick, and Couchbase escapes one by doubling it. Without this a name
+    # carrying a backtick would end the quoted identifier early.
+    def quoted(part: str) -> str:
+        return "`" + str(part).replace("`", "``") + "`"
+
+    return (
+        f"SELECT {', '.join(select)} "
+        f"FROM {quoted(bucket)}.{quoted(scope)}.{quoted(collection)} AS d "
+        f"WHERE META().id > $last_key "
+        f"ORDER BY META().id LIMIT {int(page_size)}"
+    )
+
+
+#: SELECT META().xattrs returns empty BY DESIGN — the whole object is not
+#: selectable, only named attributes are. Every user xattr a fixture should carry
+#: must therefore be declared by the caller and recorded in the manifest. Get the
+#: list wrong and xattrs are dropped in silence. Fifteen per query maximum; the
+#: full surface requires Couchbase Server 8.0.
+#: Same collision hazard as the metadata aliases above, and the same remedy:
+#: a document field literally named `xattr_foo` would otherwise be
+#: indistinguishable from the carried xattr `foo`.
+XATTR_SELECT = "META().xattrs.`{name}` AS `__fixture_xattr_{name}`"
+
+
+#: Manifest schema identifier. PLANE-NEUTRAL BY DESIGN.
+#:
+#: This was `couchbase.capella.fixture/v1` while the family existed on one plane
+#: only. The name is now neutral because the artifact is: a fixture captured on
+#: Enterprise Edition and imported into Capella is the point of having one
+#: manifest format rather than two, and a schema id naming a plane would have
+#: made every cross-plane fixture look like a foreign object to the importer.
+#:
+#: The plane a fixture CAME FROM is recorded, as `source.plane`, where it belongs
+#: -- as data about the capture, not as a gate on whether it can be read.
+MANIFEST_SCHEMA = "couchbase.fixture/v1"
+
+#: Schemas an importer still accepts, having been written before the rename.
+#:
+#: Accepted for READING only. Nothing writes these any more, and a fixture is
+#: re-exported rather than rewritten, so this set does not grow -- it is a
+#: one-way door for artifacts that already exist on somebody's disk.
+LEGACY_MANIFEST_SCHEMAS = frozenset({"couchbase.capella.fixture/v1"})
+
+
+def schema_problem(value: Any) -> str | None:
+    """None if `value` is a manifest schema this build can read, else why not.
+
+    ONE function rather than a comparison at each call site. There were two, in
+    the same module, and a third was about to be written for the second plane --
+    which is how the importer and the verifier come to disagree about whether a
+    fixture is readable.
+    """
+    if value == MANIFEST_SCHEMA:
+        return None
+    if value in LEGACY_MANIFEST_SCHEMAS:
+        return None
+    return (
+        f"schema is {value!r}, expected {MANIFEST_SCHEMA!r} "
+        f"(or one of {sorted(LEGACY_MANIFEST_SCHEMAS)}). A manifest written by a "
+        f"different version is not verifiable by this one."
+    )
+
+
 #: Root under which fixture paths must live, when the operator sets one.
 #:
 #: WHY THIS IS DEFINED HERE AND NOT IN handlers/egress.py. The export docstring

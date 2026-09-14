@@ -1,7 +1,7 @@
 # Couchbase Admin MCP Server: Architecture
 
-Written 2026-08-17. Re-measured 2026-09-14 against **280 registered tools** —
-138 `capella_*`, 123 `admin_*`, 19 `cb_*` — across 15 self-managed handler
+Written 2026-08-17. Re-measured 2026-09-14 against **284 registered tools** —
+138 `capella_*`, 127 `admin_*`, 19 `cb_*` — across 16 self-managed handler
 modules and 5 shipped Capella modules.
 
 This document describes what the server is, what it talks to, how a tool call is
@@ -139,7 +139,7 @@ graph TD
   subgraph Handlers
     SH["handlers/shared.py<br/>admin_request, redaction,<br/>statement guards, form encoding"]
     EG["handlers/egress.py<br/>SSRF denial"]
-    SM["15 self-managed modules<br/>buckets, indexes, cluster, ..."]
+    SM["16 self-managed modules<br/>buckets, indexes, cluster, ..."]
     CP["handlers/capella/*<br/>primitives + orchestration"]
   end
 

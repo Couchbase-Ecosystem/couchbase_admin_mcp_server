@@ -442,6 +442,42 @@ is the three things named above: the structure walk, document export, and
 document import — because EE reaches all three through the query service and the
 SDK rather than through v4 operations and the Data API.
 
+### Status of the EE family — WRITTEN 2026-09-14, NOT YET RUN
+
+`handlers/fixture.py` ships four tools: `admin_fixture_export`,
+`admin_fixture_import`, `admin_fixture_list`, `admin_fixture_verify`.
+
+**It has not been run against a live Enterprise Edition cluster.** That is
+stated in the module's own docstring, asserted by a test, and repeated here
+because of what the Capella round trip found: per-file hashes, line counts and a
+cluster-side `COUNT(*)` all agreed while 187 of 188 document keys were wrong.
+Every one of those checks compares a fixture against itself. Only export →
+import elsewhere → export back → compare found it.
+
+So the EE family is carefully written code, not a verified capability, and the
+one thing that would change that is a round trip on a real cluster.
+
+What differs from the Capella implementation, and why:
+
+| | Capella | Enterprise Edition |
+|---|---|---|
+| Structure | v4 bucket/scope ops | `GET /pools/default/buckets`, `.../scopes` |
+| Index definitions | v4, returns a rendered `definition` | `system:indexes`, assembled here |
+| Eventing | v4 op | `/_p/event/api/v1/functions` |
+| Document read | Data API SQL over HTTP | SDK `cluster.query` |
+| Document write | Data API KV over HTTP | SDK `collection.upsert` |
+| Credential | org API key **plus** a cluster access credential | the cluster credential this server already holds |
+
+Two deliberate refusals, both about not making capacity decisions on somebody
+else's cluster as a side effect:
+
+- **Export will not create an index.** A collection with none cannot be read by
+  SQL++ at all, and the export says so with the statement to run — but building
+  an index is a capacity decision, not a side effect of reading.
+- **Import will not create a bucket.** A bucket is a memory-quota decision on a
+  cluster somebody else sized. Scopes and collections it will create, because
+  those are what the data needs and they cost nothing to hold.
+
 ### Checked — ANSWERED 2026-09-14
 
 The open question was whether the `capella_fixture_*` tools are correctly

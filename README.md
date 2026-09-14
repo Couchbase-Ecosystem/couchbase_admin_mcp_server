@@ -19,7 +19,7 @@ profiles, different release cadences.
 
 ## What's here
 
-**280 tools** as of 2026-09-14 — 138 `capella_*`, 123 `admin_*`, 19 `cb_*`.
+**284 tools** as of 2026-09-14 — 138 `capella_*`, 127 `admin_*`, 19 `cb_*`.
 A deployment loads ONE control plane's half, never both, so a running server
 advertises far fewer than that; see "One container, one control plane" below.
 

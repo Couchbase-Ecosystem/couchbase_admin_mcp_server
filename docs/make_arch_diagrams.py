@@ -968,7 +968,7 @@ def deployment_gating():
     modes = [
         (
             "self_managed",
-            "123 admin_* tools\n19 cb_* tools\n= 142 loaded",
+            "127 admin_* tools\n19 cb_* tools\n= 146 loaded",
             "no capella_* tools",
             ADMIN,
         ),
@@ -980,7 +980,7 @@ def deployment_gating():
         ),
         (
             "both",
-            "123 + 138 + 19\n= 280 loaded",
+            "127 + 138 + 19\n= 284 loaded",
             "supported by the code,\nconfigured by nothing here",
             AIDP,
         ),

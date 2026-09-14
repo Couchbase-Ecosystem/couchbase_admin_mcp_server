@@ -93,6 +93,15 @@ from typing import Any
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+from handlers.fixture_core import (
+    MANIFEST_SCHEMA as _MANIFEST_SCHEMA,
+)
+from handlers.fixture_core import (
+    META_EXP_ALIAS,
+    META_ID_ALIAS,
+    export_statement,
+)
+
 # The plane-neutral half. Imported under the names this module has always used,
 # so every call site below is unchanged -- the code MOVED, it was not rewritten.
 #
@@ -125,6 +134,9 @@ from handlers.fixture_core import (
     rewrite_index_keyspace as _rewrite_index_keyspace,
 )
 from handlers.fixture_core import (
+    schema_problem as _schema_problem,
+)
+from handlers.fixture_core import (
     sha256_file as _sha256_file,
 )
 from handlers.fixture_core import (
@@ -143,7 +155,10 @@ _log = get_logger("handlers.capella.fixture")
 
 #: Manifest schema identifier. Bump the version segment on any breaking change to
 #: the manifest shape; import validates against it and refuses a mismatch.
-MANIFEST_SCHEMA = "couchbase.capella.fixture/v1"
+#: Re-exported from the shared core so existing importers of
+#: `fixture.MANIFEST_SCHEMA` keep working. The value itself is neutral now --
+#: see handlers/fixture_core.py for why the plane name came out of it.
+MANIFEST_SCHEMA = _MANIFEST_SCHEMA
 
 #: READ-ONLY WITH RESPECT TO THE CLUSTER. That is what the hint governs here, and
 #: the distinction is deliberate rather than accidental.
@@ -169,54 +184,6 @@ _READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint
 _DESTRUCTIVE = ToolAnnotations(
     readOnlyHint=False, destructiveHint=True, idempotentHint=False
 )
-
-#: Key-range pagination, deliberately not LIMIT/OFFSET. OFFSET re-scans on every
-#: page, degrades quadratically across a large collection, and is unstable if
-#: anything mutates mid-export. The last key is the only cursor state to persist,
-#: which also makes a failed export resumable.
-#: Aliases for the METADATA columns. THE LEADING UNDERSCORES ARE LOAD-BEARING.
-#:
-#: This query used to read `SELECT META().id AS id, META().expiration AS exp,
-#: d.*`, and `d.*` COMES LAST -- so any document carrying its own `id` or `exp`
-#: FIELD overwrote the metadata alias. The consequences were silent and severe:
-#:
-#:   * The recorded key was the document's own `id` field rather than its actual
-#:     document key. travel-sample's airline documents have {"id": 10, ...} and
-#:     the key `airline_10`; every exported fixture recorded `10`.
-#:   * Popping `id` out of the row to use as the key then STRIPPED that field
-#:     from the document body, so the body was lossy as well as the key wrong.
-#:
-#: Nothing caught it. Per-file hashes matched, line counts matched, and
-#: capella_fixture_verify's COUNT(*) matched, because every one of those checks
-#: compares a fixture against itself. It was found on 2026-09-14 by a round trip
-#: -- export, import into a scratch keyspace, export back, compare -- which
-#: showed 187 of 188 keys differing while zero document BODIES differed. The one
-#: key that matched was `_sync:syncInfo`, whose body has no fields at all.
-#:
-#: A field beginning with a double underscore can still collide in principle.
-#: These names are chosen to make that vanishingly unlikely rather than
-#: impossible, and _export now REFUSES a row where the collision would happen
-#: instead of silently preferring one.
-META_ID_ALIAS = "__fixture_meta_id"
-META_EXP_ALIAS = "__fixture_meta_exp"
-
-EXPORT_QUERY = """
-SELECT META().id AS {id_alias}, META().expiration AS {exp_alias}, d.*
-FROM `{bucket}`.`{scope}`.`{collection}` AS d
-WHERE META().id > $last_key
-ORDER BY META().id
-LIMIT $page_size
-"""
-
-#: SELECT META().xattrs returns empty BY DESIGN — the whole object is not
-#: selectable, only named attributes are. Every user xattr a fixture should carry
-#: must therefore be declared by the caller and recorded in the manifest. Get the
-#: list wrong and xattrs are dropped in silence. Fifteen per query maximum; the
-#: full surface requires Couchbase Server 8.0.
-#: Same collision hazard as the metadata aliases above, and the same remedy:
-#: a document field literally named `xattr_foo` would otherwise be
-#: indistinguishable from the carried xattr `foo`.
-XATTR_SELECT = "META().xattrs.`{name}` AS `__fixture_xattr_{name}`"
 
 _TAGS_SCHEMA = {
     "type": "object",
@@ -879,19 +846,13 @@ def _export(args: dict) -> list[TextContent]:
                         matched_keyspaces.add(keyspace)
                     if wanted_keyspaces and keyspace not in wanted_keyspaces:
                         continue
-                    select = [
-                        f"META().id AS {META_ID_ALIAS}",
-                        f"META().expiration AS {META_EXP_ALIAS}",
-                        "d.*",
-                    ]
-                    for name in xattrs:
-                        select.append(XATTR_SELECT.format(name=name))
-                    statement = (
-                        f"SELECT {', '.join(select)} "
-                        f"FROM `{bucket['name']}`.`{scope['name']}`."
-                        f"`{collection['name']}` AS d "
-                        f"WHERE META().id > $last_key "
-                        f"ORDER BY META().id LIMIT {page_size}"
+                    # The statement is built by the SHARED builder, not here.
+                    # Both planes must issue the same query or the row format
+                    # they write is not the same row format, and a fixture stops
+                    # being portable between them.
+                    statement = export_statement(
+                        bucket["name"], scope["name"], collection["name"],
+                        page_size=page_size, user_xattrs=xattrs,
                     )
                     target = data_dir / f"{keyspace}.jsonl"
                     last_key = ""
@@ -1256,11 +1217,10 @@ def _import(args: dict) -> list[TextContent]:
                    tool="capella_fixture_import", fixture_path=str(directory))
     manifest = entry["manifest"]
 
-    if manifest.get("schema") != MANIFEST_SCHEMA:
+    _schema_why = _schema_problem(manifest.get("schema"))
+    if _schema_why:
         return err(
-            f"schema is {manifest.get('schema')!r}, expected {MANIFEST_SCHEMA!r}. "
-            f"A manifest written by a different version is not importable by "
-            f"this one.",
+            _schema_why.replace("verifiable", "importable"),
             tool="capella_fixture_import", fixture_path=str(directory),
         )
 
@@ -2200,11 +2160,9 @@ def _verify(args: dict) -> list[TextContent]:
     problems: list[str] = []
 
     schema = manifest.get("schema")
-    if schema != MANIFEST_SCHEMA:
-        problems.append(
-            f"schema is {schema!r}, expected {MANIFEST_SCHEMA!r}. A manifest "
-            f"written by a different version is not verifiable by this one."
-        )
+    schema_why = _schema_problem(schema)
+    if schema_why:
+        problems.append(schema_why)
 
     checks, file_problems, payload_sha = _fixture_integrity(directory, manifest)
     problems.extend(file_problems)

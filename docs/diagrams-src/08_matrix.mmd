@@ -20,7 +20,7 @@ flowchart LR
     B1["ACCESS PATH 1 · MCP transport<br/>server.py · stdio or streamable_http<br/>client: Claude Desktop, an agent<br/><br/>Security ON: OAuth / JWT scopes<br/>OFF for sandbox:<br/>CB_ADMIN_HTTP_REQUIRE_AUTH=false"]
     B2["ACCESS PATH 2 · Operator console<br/>gui/gui_server.py · Flask, browser<br/>client: a person<br/><br/>Security ON: OIDC + signed session<br/>OFF for sandbox:<br/>CB_GUI_INSECURE_NO_AUTH=true"]
     BG["SHARED POLICY LAYER · authz.evaluate<br/>scope gate → hard ceiling → read-only<br/>→ confirmation → dry run<br/>CB_ADMIN_READ_ONLY_MODE<br/>CB_ADMIN_ALWAYS_CONFIRM · CB_ADMIN_DRY_RUN"]
-    BT["admin_* and cb_* · 142 tools, 2026-09-14<br/>Guardrails: CB_ADMIN_EGRESS_ALLOWED_HOSTS,<br/>SQL++ statement guards,<br/>CB_ADMIN_TLS_INSECURE (leave off),<br/>CB_ADMIN_DISABLED_TOOLS"]
+    BT["admin_* and cb_* · 146 tools, 2026-09-14<br/>Guardrails: CB_ADMIN_EGRESS_ALLOWED_HOSTS,<br/>SQL++ statement guards,<br/>CB_ADMIN_TLS_INSECURE (leave off),<br/>CB_ADMIN_DISABLED_TOOLS"]
     BE["Self-managed cluster<br/>ns_server REST :18091 + SDK<br/>Basic CB_USERNAME / CB_PASSWORD"]
     BC -.-> B1
     BC -.-> B2

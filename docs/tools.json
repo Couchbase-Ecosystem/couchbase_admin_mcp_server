@@ -1151,17 +1151,35 @@
    "write"
   ]
  ],
+ "fixture": [
+  [
+   "admin_fixture_export",
+   "read"
+  ],
+  [
+   "admin_fixture_import",
+   "destructive"
+  ],
+  [
+   "admin_fixture_list",
+   "read"
+  ],
+  [
+   "admin_fixture_verify",
+   "read"
+  ]
+ ],
  "__measured__": {
   "measured_on": "2026-09-14",
-  "tools_total": 280,
+  "tools_total": 284,
   "tools_capella": 138,
-  "tools_admin": 123,
+  "tools_admin": 127,
   "tools_cb": 19,
-  "loaded_self_managed": 142,
+  "loaded_self_managed": 146,
   "loaded_capella": 158,
   "capella_reachable_admin_tools": 1,
   "capella_ops": 125,
   "capella_parked_ops": 6,
-  "loaded_self_managed_read_only": 67
+  "loaded_self_managed_read_only": 70
  }
 }

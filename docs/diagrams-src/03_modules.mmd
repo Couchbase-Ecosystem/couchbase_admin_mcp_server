@@ -20,12 +20,12 @@ flowchart TB
     SE["auth/session.py<br/>signed cookies"]
     SG ~~~ RA ~~~ OI ~~~ SE
   end
-  subgraph H["HANDLERS - 208 tools"]
+  subgraph H["HANDLERS - 280 tools, 2026-09-14"]
     direction LR
     SH["shared.py<br/>admin_request, redaction,<br/>statement guards"]
     EG["egress.py<br/>SSRF denial"]
-    SM["13 self-managed modules"]
-    CP["capella/ - 4 modules"]
+    SM["15 self-managed modules"]
+    CP["capella/ - 5 shipped modules"]
   end
   subgraph OB["OBSERVABILITY"]
     direction LR

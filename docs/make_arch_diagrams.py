@@ -905,7 +905,7 @@ def deployment_gating():
         axes,
         "How the Admin MCP decides which tools exist",
         "Deny by default: a tool that cannot work against the connected target is never loaded, so\n"
-        "the agent cannot call it and then reason about the error.",
+        "the agent cannot call it and then reason about the error.  Counts measured 2026-09-14.",
     )
 
     root = panel(
@@ -968,17 +968,22 @@ def deployment_gating():
     modes = [
         (
             "self_managed",
-            "121 admin_* tools\n13 cb_* tools\n= 134 loaded",
+            "123 admin_* tools\n19 cb_* tools\n= 142 loaded",
             "no capella_* tools",
             ADMIN,
         ),
         (
             "capella",
-            "70 capella_* tools\n13 cb_* tools\n+ 1 allowlisted admin\n= 84 loaded",
+            "138 capella_* tools\n19 cb_* tools\n+ 1 allowlisted admin\n= 158 loaded",
             "every other admin_* unloaded",
             CRUD,
         ),
-        ("both", "121 + 70 + 13\n= 204 loaded", "a host that manages both", AIDP),
+        (
+            "both",
+            "123 + 138 + 19\n= 280 loaded",
+            "supported by the code,\nconfigured by nothing here",
+            AIDP,
+        ),
     ]
     body_heights = [measure(axes, body, fontsize=8.2)[1] for _, body, _, _ in modes]
     mode_h = max(body_heights) + 12.0

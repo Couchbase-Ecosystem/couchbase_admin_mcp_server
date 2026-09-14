@@ -1,12 +1,12 @@
 graph LR
   subgraph Shipped["SHIPPED - handlers/capella/"]
-    P["spec.py<br/>61 primitives"]
+    P["spec.py<br/>125 primitives<br/>measured 2026-09-14"]
     E["environment.py<br/>8 orchestration tools"]
-    F["fixture.py<br/>4 tools, handlers refuse"]
+    F["fixture.py<br/>4 tools<br/>export + import<br/>implemented 2026-09-14"]
     GR["guardrails.py<br/>org pin, project allowlist,<br/>name prefix, env ceiling"]
   end
   subgraph Q["NOT SHIPPED"]
-    PN["spec_pending.py<br/>22 ops tagged DOC<br/>outside OPS"]
+    PN["spec_pending.py<br/>6 parked ops<br/>outside OPS"]
   end
   E --> P
   F --> P

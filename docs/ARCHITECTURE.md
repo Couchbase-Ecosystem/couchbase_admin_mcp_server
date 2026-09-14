@@ -1,12 +1,16 @@
 # Couchbase Admin MCP Server: Architecture
 
-Written 2026-08-17 against 208 registered tools across 15 handler modules.
+Written 2026-08-17. Re-measured 2026-09-14 against **280 registered tools** —
+138 `capella_*`, 123 `admin_*`, 19 `cb_*` — across 15 self-managed handler
+modules and 5 shipped Capella modules.
 
 This document describes what the server is, what it talks to, how a tool call is
 authorized, and where the trust boundaries sit. Diagrams are Mermaid, so they
 render in GitHub and diff as text. The PNG figures under `docs/diagrams/` are the
-earlier generated set and are kept for the PDF build; where the two disagree,
-this file is authoritative because it is the one that changes with the code.
+same diagrams rendered for the PDF and slide builds; their sources are the
+`.mmd` files under `docs/diagrams-src/`, regenerated on 2026-09-14 from the same
+measurements as this file. Where any two disagree, this file is authoritative,
+because it is the one that changes with the code.
 
 ---
 
@@ -135,7 +139,7 @@ graph TD
   subgraph Handlers
     SH["handlers/shared.py<br/>admin_request, redaction,<br/>statement guards, form encoding"]
     EG["handlers/egress.py<br/>SSRF denial"]
-    SM["13 self-managed modules<br/>buckets, indexes, cluster, ..."]
+    SM["15 self-managed modules<br/>buckets, indexes, cluster, ..."]
     CP["handlers/capella/*<br/>primitives + orchestration"]
   end
 
@@ -263,13 +267,13 @@ likely way to misuse it.
 ```mermaid
 graph LR
   subgraph Shipped["Shipped: handlers/capella/"]
-    P["spec.py<br/>61 primitives<br/>one Op per v4 operation"]
-    E["environment.py<br/>9 orchestration tools<br/>ensure, status, park, resume, teardown, reap"]
-    F["fixture.py<br/>4 tools, defined,<br/>handlers refuse"]
+    P["spec.py<br/>125 primitives — 2026-09-14<br/>one Op per v4 operation"]
+    E["environment.py<br/>8 orchestration tools<br/>ensure, status, park, resume, teardown, reap"]
+    F["fixture.py<br/>4 tools<br/>export + import implemented 2026-09-14"]
     GR["guardrails.py<br/>org pin, project allowlist,<br/>name prefix, env ceiling"]
   end
   subgraph Quarantine["Not shipped"]
-    PN["spec_pending.py<br/>parked ops, paths tagged [DOC] or [TF]<br/>outside OPS, no tools generated"]
+    PN["spec_pending.py<br/>6 parked ops — 2026-09-14<br/>outside OPS, no tools generated"]
   end
   E --> P
   F --> P

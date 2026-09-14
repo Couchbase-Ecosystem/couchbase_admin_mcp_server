@@ -304,6 +304,12 @@ presents stdio to Claude Desktop — nothing needs public exposure.
 
 ## Running in Docker
 
+> **Deploying this for real — on a laptop, on AWS, or on GCP — is
+> [`docs/CONTAINER_DEPLOYMENT.md`](docs/CONTAINER_DEPLOYMENT.md).** It covers the
+> one-container-one-control-plane rule, secrets handling, TLS termination and
+> what has and has not actually been exercised. The section below is the short
+> local version.
+
 Build the image:
 
 ```bash

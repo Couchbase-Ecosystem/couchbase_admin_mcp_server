@@ -247,3 +247,15 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Staged by scripts/run-docker-verification.ps1 check 7: a Linux-portable copy of
+# pytest, installed on the HOST because the container cannot reach PyPI through
+# the corporate proxy. Build output, not source -- and NOT the project's .venv,
+# which holds Windows builds of couchbase and mcp that would shadow the image's
+# Linux ones if it were mounted instead.
+.pytest-lib/
+
+# Structure-only fixtures written by capella_fixture_export during verification.
+# A real fixture someone means to keep belongs in its own repository with its
+# manifest; one produced to satisfy a surface run does not belong in this one.
+fixtures/

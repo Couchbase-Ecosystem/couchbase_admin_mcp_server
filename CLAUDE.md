@@ -363,8 +363,32 @@ missing, rather than the tools being changed to need fewer. Those 95 were never
 defects in the tools, and that distinction is the same one rule 1.7 is about.
 
 **Counts move. Do not quote one here without a date beside it.** As of
-2026-09-14: 125 operations in the Capella registry, 280 tools in the server's
+2026-09-14: 125 operations in the Capella registry, 284 tools in the server's
 raw registry, 1 entry in `SHIPPED_UNVERIFIED`.
+
+### The fixture round trip is the only check that compares against something else
+
+`scripts/fixture_round_trip.py`, RUNBOOK section 11. Export, import into a
+scratch keyspace, export back, compare keys AND bodies.
+
+**Every other fixture check compares a fixture against itself** — a per-file
+sha256 matches the hash recorded for that same wrong file, 188 wrong documents
+are still 188 lines, and a cluster-side `COUNT(*)` counted the wrong documents
+correctly. All three passed while the Capella exporter was recording the wrong
+key for 187 of 188 documents.
+
+Enterprise Edition round-tripped CLEAN on 2026-09-14, first attempt: 187
+documents out and back, keys, bodies and expiries identical. **It still found
+four defects**, all in the index step, which the document comparison does not
+cover — an FTS row rendered as a `CREATE INDEX`, definitions captured for the
+whole bucket, a `keyspace_map` that rewrote only the bucket, and `defer_build`
+skipped on the indexes that most need it.
+
+The lesson is not "the round trip works". It is that **a clean result on the
+thing you measured says nothing about the thing beside it**, and the index step
+was beside it. Run the round trip against a FRESH target bucket before treating
+the index path as exercised: in that run every recorded index already existed,
+so the import created none of them.
 
 ### Capella write bodies: MOSTLY PROVEN NOW, and the failure mode has changed
 

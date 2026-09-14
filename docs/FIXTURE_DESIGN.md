@@ -442,14 +442,58 @@ is the three things named above: the structure walk, document export, and
 document import — because EE reaches all three through the query service and the
 SDK rather than through v4 operations and the Data API.
 
-### Status of the EE family — WRITTEN 2026-09-14, NOT YET RUN
+### Status of the EE family — ROUND-TRIPPED CLEAN 2026-09-14
+
+**The Enterprise Edition round trip passed on its first run**, against
+`travel-sample.inventory.airline` on a local 7.6 cluster:
+
+    187 documents exported
+    187 imported into travel-sample.roundtrip.airline
+    187 exported back
+    keys matching 187, bodies differing 0, expiries differing 0
+
+That is the strongest statement available about a fixture family, and it is what
+the section below used to say had not been made.
+
+**It still found four defects**, all in the index step, which the document
+comparison does not cover — which is the argument for running the thing rather
+than reasoning about it, stated with evidence:
+
+1. **A Search index was rendered as a `CREATE INDEX`.** `system:indexes` carries
+   FTS indexes too, with `using` of `fts` and no `index_key`, and the exporter
+   assembled one into `CREATE INDEX ... ON \`travel-sample\`.\`_default\`.\`_default\`()`
+   — rejected with `syntax error ... near '(', at: )`. Rows are now filtered to
+   `gsi`, and one with no keys that is not primary is skipped with a reason.
+2. **Index definitions covered the whole bucket.** A fixture carrying ONE
+   collection recorded 23 definitions and the import attempted all 23. On that
+   cluster they existed already; against a fresh target it would have built
+   indexes for collections the fixture carries no data for. Capture is now
+   scoped to the keyspaces actually exported, which is why it happens after the
+   document phase rather than before it.
+3. **`keyspace_map` rewrote only the bucket.** Mapping
+   `travel-sample.inventory.airline` to `travel-sample.roundtrip.airline` — same
+   bucket, different scope — substituted `travel-sample` for `travel-sample`, a
+   no-op, so every statement still named `inventory`.`airline`. On that cluster
+   they already existed and it said so; on a fresh target it would have built
+   the fixture's indexes on the SOURCE collection and left the imported one with
+   none, reporting `ok` either way. **This was the worst of the four**, and the
+   docstring on the function already described the failure mode it produced.
+4. **`defer_build` was skipped on exactly the indexes that need it.** The check
+   was `if " WITH " not in statement`, so an index already carrying a `WITH` —
+   the ones with `num_replica`, the expensive ones — got nothing appended and
+   was built eagerly while the importer went on to issue a `BUILD INDEX` for it.
+
+Each is pinned by a test in `tests/test_ee_fixture.py` naming the run that found
+it.
+
+### The family as originally shipped — WRITTEN 2026-09-14
 
 `handlers/fixture.py` ships four tools: `admin_fixture_export`,
 `admin_fixture_import`, `admin_fixture_list`, `admin_fixture_verify`.
 
-**It has not been run against a live Enterprise Edition cluster.** That is
-stated in the module's own docstring, asserted by a test, and repeated here
-because of what the Capella round trip found: per-file hashes, line counts and a
+**Run 2026-09-14 and clean** — see above. Before that run this section said it
+had not been, and the reason the claim was tracked so carefully is what the
+Capella round trip found: per-file hashes, line counts and a
 cluster-side `COUNT(*)` all agreed while 187 of 188 document keys were wrong.
 Every one of those checks compares a fixture against itself. Only export →
 import elsewhere → export back → compare found it.

@@ -39,19 +39,35 @@ fixture captured here and imported into Capella — capture on a laptop, import
 into the cloud, compare like for like — only works if both sides agree byte for
 byte on what the manifest means.
 
-THE HONEST STATUS
-=================
-**Written 2026-09-14. NOT YET RUN AGAINST A LIVE ENTERPRISE EDITION CLUSTER.**
+THE STATUS: ROUND-TRIPPED CLEAN 2026-09-14
+==========================================
+Written and round-tripped the same day, against
+`travel-sample.inventory.airline` on a local 7.6 cluster:
 
-That matters more than usual here, because of what the Capella round trip found.
-Export, import into a scratch keyspace, export back, compare: 187 of 188 keys
-differed while zero document bodies did, and nothing else had caught it — not
-per-file hashes, not line counts, not a `COUNT(*)` on the cluster. Every one of
-those compares a fixture against itself.
+    187 documents exported
+    187 imported into travel-sample.roundtrip.airline
+    187 exported back
+    keys matching 187 · bodies differing 0 · expiries differing 0
 
-So until an EE round trip has been run, this module is carefully written code
-and not a verified capability, and anything it reports about a cluster should be
-confirmed with `admin_fixture_verify` rather than believed.
+`scripts/fixture_round_trip.py` reproduces it. That is the strongest statement
+available about a fixture family, and it is the check that matters, because the
+Capella equivalent found 187 of 188 keys wrong while per-file hashes, line
+counts and a cluster-side `COUNT(*)` all agreed — each of those compares a
+fixture against itself.
+
+**The document path is verified. The INDEX path was not, and that run found four
+defects in it**, none of which the document comparison covers: a Search index
+rendered as a CREATE INDEX, definitions captured for the whole bucket rather
+than the fixture's keyspaces, a keyspace_map that rewrote only the bucket, and
+defer_build skipped on exactly the indexes that need it. All four are fixed and
+pinned by tests in tests/test_ee_fixture.py. See docs/FIXTURE_DESIGN.md.
+
+**What is still unverified**: the index step END TO END against a fresh target
+in a different bucket. The round trip above mapped within one bucket and every
+recorded index already existed on the cluster, so "already exists" is what the
+import reported and no index was actually created by it. A round trip into a
+second bucket would exercise that, and until one is run, treat the index step
+the way this module treated the whole of itself before today.
 
 WHAT THIS DOES NOT PRESERVE
 ===========================
@@ -92,6 +108,7 @@ from handlers.fixture_core import (
     sha256_file,
     split_keyspace,
     strip_index_nodes,
+    with_defer_build,
 )
 from handlers.shared import admin_request, err, get_sdk_connection, ok
 from logging_config import get_logger
@@ -445,17 +462,36 @@ def _structure(wanted_buckets: set[str]) -> tuple[list[dict], list[str]]:
     return structure, warnings
 
 
-def _index_definitions(buckets: list[str]) -> tuple[list[dict], list[str]]:
-    """GSI definitions from `system:indexes`, in the manifest's shape.
+def _index_definitions(keyspaces: set[str]) -> tuple[list[dict], list[str]]:
+    """GSI definitions for the keyspaces this fixture carries, in the manifest's shape.
 
     The Capella side reads these from a v4 endpoint that returns a rendered
     `definition` string per index. `system:indexes` does not: it returns the
     index's parts. So the CREATE INDEX statement is assembled here, and the two
-    planes produce the same manifest field from different sources — which is the
-    whole reason the manifest is plane-neutral and the transports are not.
+    planes produce the same manifest field from different sources -- which is
+    the whole reason the manifest is plane-neutral and the transports are not.
+
+    TWO THINGS THE FIRST LIVE RUN CORRECTED, both on 2026-09-14.
+
+    **`system:indexes` is not only GSI.** A full-text index appears there too,
+    with `using` of `fts` and NO `index_key` -- and this assembled it into
+
+        CREATE INDEX `mcptest-fts` ON `travel-sample`.`_default`.`_default`()
+
+    which the query service rejected with `syntax error ... near '(', at: )`.
+    That is the tool generating invalid SQL from a row it had no business
+    reading, so rows are now filtered to `gsi` and a row with no keys that is
+    not primary is skipped with a reason rather than rendered.
+
+    **It returned every index in the cluster.** A fixture covering ONE
+    collection recorded 23 index definitions across the whole bucket, and the
+    import then tried to create all 23 -- on that cluster they existed already
+    and it said so, but against a fresh target it would have built indexes for
+    collections the fixture does not carry data for. The definitions are now
+    scoped to the keyspaces actually exported.
     """
     warnings: list[str] = []
-    rows: list[dict] = []
+    skipped: list[str] = []
     try:
         rows = _query(
             "SELECT name, keyspace_id, bucket_id, scope_id, index_key, `condition`, "
@@ -476,17 +512,36 @@ def _index_definitions(buckets: list[str]) -> tuple[list[dict], list[str]]:
         bucket = row.get("bucket_id") or row.get("keyspace_id")
         scope = row.get("scope_id") or "_default"
         collection = row.get("keyspace_id") if row.get("bucket_id") else "_default"
-        if buckets and bucket not in buckets:
+        keyspace = f"{bucket}.{scope}.{collection}"
+        name = row.get("name")
+
+        if keyspaces and keyspace not in keyspaces:
             continue
 
-        keyspace = f"{bucket}.{scope}.{collection}"
-        quoted = f"`{bucket}`.`{scope}`.`{collection}`"
-        name = row.get("name")
+        using = str(row.get("using") or "gsi").lower()
+        if using != "gsi":
+            # A full-text index is a Search artifact with its own definition
+            # format; rendering it as a CREATE INDEX produces a statement the
+            # query service cannot parse. The manifest already records
+            # fidelity.search_definitions=false -- this is the same gap, and it
+            # is reported rather than mangled.
+            skipped.append(f"{name} on {keyspace} is a {using} index, not GSI")
+            continue
+
+        keys = [str(k) for k in (row.get("index_key") or [])]
         if row.get("is_primary"):
-            statement = f"CREATE PRIMARY INDEX `{name}` ON {quoted}"
+            statement = f"CREATE PRIMARY INDEX `{name}` ON {_quote_keyspace(keyspace)}"
+        elif not keys:
+            skipped.append(
+                f"{name} on {keyspace} declares no index keys and is not "
+                f"primary, so no CREATE INDEX can be rendered for it"
+            )
+            continue
         else:
-            keys = ", ".join(str(k) for k in (row.get("index_key") or []))
-            statement = f"CREATE INDEX `{name}` ON {quoted}({keys})"
+            statement = (
+                f"CREATE INDEX `{name}` ON {_quote_keyspace(keyspace)}"
+                f"({', '.join(keys)})"
+            )
             if row.get("condition"):
                 statement += f" WHERE {row['condition']}"
         with_clause = {}
@@ -502,7 +557,21 @@ def _index_definitions(buckets: list[str]) -> tuple[list[dict], list[str]]:
             "state": row.get("state"),
             "using": row.get("using"),
         })
+
+    if skipped:
+        # Reported, not dropped in silence. An index the fixture does not carry
+        # is a gap in what it can reproduce, and the operator needs to know
+        # which -- CLAUDE.md rule 1.7.
+        warnings.extend(f"index not captured: {reason}" for reason in skipped)
     return definitions, warnings
+
+
+def _quote_keyspace(keyspace: str) -> str:
+    """`bucket`.`scope`.`collection`, with embedded backticks doubled."""
+    parts = split_keyspace(keyspace)
+    if not parts:
+        return "`" + keyspace.replace("`", "``") + "`"
+    return "`" + "`.`".join(p.replace("`", "``") for p in parts) + "`"
 
 
 def _eventing_functions() -> tuple[list[dict], list[str]]:
@@ -562,11 +631,14 @@ def _export(args: dict) -> list[TextContent]:
     except RuntimeError as exc:
         return err(str(exc), tool=tool)
 
-    index_defs, index_warnings = _index_definitions(sorted(wanted_buckets))
-    warnings.extend(index_warnings)
     eventing, eventing_warnings = _eventing_functions()
     warnings.extend(eventing_warnings)
 
+    # INDEX CAPTURE HAPPENS AFTER THE DOCUMENTS, because it is scoped to the
+    # keyspaces this fixture actually ends up carrying -- and that set is not
+    # known until the document phase has run. Capturing first meant capturing
+    # every index in the bucket: a one-collection fixture recorded 23 index
+    # definitions, and the import then attempted all 23.
     data_files: list[dict] = []
     document_total = 0
     documents_ok = False
@@ -641,6 +713,22 @@ def _export(args: dict) -> list[TextContent]:
                 matched=sorted(matched),
             )
         documents_ok = True
+
+    # The keyspaces this fixture covers. With documents, that is what was
+    # actually written; without them, it is the structure being described.
+    covered = {f["keyspace"] for f in data_files}
+    if not include_data:
+        covered = {
+            f"{bucket['name']}.{scope['name']}.{collection['name']}"
+            for bucket in structure
+            for scope in bucket["scopes"]
+            for collection in scope["collections"]
+            if not (wanted_keyspaces and
+                    f"{bucket['name']}.{scope['name']}.{collection['name']}"
+                    not in wanted_keyspaces)
+        }
+    index_defs, index_warnings = _index_definitions(covered)
+    warnings.extend(index_warnings)
 
     finished = datetime.now(timezone.utc)
     manifest = {
@@ -1134,11 +1222,10 @@ def _import_indexes(manifest: dict, keyspace_map: dict) -> dict:
             continue
 
         # Deferred, so every index in a keyspace can be built in one pass.
-        if "defer_build" not in statement:
-            statement += (
-                ' WITH {"defer_build": true}' if " WITH " not in statement
-                else ""
-            )
+        statement, defer_why = with_defer_build(statement)
+        if defer_why:
+            failures.append(f"{name}: {defer_why}")
+            continue
         try:
             _query(statement)
             created.append(name)

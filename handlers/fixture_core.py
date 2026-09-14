@@ -338,18 +338,213 @@ def remap_keyspace(keyspace: str, keyspace_map: dict) -> str:
     return str(keyspace_map.get(keyspace) or keyspace)
 
 
+def with_defer_build(statement: str) -> tuple[str, str]:
+    """(statement, why_not). Ensure a CREATE INDEX defers its build.
+
+    DEFERRED THEN ONE BUILD, not a build per index. Building indexes one at a
+    time scans the collection once per index; a single BUILD INDEX naming all of
+    them scans it once. On a collection of any size that is the difference
+    between minutes and an hour.
+
+    THE NAIVE VERSION SILENTLY SKIPPED THE INDEXES THAT MOST NEED IT. It was
+
+        if "defer_build" not in statement:
+            statement += ' WITH {"defer_build": true}' if " WITH " not in statement else ""
+
+    so a statement that already carried a WITH clause -- which is exactly the
+    ones with `num_replica`, the expensive ones -- got NOTHING appended and was
+    built eagerly, while the caller went on to issue a BUILD INDEX for it. Two
+    wrongs that cancel into a confusing error rather than a visible one.
+
+    A WITH clause this cannot parse is REFUSED rather than rewritten. Guessing
+    at the shape of somebody's index options is how an index acquires a setting
+    nobody asked for.
+    """
+    if "defer_build" in statement:
+        return statement, ""
+
+    head, separator, tail = statement.partition(" WITH ")
+    if not separator:
+        return statement + ' WITH {"defer_build": true}', ""
+
+    try:
+        options = json.loads(tail.strip())
+    except json.JSONDecodeError as exc:
+        return statement, (
+            f"the index carries a WITH clause this cannot parse as JSON "
+            f"({exc}), so defer_build cannot be added to it without guessing at "
+            f"its shape: {tail.strip()!r}"
+        )
+    if not isinstance(options, dict):
+        return statement, (
+            f"the index's WITH clause is a {type(options).__name__}, not an "
+            f"object, so defer_build cannot be added to it"
+        )
+    options["defer_build"] = True
+    return f"{head} WITH {json.dumps(options)}", ""
+
+
+#: The keyspace a CREATE INDEX targets: the backticked name(s) after ON.
+#:
+#: Matched rather than string-replaced, because a bucket name can appear
+#: elsewhere in the statement -- in a WHERE clause, in an index key expression --
+#: and rewriting every occurrence of it rewrites those too.
+_ON_KEYSPACE = re.compile(
+    r"(\bON\s+)"
+    r"`((?:[^`]|``)+)`"                      # bucket
+    r"(?:\s*\.\s*`((?:[^`]|``)+)`"          # optional scope
+    r"\s*\.\s*`((?:[^`]|``)+)`)?",          # optional collection
+    re.IGNORECASE,
+)
+
+
+def index_target(statement: str) -> str | None:
+    """The keyspace a CREATE INDEX statement targets, or None if it has no ON.
+
+    Returns `bucket` for a two-part form and `bucket.scope.collection` for the
+    three-part one, so a caller can tell them apart -- which matters, because
+    they cannot be rewritten into each other without guessing.
+    """
+    match = _ON_KEYSPACE.search(statement)
+    if not match:
+        return None
+    bucket, scope, collection = match.group(2), match.group(3), match.group(4)
+    unescape = lambda part: part.replace("``", "`")  # noqa: E731
+    if scope and collection:
+        return f"{unescape(bucket)}.{unescape(scope)}.{unescape(collection)}"
+    return unescape(bucket)
+
+
 def rewrite_index_keyspace(statement: str, keyspace_map: dict) -> tuple[str, str]:
-    """(statement, why_not). Rewrites the bucket a CREATE INDEX targets.
+    """(statement, why_not). Rewrites the KEYSPACE a CREATE INDEX targets.
 
     CONSERVATIVE BY DESIGN. Rewriting SQL with regular expressions is how an
-    index quietly gets built against the wrong keyspace, so this only handles the
-    one form the exporter actually produces -- a backticked bucket name directly
-    after ON -- and REFUSES anything else rather than guessing. A refused index is
+    index quietly gets built against the wrong keyspace, so this rewrites only
+    the target named after ON, handles only the forms the exporters actually
+    produce, and REFUSES anything else rather than guessing. A refused index is
     a reported problem; an index silently built somewhere else is a corrupted
     environment that still reports success.
+
+    IT USED TO REWRITE ONLY THE BUCKET, AND THAT WAS SILENTLY WRONG.
+
+    Measured on the first Enterprise Edition round trip, 2026-09-14. The import
+    mapped `travel-sample.inventory.airline` to
+    `travel-sample.roundtrip.airline` -- same bucket, different scope. The
+    bucket substitution replaced `travel-sample` with `travel-sample`, a no-op,
+    so every index statement still named `inventory`.`airline`. On that cluster
+    the indexes already existed there and the step reported "already exists"; on
+    a FRESH target it would have built the fixture's indexes on the SOURCE
+    collection and left the imported collection with none, reporting ok either
+    way.
+
+    That is the failure mode the docstring above already described, produced by
+    the function the docstring was attached to.
     """
     if not keyspace_map:
         return statement, ""
+
+    target_keyspace = index_target(statement)
+    if target_keyspace is None:
+        return statement, ""
+
+    # An exact three-part match is the unambiguous case and the common one.
+    mapped = keyspace_map.get(target_keyspace)
+    if isinstance(mapped, str) and mapped:
+        parts = split_keyspace(mapped)
+        if not parts:
+            return statement, (
+                f"keyspace_map rewrites {target_keyspace!r} to {mapped!r}, which "
+                f"is not bucket.scope.collection"
+            )
+        replacement = "`" + "`.`".join(p.replace("`", "``") for p in parts) + "`"
+        return _ON_KEYSPACE.sub(
+            lambda m: m.group(1) + replacement, statement, count=1
+        ), ""
+
+    # The index targets a BUCKET with no scope or collection, and the map is
+    # keyed by full keyspaces. Choosing a collection for it would be this tool
+    # deciding where somebody's index belongs.
+    if "." not in target_keyspace:
+        rewrites = {
+            remap_keyspace(k, keyspace_map).split(".", 1)[0]
+            for k in keyspace_map
+            if k.split(".", 1)[0] == target_keyspace
+        }
+        if not rewrites:
+            return statement, ""
+        if len(rewrites) != 1:
+            return statement, (
+                f"keyspace_map rewrites bucket {target_keyspace!r} to more than "
+                f"one target ({sorted(rewrites)}), so the bucket this index "
+                f"belongs to is ambiguous"
+            )
+        new_bucket = rewrites.pop()
+        if new_bucket == target_keyspace:
+            return statement, ""
+        # THE BUCKET IS UNAMBIGUOUS AND THE COLLECTION IS UNCHANGED. Every
+        # mapping under this bucket agrees on the target, and the index stays on
+        # the target bucket's default collection -- which is where it already
+        # was. Nothing is being guessed, so this is a rewrite rather than a
+        # refusal. The undecidable case is more than one target bucket, and that
+        # is refused above.
+        escaped = new_bucket.replace("`", "``")
+        return _ON_KEYSPACE.sub(
+            lambda m: f"{m.group(1)}`{escaped}`", statement, count=1
+        ), ""
+
+    # A fully-qualified keyspace the map says nothing about. Left alone: an
+    # index on a collection this import is not touching is not this call's
+    # business, and rewriting it would be inventing an instruction.
+    return statement, ""
+
+    # Longest source first: a three-part keyspace must be matched before the
+    # bare bucket, or the bucket rewrite would fire first and leave the scope
+    # and collection naming the source.
+    for source in sorted(keyspace_map, key=len, reverse=True):
+        target = remap_keyspace(source, keyspace_map)
+        if target == source:
+            continue
+
+        source_parts = split_keyspace(source)
+        target_parts = split_keyspace(target)
+        if source_parts and target_parts:
+            source_token = "`" + "`.`".join(source_parts) + "`"
+            if source_token in statement:
+                statement = statement.replace(
+                    source_token, "`" + "`.`".join(target_parts) + "`"
+                )
+                continue
+            # The statement may name the bucket's default collection as a bare
+            # bucket. Rewriting THAT to a three-part target is a guess about
+            # which collection was meant, so it is refused.
+            if f"`{source_parts[0]}`" in statement:
+                return statement, (
+                    f"the index names bucket {source_parts[0]!r} without a "
+                    f"scope and collection, and keyspace_map rewrites the full "
+                    f"keyspace {source!r} to {target!r}. Which collection this "
+                    f"index belongs to cannot be decided from the statement, so "
+                    f"it is refused rather than built somewhere chosen by this "
+                    f"tool."
+                )
+            continue
+
+        # A bucket-only entry in the map: rewrite the bucket wherever it appears.
+        source_bucket = source.split(".", 1)[0]
+        targets = {
+            remap_keyspace(k, keyspace_map).split(".", 1)[0]
+            for k in keyspace_map
+            if k.split(".", 1)[0] == source_bucket
+        }
+        if len(targets) != 1:
+            return statement, (
+                f"keyspace_map rewrites bucket {source_bucket!r} to more than "
+                f"one target ({sorted(targets)}), so the bucket this index "
+                f"belongs to is ambiguous"
+            )
+        statement = statement.replace(
+            f"`{source_bucket}`", f"`{targets.pop()}`"
+        )
+    return statement, ""
     sources = {k.split(".", 1)[0] for k in keyspace_map}
     for source in sorted(sources):
         token = f"`{source}`"

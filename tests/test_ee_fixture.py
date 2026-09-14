@@ -391,14 +391,28 @@ def test_the_importer_writes_over_kv_rather_than_sql(tmp_path):
     )
 
 
-def test_the_module_states_that_it_has_not_been_run_against_a_cluster():
+def test_the_module_records_what_was_measured_and_what_was_not():
     """CLAUDE.md rule 1.7 applied to a module: code that reads as verified when
     it is not is the claim this repository most wants to avoid making.
 
-    Delete this test when the round trip has been run -- and change the
-    docstring in the same commit, with the date and what was measured.
+    This test used to assert the module said it had NOT been run. It has now
+    been run -- 187 documents out and back, clean -- so the assertion moved with
+    the fact rather than being deleted: the docstring must carry the date, and
+    it must still name the part that is NOT verified.
+
+    That second half is the one that will rot. The document path is proven; the
+    index step was exercised against a target where every index already existed,
+    so nothing was actually created. Saying so is the difference between a
+    status and a claim.
     """
-    assert "NOT YET RUN AGAINST A LIVE ENTERPRISE EDITION CLUSTER" in fixture.__doc__
+    doc = fixture.__doc__
+    assert "2026-09-14" in doc, "the round-trip claim carries no date"
+    assert "ROUND-TRIPPED CLEAN" in doc
+    assert "still unverified" in doc, (
+        "the module no longer names what the round trip did NOT establish. If "
+        "the index step has since been exercised against a fresh target, say so "
+        "with the date -- do not simply delete the admission."
+    )
 
 
 def test_a_cluster_count_is_reported_as_necessary_not_sufficient():
@@ -460,3 +474,199 @@ def test_verify_reports_a_structure_only_fixture_as_carrying_no_data(tmp_path):
     })))
     assert payload["verified"] is True
     assert "must not be presented as a dataset" in payload["note"]
+
+
+# ── what the first live round trip corrected, 2026-09-14 ─────────────────────
+#
+# The EE round trip PASSED on its first run: 187 documents out, 187 back, keys,
+# bodies and expiries identical. Everything below is a defect it found ANYWAY,
+# in the index step, which the document comparison does not cover.
+#
+# That is the argument for running it rather than reasoning about it, stated
+# with evidence: four bugs in code that had been read carefully twice.
+
+
+def test_a_full_text_index_is_not_rendered_as_a_create_index(stub, tmp_path):
+    """FOUND BY THE FIRST EE ROUND TRIP.
+
+    system:indexes carries Search indexes too, with `using` of fts and NO
+    index_key, and the exporter assembled one into
+
+        CREATE INDEX `mcptest-fts` ON `travel-sample`.`_default`.`_default`()
+
+    which the query service rejected: syntax error near '(', at: ). The tool
+    generated invalid SQL from a row it had no business reading.
+    """
+    def rows(statement, parameters=None):
+        if "system:indexes" in statement:
+            return [{"name": "mcptest-fts", "bucket_id": "b", "scope_id": "s",
+                     "keyspace_id": "c", "index_key": [], "using": "fts",
+                     "is_primary": False}]
+        return stub.query(statement, parameters)
+
+    definitions, warnings = _with_query(rows, lambda: fixture._index_definitions(set()))
+    assert definitions == [], (
+        "a full-text index was rendered as a CREATE INDEX statement"
+    )
+    assert any("not GSI" in w for w in warnings), warnings
+
+
+def test_an_index_with_no_keys_that_is_not_primary_is_skipped_with_a_reason(stub):
+    """The general form of the same defect: no keys means no renderable
+    statement, and `()` is not a statement, it is a syntax error."""
+    def rows(statement, parameters=None):
+        if "system:indexes" in statement:
+            return [{"name": "weird", "bucket_id": "b", "scope_id": "s",
+                     "keyspace_id": "c", "index_key": [], "using": "gsi",
+                     "is_primary": False}]
+        return stub.query(statement, parameters)
+
+    definitions, warnings = _with_query(rows, lambda: fixture._index_definitions(set()))
+    assert definitions == []
+    assert any("no index keys" in w for w in warnings), warnings
+
+
+def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(stub):
+    """FOUND BY THE FIRST EE ROUND TRIP.
+
+    A fixture covering ONE collection recorded 23 index definitions across the
+    whole bucket, and the import then attempted all 23. On that cluster they
+    existed already; against a fresh target it would have built indexes for
+    collections the fixture carries no data for.
+    """
+    def rows(statement, parameters=None):
+        if "system:indexes" in statement:
+            return [
+                {"name": "wanted", "bucket_id": "b", "scope_id": "s",
+                 "keyspace_id": "c", "index_key": ["`x`"], "using": "gsi"},
+                {"name": "elsewhere", "bucket_id": "b", "scope_id": "other",
+                 "keyspace_id": "c", "index_key": ["`x`"], "using": "gsi"},
+            ]
+        return stub.query(statement, parameters)
+
+    definitions, _warnings = _with_query(
+        rows, lambda: fixture._index_definitions({"b.s.c"})
+    )
+    assert [d["indexName"] for d in definitions] == ["wanted"]
+
+
+def _with_query(replacement, call):
+    """Run `call` with fixture._query replaced. A plain monkeypatch fixture would
+    not reach these, which take the stub's query as a fallback."""
+    original = fixture._query
+    fixture._query = replacement
+    try:
+        return call()
+    finally:
+        fixture._query = original
+
+
+def test_defer_build_is_merged_into_an_existing_with_clause():
+    """FOUND BY THE FIRST EE ROUND TRIP, by inspection of the statement it sent.
+
+    The check was `if " WITH " not in statement`, so an index that already
+    carried a WITH clause -- exactly the ones with num_replica, the expensive
+    ones -- got nothing appended and was built EAGERLY, while the importer went
+    on to issue a BUILD INDEX for it.
+    """
+    from handlers import fixture_core
+
+    statement, why = fixture_core.with_defer_build(
+        'CREATE INDEX `i` ON `b`.`s`.`c`(a) WITH {"num_replica": 1}'
+    )
+    assert not why
+    assert '"num_replica": 1' in statement, "the original options were dropped"
+    assert '"defer_build": true' in statement
+
+
+def test_an_unparseable_with_clause_is_refused_rather_than_rewritten():
+    """Guessing at the shape of somebody's index options is how an index
+    acquires a setting nobody asked for."""
+    from handlers import fixture_core
+
+    statement, why = fixture_core.with_defer_build(
+        "CREATE INDEX `i` ON `b`.`s`.`c`(a) WITH {nodes: broken}"
+    )
+    assert why and "cannot parse" in why
+    assert statement == "CREATE INDEX `i` ON `b`.`s`.`c`(a) WITH {nodes: broken}"
+
+
+def test_a_keyspace_map_that_changes_only_the_scope_rewrites_the_index():
+    """FOUND BY THE FIRST EE ROUND TRIP, and the worst of the four.
+
+    The import mapped travel-sample.inventory.airline to
+    travel-sample.roundtrip.airline -- same bucket, different scope. The rewrite
+    substituted the BUCKET only, replacing travel-sample with travel-sample, so
+    every statement still named inventory.airline. On that cluster the indexes
+    already existed there and it reported "already exists"; against a FRESH
+    target it would have built the fixture's indexes on the SOURCE collection
+    and left the imported one with none, reporting ok either way.
+    """
+    from handlers import fixture_core
+
+    statement, why = fixture_core.rewrite_index_keyspace(
+        "CREATE INDEX `i` ON `travel-sample`.`inventory`.`airline`(a)",
+        {"travel-sample.inventory.airline": "travel-sample.roundtrip.airline"},
+    )
+    assert not why
+    assert "`travel-sample`.`roundtrip`.`airline`" in statement
+    assert "inventory" not in statement
+
+
+def test_an_index_on_a_keyspace_the_map_says_nothing_about_is_left_alone():
+    """Rewriting it would be inventing an instruction. It is not this call's
+    business, and it must not be refused either -- a refusal would report a
+    problem where there is none."""
+    from handlers import fixture_core
+
+    statement, why = fixture_core.rewrite_index_keyspace(
+        "CREATE INDEX `i` ON `travel-sample`.`inventory`.`route`(a)",
+        {"travel-sample.inventory.airline": "travel-sample.roundtrip.airline"},
+    )
+    assert not why
+    assert statement == "CREATE INDEX `i` ON `travel-sample`.`inventory`.`route`(a)"
+
+
+def test_a_bucket_only_index_follows_an_unambiguous_bucket_rename():
+    """The index is on the bucket's default collection and stays there.
+
+    Nothing is guessed: every mapping under the bucket agrees on the target, and
+    the collection does not change. Refusing this would report a problem where
+    there is none -- which is its own kind of wrong answer.
+    """
+    from handlers import fixture_core
+
+    statement, why = fixture_core.rewrite_index_keyspace(
+        "CREATE PRIMARY INDEX `p` ON `travel-sample`",
+        {"travel-sample.inventory.airline": "scratch.inventory.airline"},
+    )
+    assert not why
+    assert statement == "CREATE PRIMARY INDEX `p` ON `scratch`"
+
+
+def test_a_bucket_only_index_is_refused_when_the_bucket_has_two_targets():
+    """THE case that is genuinely undecidable: the map sends one source bucket
+    to two different targets, so which one this index belongs to cannot be read
+    off the statement."""
+    from handlers import fixture_core
+
+    statement, why = fixture_core.rewrite_index_keyspace(
+        "CREATE PRIMARY INDEX `p` ON `src`",
+        {"src.s.c1": "one.s.c1", "src.s.c2": "two.s.c2"},
+    )
+    assert why and "more than one target" in why
+    assert statement == "CREATE PRIMARY INDEX `p` ON `src`"
+
+
+def test_only_the_on_target_is_rewritten_not_every_mention_of_the_bucket():
+    """A bucket name can appear in a WHERE clause or an index key expression,
+    and rewriting every occurrence rewrites those too."""
+    from handlers import fixture_core
+
+    statement, why = fixture_core.rewrite_index_keyspace(
+        "CREATE INDEX `i` ON `b`.`s`.`c`(`name`) WHERE `name` = 'b'",
+        {"b.s.c": "target.s.c"},
+    )
+    assert not why
+    assert statement.startswith("CREATE INDEX `i` ON `target`.`s`.`c`")
+    assert "= 'b'" in statement, "a literal that happened to match was rewritten"

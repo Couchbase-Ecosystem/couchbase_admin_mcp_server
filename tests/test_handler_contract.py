@@ -92,8 +92,23 @@ def test_the_module_list_matches_what_the_package_exposes():
         for path in pathlib.Path(inspect.getsourcefile(handlers)).parent.glob("*.py")
         if not path.stem.startswith("_")
     }
-    # Support modules, not handler groups: no TOOLS, no handle().
-    on_disk -= {"shared", "egress"}
+    # Support modules, not handler groups. The exclusion is ASSERTED rather than
+    # asserted-by-convention: a module named here that actually exports tools
+    # would remove those tools from every parametrised test below, silently,
+    # which is the exact failure this function exists to prevent.
+    support = {"shared", "egress", "fixture_core"}
+    for name in sorted(support):
+        module = importlib.import_module(f"handlers.{name}")
+        assert not hasattr(module, "TOOLS"), (
+            f"handlers/{name}.py is excluded as a support module but exports "
+            "TOOLS. Move it into MODULE_NAMES, or the tools it declares are "
+            "tested by nothing here."
+        )
+        assert not hasattr(module, "handle"), (
+            f"handlers/{name}.py is excluded as a support module but exports "
+            "handle()"
+        )
+    on_disk -= support
     on_disk.add("capella")  # a subpackage, so not caught by the glob
 
     assert on_disk == set(MODULE_NAMES), (

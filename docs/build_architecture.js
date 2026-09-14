@@ -110,11 +110,28 @@ function table(headers, rows, widths, opts = {}) {
       insideVertical:{style:BorderStyle.SINGLE,size:1,color:"DDDDDD"} } });
 }
 
+// Read a PNG's real dimensions out of its IHDR chunk.
+//
+// These used to be a hand-written table of eight [width, height] pairs. A
+// regenerated diagram changes shape -- 06_topology went from 1568x276 to
+// 1568x652 when the one-container rule was added to it -- and a stale pair does
+// not fail, it silently stretches the picture. Measuring costs 8 bytes of read
+// and cannot go stale.
+function pngSize(path) {
+  const header = Buffer.alloc(24);
+  const fd = fs.openSync(path, "r");
+  try { fs.readSync(fd, header, 0, 24, 0); } finally { fs.closeSync(fd); }
+  if (header.toString("hex", 0, 8) !== "89504e470d0a1a0a") {
+    throw new Error(path + " is not a PNG");
+  }
+  if (header.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error(path + ": first chunk is not IHDR");
+  }
+  return [header.readUInt32BE(16), header.readUInt32BE(20)];
+}
+
 function figure(file, caption, maxW = CW) {
-  const dims = { "01_context.png":[1568,604], "02_pipeline.png":[1568,1148],
-    "03_modules.png":[1568,1506], "04_trust.png":[1476,2584],
-    "05_capella.png":[1568,784], "06_topology.png":[1568,276], "07_capella_connect.png":[1324,2324],
-    "08_matrix.png":[1726,1285] }[file];
+  const dims = pngSize(REPO_PNG(file));
   let w = maxW, h = Math.round(maxW * dims[1] / dims[0]);
   const maxH = 11400;                                  // keep a figure on one page
   if (h > maxH) { h = maxH; w = Math.round(maxH * dims[0] / dims[1]); }
@@ -135,8 +152,27 @@ const Callout = (label, text, color) => new Paragraph({
               new TextRun({ text, size: 20, color: "222222" }) ],
 });
 
-const tools = JSON.parse(fs.readFileSync(TOOLS_JSON, "utf8"));
+const toolsFile = JSON.parse(fs.readFileSync(TOOLS_JSON, "utf8"));
+
+// Every count this document states in prose comes from here, measured from the
+// registry by docs/generate_tools_json.py. They were hard-coded until 2026-09-14
+// and every one of them was wrong: 208 tools against a registry of 280, 61
+// Capella primitives against 125, 22 parked operations against 6. A number
+// written into a build script goes stale silently, because nobody re-reads a
+// generated binary to check it.
+const M = toolsFile.__measured__;
+if (!M) {
+  throw new Error(
+    TOOLS_JSON + " carries no __measured__ block. Regenerate it:\n" +
+    "  python docs/generate_tools_json.py > docs/tools.json"
+  );
+}
+const tools = Object.fromEntries(
+  Object.entries(toolsFile).filter(([k]) => !k.startsWith("__"))
+);
+
 const modMeta = {
+  backup_catalog:"Backup annotation catalogue, spanning both control planes",
   backup:"Backup Service repositories and restore runs",
   buckets:"Bucket lifecycle, flush, settings",
   capella:"Capella v4 control plane: primitives, environment orchestration, fixtures",
@@ -189,7 +225,7 @@ const doc = new Document({
       new Paragraph({ spacing: { after: 400 }, alignment: AlignmentType.CENTER,
         children: [new TextRun({ text: "Architecture, Tool Breakdown and Operating Instructions", size: 28, color: BLUE })] }),
       new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 },
-        children: [new TextRun({ text: "208 tools  |  15 handler modules  |  two admin interfaces, one per instance", size: 22, color: GREY })] }),
+        children: [new TextRun({ text: `${M.tools_total} tools  |  ${Object.keys(tools).length} handler modules  |  two admin interfaces, one per instance  |  measured ${M.measured_on}`, size: 22, color: GREY })] }),
       new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 1400 },
         children: [new TextRun({ text: "Revision 1.0  -  17 August 2026", size: 20, color: GREY })] }),
       Callout("Scope.", "This document describes the server as it stands on 17 August 2026. Section 9 records defects found by a four-pass adversarial scan on that date, including three that prevent shipped functionality from working. Read section 9 before deploying.", AMBER),
@@ -281,18 +317,18 @@ const doc = new Document({
       H2("2.3 Decide which interface this instance manages"),
       P("Set CB_DEPLOYMENT explicitly. It selects which tool families are registered at all, and a tool that cannot succeed is better absent than present and broken - an agent cannot misroute to a tool it never sees."),
       table(["CB_DEPLOYMENT", "Loads", "Use it when"],
-        [["capella", "capella_* and cb_*  (74 + shared)", "This instance administers a Capella organization. RECOMMENDED for Capella."],
+        [["capella", `capella_* and cb_*  (${M.tools_capella} + ${M.tools_cb} shared)`, "This instance administers a Capella organization. RECOMMENDED for Capella."],
          ["self_managed", "admin_* and cb_*  (134)", "This instance administers a self-managed cluster. RECOMMENDED for Enterprise."],
          ["both", "Everything, gated nothing", "Not recommended. See the warning below."],
          ["auto", "Inferred from the credentials present", "Not recommended in a deployment. See the warning below."]],
         [1900, 3000, 4460], { mono: [0] }),
-      Callout("auto can resolve to both without being asked, so do not leave it unset.", "detect_mode() infers: a Capella host in CB_CONNECTION_STRING gives capella; CAPELLA_API_KEY_SECRET with no connection string gives capella; CAPELLA_API_KEY_SECRET together with a non-Capella connection string gives BOTH. So an instance that has a Capella key left over in its .env and a self-managed connection string loads all 208 tools, and the one-interface-per-instance boundary is gone with no warning at the point of use. Naming the mode removes the inference.", RED),
+      Callout("auto can resolve to both without being asked, so do not leave it unset.", `detect_mode() infers: a Capella host in CB_CONNECTION_STRING gives capella; CAPELLA_API_KEY_SECRET with no connection string gives capella; CAPELLA_API_KEY_SECRET together with a non-Capella connection string gives BOTH. So an instance that has a Capella key left over in its .env and a self-managed connection string loads all ${M.tools_total} tools, and the one-interface-per-instance boundary is gone with no warning at the point of use. Naming the mode removes the inference.`, RED),
       Callout("Why one interface per instance is the right default anyway.", "It keeps one credential set per process, so a compromise or a misconfiguration reaches one plane rather than two. It makes the loaded tool list an assertion you can check with cb_mcp_list_tools rather than a superset to search. And the two interfaces want different guardrails - a project allowlist means nothing to a self-managed cluster, and an egress allowlist means nothing to the v4 control plane - so combining them produces a configuration where half the guardrails are inert.", GREEN),
 
       // ── 2.3 CAPELLA ──
       H2("2.4 Setup A - the Capella interface"),
       P("Capella needs materially more setup than a local cluster, and the two most common failures are both configuration rather than code. Read 2.4.1 before creating anything."),
-      Callout("admin_* tools do not work against Capella, and that is not a defect.", "Capella does not expose the ns_server admin REST API to tenants, and a Capella database credential carries bucket-scoped data roles and never Full Admin. So the 134 admin_* tools are unloaded in capella mode. Their Capella equivalents are the capella_* family.", AMBER),
+      Callout("admin_* tools do not work against Capella, and that is not a defect.", `Capella does not expose the ns_server admin REST API to tenants, and a Capella database credential carries bucket-scoped data roles and never Full Admin. So the ${M.tools_admin} admin_* tools are unloaded in capella mode. Their Capella equivalents are the capella_* family.`, AMBER),
       H3("Steps"),
       Step("In Capella, go to Settings then API Keys and create a key. Give it the least role that works: reads need projectViewer, writes need projectManager or organizationOwner. The key's roles are an independent authorization layer - this server's guardrails and Capella RBAC are both in force, and the stricter one wins.", 2),
       Step("Put your egress IP in the KEY's allowed IPs during creation. If you are on VPN it is the VPN's egress, not your office range.", 2),
@@ -417,7 +453,7 @@ const doc = new Document({
          ["404 carrying a JSON code", "The route matched and the handler ran; the object genuinely is not there.", "The path is right. Check the id."],
          ["admin_* tools are missing", "Expected in capella mode. They are unloaded because ns_server is not reachable.", "Nothing. Use the capella_* equivalents."],
          ["capella_* tools are missing", "The mode did not resolve to capella.", "Set CB_DEPLOYMENT=capella and confirm CAPELLA_API_KEY_SECRET is set."],
-         ["All 208 tools loaded when you expected 74 or 134", "The mode resolved to both, most likely from auto with a leftover Capella key.",
+         [`All ${M.tools_total} tools loaded when you expected ${M.loaded_capella} or ${M.loaded_self_managed}`, "The mode resolved to both, most likely from auto with a leftover Capella key.",
           "Set CB_DEPLOYMENT explicitly and remove the credentials for the other interface."],
          ["Enterprise profile refuses to start", "One of the eight incoherent combinations is set.", "Read the error - it names each variable and why. Section 2.6 lists them."]],
         [2400, 3500, 3460]),
@@ -455,26 +491,26 @@ const doc = new Document({
          ["CB_ADMIN_TRANSPORT", "stdio | streamable_http", "Also determines whether a human is assumed present."]],
         [2600, 2600, 4160], { mono: [0, 1] }),
       H3("3.5.1 The both mode, and why it is not in the table above"),
-      P("deployment.py accepts a third value, both, which loads all 208 tools and gates nothing. It is a real code path with a real use - a single hybrid session driving a self-managed cluster and a Capella organization at once - and tests cover it. It is nevertheless not how this server should be deployed, for three reasons."),
+      P(`deployment.py accepts a third value, both, which loads all ${M.tools_total} tools and gates nothing. It is a real code path with a real use - a single hybrid session driving a self-managed cluster and a Capella organization at once - and tests cover it. It is nevertheless not how this server should be deployed, for three reasons.`),
       Bullet("It puts two credential sets in one process. A compromise or a misconfiguration then reaches two planes instead of one."),
       Bullet("It makes the loaded tool list a superset to search rather than an assertion to check. In a single-interface instance, a capella_* tool appearing where you expected admin_* is itself the error message."),
       Bullet("Half the guardrails go inert. CAPELLA_ALLOWED_PROJECTS constrains nothing on a self-managed cluster and CB_ADMIN_EGRESS_ALLOWED_HOSTS constrains nothing on the v4 control plane, so a configuration that looks fully guarded is only half guarded, and which half depends on which tool is called."),
-      Callout("The path into both is not choosing it; it is not choosing anything.", "detect_mode() resolves CAPELLA_API_KEY_SECRET plus a non-Capella CB_CONNECTION_STRING to both. So an instance intended for a self-managed cluster, whose .env still carries a Capella key from earlier work, silently loads all 208 tools. The inference is defensible in isolation - an operator who configures both plainly intends both - but it means the one-interface-per-instance boundary can be lost without anyone deciding to lose it. Naming the mode removes the inference entirely, which is why section 2.3 says to set it even when the credentials already make it unambiguous.", RED),
+      Callout("The path into both is not choosing it; it is not choosing anything.", `detect_mode() resolves CAPELLA_API_KEY_SECRET plus a non-Capella CB_CONNECTION_STRING to both. So an instance intended for a self-managed cluster, whose .env still carries a Capella key from earlier work, silently loads all ${M.tools_total} tools. The inference is defensible in isolation - an operator who configures both plainly intends both - but it means the one-interface-per-instance boundary can be lost without anyone deciding to lose it. Naming the mode removes the inference entirely, which is why section 2.3 says to set it even when the credentials already make it unambiguous.`, RED),
       P("CB_DEPLOYMENT_GATE=false is a further escape hatch with the same effect as both. Prefer both if you genuinely need this, because it is the explicit spelling and it appears in the startup summary."),
 
       // ── 4 TOOLS ──
       H1("4. Tool breakdown"),
-      P("208 tools across 15 handler modules. Categories are mutually exclusive and are taken from each tool's MCP annotations: a read tool declares readOnlyHint, a destructive tool declares destructiveHint, and everything else is a write."),
+      P(`${M.tools_total} tools across ${Object.keys(tools).length} handler modules, measured ${M.measured_on}. Categories are mutually exclusive and are taken from each tool's MCP annotations: a read tool declares readOnlyHint, a destructive tool declares destructiveHint, and everything else is a write.`),
       table(["Module", "Tools", "Read", "Write", "Destr.", "Covers"],
         invRows, [1750, 780, 700, 730, 780, 4620], { mono: [0], center: [1, 2, 3, 4] }),
-      Callout("Classification is enforced, not documented.", "All 208 tools were compared between the scope gate's read/write predicate and the compatibility shim's. Zero disagreements, and the structural relationship can only ever be stricter, so a future divergence fails closed rather than open.", GREEN),
+      Callout("Classification is enforced, not documented.", `All ${M.tools_total} tools were compared between the scope gate's read/write predicate and the compatibility shim's. Zero disagreements, and the structural relationship can only ever be stricter, so a future divergence fails closed rather than open.`, GREEN),
       H2("4.1 The Capella family in detail"),
       P("The Capella side has three shipped tiers plus a quarantine. Conflating them is the most likely way to misuse it."),
       ...figure("05_capella.png", "Figure 8 - Capella layering. Nothing enters the shipped registry without live verification."),
-      Bullet("Primitives (spec.py, 61 ops) are thin - one tool per v4 operation, no orchestration. Use when you know exactly which call you want."),
+      Bullet(`Primitives (spec.py, ${M.capella_ops} ops) are thin - one tool per v4 operation, no orchestration. Use when you know exactly which call you want.`),
       Bullet("Orchestration (environment.py, 8 tools) sequences primitives and enforces ordering constraints the individual tool descriptions do not expose: an App Service must be deleted before its cluster; a resume must be polled to healthy."),
-      Bullet("Fixtures (fixture.py, 4 tools) are defined but their handlers deliberately refuse, pending live verification of two response shapes. See the fixture design note."),
-      Bullet("Pending (spec_pending.py, 22 ops) sit outside the shipped registry, so no tools are generated from them. A test asserts the live-verification record and the registry agree exactly - that test exists because a commit message once claimed all paths were verified while ten were not."),
+      Bullet("Fixtures (fixture.py, 4 tools) export and import a collection's documents through the Capella Data API. Export and import were implemented on 2026-09-14; both had refused until then, and the refusal was honest rather than a stub. A round trip against a live cluster is what proved the write path, and it found a bug that per-file hashes, line counts and COUNT(*) had all missed - each of those compares a fixture against itself. See the fixture design note."),
+      Bullet(`Pending (spec_pending.py, ${M.capella_parked_ops} ops) sit outside the shipped registry, so no tools are generated from them. A test asserts the live-verification record and the registry agree exactly - that test exists because a commit message once claimed all paths were verified while ten were not.`),
 
       // ── 5 SECURITY MODEL ──
       new Paragraph({ children: [new PageBreak()] }),
@@ -577,12 +613,12 @@ const doc = new Document({
          ["Coverage", "90.5 percent, gated at 89 percent in CI"],
          ["Mutation testing, three rounds", "218 mutations, all caught"],
          ["Lint and format", "ruff check and ruff format clean"],
-         ["Functional, over real stdio", "Boots in both postures - 64 tools read-only, 134 in write mode; refusals flagged; dry run previews without executing; credentials masked in cb_mcp_status"],
+         ["Functional, over real stdio", `Boots in both postures - ${M.loaded_self_managed_read_only} tools read-only, ${M.loaded_self_managed} in write mode on the self-managed surface (re-measured ${M.measured_on}); refusals flagged; dry run previews without executing; credentials masked in cb_mcp_status`],
          ["Packaging", "Wheel and container image both import from the INSTALLED copy, not the source tree"]],
         [3400, 5960]),
       P("Mutation testing is the check on the tests themselves: a control whose deliberate breakage no test notices has no test behind it, however green the suite looks. It is run in CI rather than by hand, because a suite verified once is a snapshot and not a guarantee."),
       H2("9.4 Confirmed clean"),
-      P("Re-tested rather than inherited from the previous scan: SQL++ identifier escaping, including against embedded backticks, comment markers, statement chaining, NUL and fullwidth characters; command injection, of which there is none; path traversal, every REST segment being percent-encoded; TLS verification, weakened only under an explicit documented flag; mass assignment, every settings endpoint using an allow-list that refuses rather than drops; JWT validation; scope classification across all 208 tools; and retry idempotency, with no duplicate-billed-resource path found."),
+      P(`Re-tested rather than inherited from the previous scan: SQL++ identifier escaping, including against embedded backticks, comment markers, statement chaining, NUL and fullwidth characters; command injection, of which there is none; path traversal, every REST segment being percent-encoded; TLS verification, weakened only under an explicit documented flag; mass assignment, every settings endpoint using an allow-list that refuses rather than drops; JWT validation; scope classification across all ${M.tools_total} tools; and retry idempotency, with no duplicate-billed-resource path found.`),
 
       // ── 10 NEXT ──
       H1("10. Where to read next"),

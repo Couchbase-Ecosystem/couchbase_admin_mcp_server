@@ -1,26 +1,4 @@
 {
- "backup": [
-  [
-   "admin_backup_repository_list",
-   "read"
-  ],
-  [
-   "admin_backup_repository_get",
-   "read"
-  ],
-  [
-   "admin_backup_list",
-   "read"
-  ],
-  [
-   "admin_backup_run",
-   "write"
-  ],
-  [
-   "admin_backup_restore_run",
-   "destructive"
-  ]
- ],
  "buckets": [
   [
    "admin_bucket_list",
@@ -63,302 +41,96 @@
    "write"
   ]
  ],
- "capella": [
+ "collections": [
   [
-   "capella_organizations_list",
+   "admin_scope_list",
    "read"
   ],
   [
-   "capella_projects_list",
-   "read"
-  ],
-  [
-   "capella_project_get",
-   "read"
-  ],
-  [
-   "capella_project_create",
+   "admin_scope_create",
    "write"
   ],
   [
-   "capella_project_delete",
+   "admin_scope_delete",
    "destructive"
   ],
   [
-   "capella_clusters_list",
-   "read"
-  ],
-  [
-   "capella_cluster_get",
-   "read"
-  ],
-  [
-   "capella_cluster_create",
+   "admin_collection_create",
    "write"
   ],
   [
-   "capella_cluster_update",
-   "write"
+   "admin_collection_delete",
+   "destructive"
+  ]
+ ],
+ "security": [
+  [
+   "admin_user_list",
+   "read"
   ],
   [
-   "capella_cluster_delete",
+   "admin_user_get",
+   "read"
+  ],
+  [
+   "admin_user_create",
    "destructive"
   ],
   [
-   "capella_cluster_turn_on",
-   "write"
-  ],
-  [
-   "capella_cluster_turn_off",
-   "write"
-  ],
-  [
-   "capella_cluster_onoff_schedule_get",
-   "read"
-  ],
-  [
-   "capella_cluster_onoff_schedule_set",
-   "write"
-  ],
-  [
-   "capella_cluster_onoff_schedule_delete",
+   "admin_user_delete",
    "destructive"
   ],
   [
-   "capella_buckets_list",
-   "read"
-  ],
-  [
-   "capella_bucket_get",
-   "read"
-  ],
-  [
-   "capella_bucket_create",
-   "write"
-  ],
-  [
-   "capella_bucket_delete",
+   "admin_user_change_password",
    "destructive"
   ],
   [
-   "capella_bucket_flush",
+   "admin_group_list",
+   "read"
+  ],
+  [
+   "admin_group_get",
+   "read"
+  ],
+  [
+   "admin_group_create",
+   "write"
+  ],
+  [
+   "admin_group_delete",
    "destructive"
   ],
   [
-   "capella_scopes_list",
+   "admin_role_list",
    "read"
   ],
   [
-   "capella_scope_create",
-   "write"
+   "admin_whoami",
+   "read"
   ],
   [
-   "capella_scope_delete",
+   "admin_audit_get",
+   "read"
+  ],
+  [
+   "admin_audit_set",
    "destructive"
   ],
   [
-   "capella_collections_list",
+   "admin_password_policy_get",
    "read"
   ],
   [
-   "capella_collection_create",
-   "write"
-  ],
-  [
-   "capella_collection_delete",
+   "admin_password_policy_set",
    "destructive"
   ],
   [
-   "capella_sample_bucket_load",
-   "write"
-  ],
-  [
-   "capella_database_credentials_list",
+   "admin_security_settings_get",
    "read"
   ],
   [
-   "capella_database_credential_get",
-   "read"
-  ],
-  [
-   "capella_database_credential_create",
-   "write"
-  ],
-  [
-   "capella_database_credential_delete",
+   "admin_security_settings_set",
    "destructive"
-  ],
-  [
-   "capella_allowed_cidrs_list",
-   "read"
-  ],
-  [
-   "capella_allowed_cidr_create",
-   "write"
-  ],
-  [
-   "capella_allowed_cidr_delete",
-   "destructive"
-  ],
-  [
-   "capella_app_services_list",
-   "read"
-  ],
-  [
-   "capella_app_service_get",
-   "read"
-  ],
-  [
-   "capella_app_service_create",
-   "write"
-  ],
-  [
-   "capella_app_service_delete",
-   "destructive"
-  ],
-  [
-   "capella_app_service_turn_on",
-   "write"
-  ],
-  [
-   "capella_app_service_turn_off",
-   "write"
-  ],
-  [
-   "capella_app_service_certificate_get",
-   "read"
-  ],
-  [
-   "capella_app_service_allowed_cidrs_list",
-   "read"
-  ],
-  [
-   "capella_app_service_allowed_cidr_create",
-   "write"
-  ],
-  [
-   "capella_app_service_allowed_cidr_delete",
-   "destructive"
-  ],
-  [
-   "capella_app_service_admin_users_list",
-   "read"
-  ],
-  [
-   "capella_app_service_admin_user_create",
-   "write"
-  ],
-  [
-   "capella_app_service_admin_user_delete",
-   "destructive"
-  ],
-  [
-   "capella_app_endpoints_list",
-   "read"
-  ],
-  [
-   "capella_app_endpoint_get",
-   "read"
-  ],
-  [
-   "capella_app_endpoint_create",
-   "write"
-  ],
-  [
-   "capella_app_endpoint_delete",
-   "destructive"
-  ],
-  [
-   "capella_app_endpoint_online",
-   "write"
-  ],
-  [
-   "capella_app_endpoint_offline",
-   "write"
-  ],
-  [
-   "capella_app_endpoint_access_control_function_set",
-   "write"
-  ],
-  [
-   "capella_app_endpoint_access_control_function_get",
-   "read"
-  ],
-  [
-   "capella_app_endpoint_cors_set",
-   "write"
-  ],
-  [
-   "capella_app_endpoint_resync_start",
-   "write"
-  ],
-  [
-   "capella_app_endpoint_resync_status",
-   "read"
-  ],
-  [
-   "capella_events_list",
-   "read"
-  ],
-  [
-   "capella_project_events_list",
-   "read"
-  ],
-  [
-   "capella_cluster_certificate_get",
-   "read"
-  ],
-  [
-   "capella_env_ensure",
-   "write"
-  ],
-  [
-   "capella_env_status",
-   "read"
-  ],
-  [
-   "capella_env_list",
-   "read"
-  ],
-  [
-   "capella_env_connection_info",
-   "read"
-  ],
-  [
-   "capella_env_park",
-   "write"
-  ],
-  [
-   "capella_env_resume",
-   "write"
-  ],
-  [
-   "capella_env_teardown",
-   "destructive"
-  ],
-  [
-   "capella_env_reap",
-   "destructive"
-  ],
-  [
-   "capella_guardrails_status",
-   "read"
-  ],
-  [
-   "capella_fixture_export",
-   "read"
-  ],
-  [
-   "capella_fixture_import",
-   "destructive"
-  ],
-  [
-   "capella_fixture_list",
-   "read"
-  ],
-  [
-   "capella_fixture_verify",
-   "read"
   ]
  ],
  "cluster": [
@@ -479,26 +251,152 @@
    "write"
   ]
  ],
- "collections": [
+ "xdcr": [
   [
-   "admin_scope_list",
+   "admin_xdcr_references_list",
    "read"
   ],
   [
-   "admin_scope_create",
+   "admin_xdcr_reference_create",
    "write"
   ],
   [
-   "admin_scope_delete",
+   "admin_xdcr_reference_delete",
    "destructive"
   ],
   [
-   "admin_collection_create",
+   "admin_xdcr_replications_list",
+   "read"
+  ],
+  [
+   "admin_xdcr_replication_create",
+   "destructive"
+  ],
+  [
+   "admin_xdcr_replication_pause",
    "write"
   ],
   [
-   "admin_collection_delete",
+   "admin_xdcr_replication_resume",
+   "write"
+  ],
+  [
+   "admin_xdcr_replication_delete",
    "destructive"
+  ],
+  [
+   "admin_xdcr_settings_get",
+   "read"
+  ],
+  [
+   "admin_xdcr_settings_set",
+   "write"
+  ]
+ ],
+ "indexes": [
+  [
+   "admin_index_list",
+   "read"
+  ],
+  [
+   "admin_index_create",
+   "write"
+  ],
+  [
+   "admin_index_drop",
+   "destructive"
+  ],
+  [
+   "admin_index_build",
+   "write"
+  ],
+  [
+   "admin_index_settings_get",
+   "read"
+  ],
+  [
+   "admin_index_settings_set",
+   "write"
+  ]
+ ],
+ "search_admin": [
+  [
+   "admin_fts_index_list",
+   "read"
+  ],
+  [
+   "admin_fts_index_get",
+   "read"
+  ],
+  [
+   "admin_fts_index_create",
+   "destructive"
+  ],
+  [
+   "admin_fts_index_delete",
+   "destructive"
+  ],
+  [
+   "admin_fts_index_stats",
+   "read"
+  ],
+  [
+   "admin_fts_index_doc_count",
+   "read"
+  ],
+  [
+   "admin_fts_index_ingest_pause",
+   "write"
+  ],
+  [
+   "admin_fts_index_ingest_resume",
+   "write"
+  ],
+  [
+   "admin_fts_settings_get",
+   "read"
+  ]
+ ],
+ "stats": [
+  [
+   "admin_stats_bucket",
+   "read"
+  ],
+  [
+   "admin_stats_single",
+   "read"
+  ],
+  [
+   "admin_stats_multi",
+   "read"
+  ],
+  [
+   "admin_system_events",
+   "read"
+  ],
+  [
+   "admin_node_self_info",
+   "read"
+  ],
+  [
+   "admin_internal_settings_get",
+   "read"
+  ],
+  [
+   "admin_internal_settings_set",
+   "destructive"
+  ],
+  [
+   "admin_query_settings_get",
+   "read"
+  ],
+  [
+   "admin_query_settings_set",
+   "write"
+  ],
+  [
+   "admin_prometheus_targets",
+   "read"
   ]
  ],
  "diagnostics": [
@@ -569,21 +467,33 @@
    "read"
   ]
  ],
- "encryption": [
+ "backup": [
   [
-   "admin_encryption_get",
+   "admin_backup_repository_list",
    "read"
   ],
   [
-   "admin_encryption_set",
-   "destructive"
-  ],
-  [
-   "admin_kmip_get",
+   "admin_backup_plans_list",
    "read"
   ],
   [
-   "admin_kmip_set",
+   "admin_backup_repository_create",
+   "write"
+  ],
+  [
+   "admin_backup_repository_get",
+   "read"
+  ],
+  [
+   "admin_backup_list",
+   "read"
+  ],
+  [
+   "admin_backup_run",
+   "write"
+  ],
+  [
+   "admin_backup_restore_run",
    "destructive"
   ]
  ],
@@ -629,30 +539,576 @@
    "read"
   ]
  ],
- "indexes": [
+ "encryption": [
   [
-   "admin_index_list",
+   "admin_encryption_get",
    "read"
   ],
   [
-   "admin_index_create",
-   "write"
-  ],
-  [
-   "admin_index_drop",
+   "admin_encryption_set",
    "destructive"
   ],
   [
-   "admin_index_build",
-   "write"
-  ],
-  [
-   "admin_index_settings_get",
+   "admin_kmip_get",
    "read"
   ],
   [
-   "admin_index_settings_set",
+   "admin_kmip_set",
+   "destructive"
+  ]
+ ],
+ "capella": [
+  [
+   "capella_organizations_list",
+   "read"
+  ],
+  [
+   "capella_projects_list",
+   "read"
+  ],
+  [
+   "capella_project_get",
+   "read"
+  ],
+  [
+   "capella_project_create",
    "write"
+  ],
+  [
+   "capella_project_update",
+   "write"
+  ],
+  [
+   "capella_project_delete",
+   "destructive"
+  ],
+  [
+   "capella_clusters_list",
+   "read"
+  ],
+  [
+   "capella_cluster_get",
+   "read"
+  ],
+  [
+   "capella_cluster_create",
+   "write"
+  ],
+  [
+   "capella_cluster_update",
+   "write"
+  ],
+  [
+   "capella_cluster_delete",
+   "destructive"
+  ],
+  [
+   "capella_cluster_turn_on",
+   "write"
+  ],
+  [
+   "capella_cluster_turn_off",
+   "write"
+  ],
+  [
+   "capella_cluster_onoff_schedule_get",
+   "read"
+  ],
+  [
+   "capella_cluster_onoff_schedule_set",
+   "write"
+  ],
+  [
+   "capella_data_api_get",
+   "read"
+  ],
+  [
+   "capella_data_api_set",
+   "write"
+  ],
+  [
+   "capella_cluster_onoff_schedule_update",
+   "write"
+  ],
+  [
+   "capella_cluster_onoff_schedule_delete",
+   "destructive"
+  ],
+  [
+   "capella_buckets_list",
+   "read"
+  ],
+  [
+   "capella_bucket_get",
+   "read"
+  ],
+  [
+   "capella_bucket_create",
+   "write"
+  ],
+  [
+   "capella_bucket_update",
+   "write"
+  ],
+  [
+   "capella_bucket_delete",
+   "destructive"
+  ],
+  [
+   "capella_bucket_flush",
+   "destructive"
+  ],
+  [
+   "capella_scopes_list",
+   "read"
+  ],
+  [
+   "capella_scope_create",
+   "write"
+  ],
+  [
+   "capella_scope_delete",
+   "destructive"
+  ],
+  [
+   "capella_collections_list",
+   "read"
+  ],
+  [
+   "capella_collection_create",
+   "write"
+  ],
+  [
+   "capella_collection_update",
+   "write"
+  ],
+  [
+   "capella_collection_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_service_admin_user_get",
+   "read"
+  ],
+  [
+   "capella_sample_buckets_list",
+   "read"
+  ],
+  [
+   "capella_sample_bucket_get",
+   "read"
+  ],
+  [
+   "capella_sample_bucket_delete",
+   "destructive"
+  ],
+  [
+   "capella_bucket_backup_schedule_delete",
+   "destructive"
+  ],
+  [
+   "capella_bucket_backup_cycles_list",
+   "read"
+  ],
+  [
+   "capella_bucket_backup_schedules_list",
+   "read"
+  ],
+  [
+   "capella_bucket_backup_cycle_get",
+   "read"
+  ],
+  [
+   "capella_sample_bucket_load",
+   "write"
+  ],
+  [
+   "capella_database_credentials_list",
+   "read"
+  ],
+  [
+   "capella_database_credential_get",
+   "read"
+  ],
+  [
+   "capella_database_credential_create",
+   "write"
+  ],
+  [
+   "capella_database_credential_update",
+   "write"
+  ],
+  [
+   "capella_database_credential_delete",
+   "destructive"
+  ],
+  [
+   "capella_allowed_cidrs_list",
+   "read"
+  ],
+  [
+   "capella_allowed_cidr_create",
+   "write"
+  ],
+  [
+   "capella_allowed_cidr_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_services_list",
+   "read"
+  ],
+  [
+   "capella_app_service_get",
+   "read"
+  ],
+  [
+   "capella_app_service_create",
+   "write"
+  ],
+  [
+   "capella_app_service_update",
+   "write"
+  ],
+  [
+   "capella_app_service_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_service_turn_on",
+   "write"
+  ],
+  [
+   "capella_app_service_turn_off",
+   "write"
+  ],
+  [
+   "capella_app_service_certificate_get",
+   "read"
+  ],
+  [
+   "capella_app_service_allowed_cidrs_list",
+   "read"
+  ],
+  [
+   "capella_app_service_allowed_cidr_create",
+   "write"
+  ],
+  [
+   "capella_app_service_allowed_cidr_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_service_admin_users_list",
+   "read"
+  ],
+  [
+   "capella_app_service_admin_user_create",
+   "write"
+  ],
+  [
+   "capella_app_service_admin_user_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_endpoints_list",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_get",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_create",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_update",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_endpoint_online",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_offline",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_access_control_function_set",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_access_control_function_get",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_import_filter_set",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_import_filter_get",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_import_filter_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_endpoint_cors_get",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_cors_set",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_resync_start",
+   "write"
+  ],
+  [
+   "capella_app_endpoint_access_control_function_delete",
+   "destructive"
+  ],
+  [
+   "capella_app_endpoint_admin_users_list",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_collections_list",
+   "read"
+  ],
+  [
+   "capella_app_endpoint_resync_stop",
+   "destructive"
+  ],
+  [
+   "capella_app_endpoint_resync_status",
+   "read"
+  ],
+  [
+   "capella_events_list",
+   "read"
+  ],
+  [
+   "capella_project_events_list",
+   "read"
+  ],
+  [
+   "capella_cluster_certificate_get",
+   "read"
+  ],
+  [
+   "capella_backup_create",
+   "write"
+  ],
+  [
+   "capella_backups_list",
+   "read"
+  ],
+  [
+   "capella_query_index_manage",
+   "write"
+  ],
+  [
+   "capella_eventing_functions_list",
+   "read"
+  ],
+  [
+   "capella_eventing_function_create",
+   "write"
+  ],
+  [
+   "capella_replications_list",
+   "read"
+  ],
+  [
+   "capella_replication_create",
+   "write"
+  ],
+  [
+   "capella_cluster_stats_get",
+   "read"
+  ],
+  [
+   "capella_event_get",
+   "read"
+  ],
+  [
+   "capella_cluster_audit_log_config_get",
+   "read"
+  ],
+  [
+   "capella_cluster_audit_log_config_set",
+   "write"
+  ],
+  [
+   "capella_cluster_audit_log_events_list",
+   "read"
+  ],
+  [
+   "capella_cluster_audit_log_export_create",
+   "write"
+  ],
+  [
+   "capella_cluster_audit_log_exports_list",
+   "read"
+  ],
+  [
+   "capella_alert_integrations_list",
+   "read"
+  ],
+  [
+   "capella_alert_integration_create",
+   "write"
+  ],
+  [
+   "capella_alert_integration_test",
+   "write"
+  ],
+  [
+   "capella_eventing_function_get",
+   "read"
+  ],
+  [
+   "capella_eventing_function_code_get",
+   "read"
+  ],
+  [
+   "capella_eventing_function_delete",
+   "destructive"
+  ],
+  [
+   "capella_eventing_function_logs_get",
+   "read"
+  ],
+  [
+   "capella_eventing_function_update",
+   "write"
+  ],
+  [
+   "capella_eventing_function_state_set",
+   "write"
+  ],
+  [
+   "capella_replication_get",
+   "read"
+  ],
+  [
+   "capella_replication_delete",
+   "destructive"
+  ],
+  [
+   "capella_cloud_snapshot_backups_list",
+   "read"
+  ],
+  [
+   "capella_cloud_snapshot_regions_list",
+   "read"
+  ],
+  [
+   "capella_cloud_snapshot_restores_list",
+   "read"
+  ],
+  [
+   "capella_backup_get",
+   "read"
+  ],
+  [
+   "capella_backup_cycle_delete",
+   "destructive"
+  ],
+  [
+   "capella_backup_restore",
+   "destructive"
+  ],
+  [
+   "capella_query_index_definitions_list",
+   "read"
+  ],
+  [
+   "capella_query_index_properties_get",
+   "read"
+  ],
+  [
+   "capella_query_index_build_status",
+   "read"
+  ],
+  [
+   "capella_cluster_audit_log_export_get",
+   "read"
+  ],
+  [
+   "capella_alert_integration_get",
+   "read"
+  ],
+  [
+   "capella_alert_integration_update",
+   "write"
+  ],
+  [
+   "capella_alert_integration_delete",
+   "destructive"
+  ],
+  [
+   "capella_eventing_function_code_set",
+   "write"
+  ],
+  [
+   "capella_env_ensure",
+   "write"
+  ],
+  [
+   "capella_env_status",
+   "read"
+  ],
+  [
+   "capella_env_list",
+   "read"
+  ],
+  [
+   "capella_env_connection_info",
+   "read"
+  ],
+  [
+   "capella_env_park",
+   "write"
+  ],
+  [
+   "capella_env_resume",
+   "write"
+  ],
+  [
+   "capella_env_teardown",
+   "destructive"
+  ],
+  [
+   "capella_env_reap",
+   "destructive"
+  ],
+  [
+   "capella_guardrails_status",
+   "read"
+  ],
+  [
+   "capella_fixture_export",
+   "read"
+  ],
+  [
+   "capella_fixture_import",
+   "destructive"
+  ],
+  [
+   "capella_fixture_list",
+   "read"
+  ],
+  [
+   "capella_fixture_verify",
+   "read"
   ]
  ],
  "mcp_status": [
@@ -669,196 +1125,43 @@
    "read"
   ]
  ],
- "search_admin": [
+ "backup_catalog": [
   [
-   "admin_fts_index_list",
-   "read"
-  ],
-  [
-   "admin_fts_index_get",
-   "read"
-  ],
-  [
-   "admin_fts_index_create",
-   "destructive"
-  ],
-  [
-   "admin_fts_index_delete",
-   "destructive"
-  ],
-  [
-   "admin_fts_index_stats",
-   "read"
-  ],
-  [
-   "admin_fts_index_doc_count",
-   "read"
-  ],
-  [
-   "admin_fts_index_ingest_pause",
+   "cb_backup_catalog_record",
    "write"
   ],
   [
-   "admin_fts_index_ingest_resume",
+   "cb_backup_catalog_list",
+   "read"
+  ],
+  [
+   "cb_backup_catalog_get",
+   "read"
+  ],
+  [
+   "cb_backup_catalog_update",
    "write"
   ],
   [
-   "admin_fts_settings_get",
-   "read"
+   "cb_backup_catalog_delete",
+   "destructive"
+  ],
+  [
+   "cb_backup_catalog_sync",
+   "write"
   ]
  ],
- "security": [
-  [
-   "admin_user_list",
-   "read"
-  ],
-  [
-   "admin_user_get",
-   "read"
-  ],
-  [
-   "admin_user_create",
-   "destructive"
-  ],
-  [
-   "admin_user_delete",
-   "destructive"
-  ],
-  [
-   "admin_user_change_password",
-   "destructive"
-  ],
-  [
-   "admin_group_list",
-   "read"
-  ],
-  [
-   "admin_group_get",
-   "read"
-  ],
-  [
-   "admin_group_create",
-   "write"
-  ],
-  [
-   "admin_group_delete",
-   "destructive"
-  ],
-  [
-   "admin_role_list",
-   "read"
-  ],
-  [
-   "admin_whoami",
-   "read"
-  ],
-  [
-   "admin_audit_get",
-   "read"
-  ],
-  [
-   "admin_audit_set",
-   "destructive"
-  ],
-  [
-   "admin_password_policy_get",
-   "read"
-  ],
-  [
-   "admin_password_policy_set",
-   "destructive"
-  ],
-  [
-   "admin_security_settings_get",
-   "read"
-  ],
-  [
-   "admin_security_settings_set",
-   "destructive"
-  ]
- ],
- "stats": [
-  [
-   "admin_stats_bucket",
-   "read"
-  ],
-  [
-   "admin_stats_single",
-   "read"
-  ],
-  [
-   "admin_stats_multi",
-   "read"
-  ],
-  [
-   "admin_system_events",
-   "read"
-  ],
-  [
-   "admin_node_self_info",
-   "read"
-  ],
-  [
-   "admin_internal_settings_get",
-   "read"
-  ],
-  [
-   "admin_internal_settings_set",
-   "destructive"
-  ],
-  [
-   "admin_query_settings_get",
-   "read"
-  ],
-  [
-   "admin_query_settings_set",
-   "write"
-  ],
-  [
-   "admin_prometheus_targets",
-   "read"
-  ]
- ],
- "xdcr": [
-  [
-   "admin_xdcr_references_list",
-   "read"
-  ],
-  [
-   "admin_xdcr_reference_create",
-   "write"
-  ],
-  [
-   "admin_xdcr_reference_delete",
-   "destructive"
-  ],
-  [
-   "admin_xdcr_replications_list",
-   "read"
-  ],
-  [
-   "admin_xdcr_replication_create",
-   "destructive"
-  ],
-  [
-   "admin_xdcr_replication_pause",
-   "write"
-  ],
-  [
-   "admin_xdcr_replication_resume",
-   "write"
-  ],
-  [
-   "admin_xdcr_replication_delete",
-   "destructive"
-  ],
-  [
-   "admin_xdcr_settings_get",
-   "read"
-  ],
-  [
-   "admin_xdcr_settings_set",
-   "write"
-  ]
- ]
+ "__measured__": {
+  "measured_on": "2026-09-14",
+  "tools_total": 280,
+  "tools_capella": 138,
+  "tools_admin": 123,
+  "tools_cb": 19,
+  "loaded_self_managed": 142,
+  "loaded_capella": 158,
+  "capella_reachable_admin_tools": 1,
+  "capella_ops": 125,
+  "capella_parked_ops": 6,
+  "loaded_self_managed_read_only": 67
+ }
 }

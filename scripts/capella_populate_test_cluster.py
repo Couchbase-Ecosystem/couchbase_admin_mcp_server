@@ -322,33 +322,41 @@ class Populate:
         await self.create(session, "capella_backup_create", dict(b),
                           f"backup of {self.args.bucket}")
 
-        # 5. XDCR to the other cluster. This is newly possible: it needs two
-        #    clusters, and until one was provisioned there was nowhere to point.
+        # 5. XDCR INTO the test cluster, never out of it.
+        #
+        # DIRECTION REVERSED 2026-09-14, and the reversal is the safety property.
+        # This used to replicate FROM the test cluster INTO `other`, and then
+        # refuse whenever `other` held real work -- correct, but it meant the
+        # fixture could never create a replication at all on the only pair of
+        # clusters that exists here.
+        #
+        # A replication WRITES to its target and only READS its source. So make
+        # the throwaway cluster the TARGET: reading travel-sample out of the
+        # other cluster changes nothing there, and the documents land in the
+        # cluster that exists to be overwritten. That is safe in the direction
+        # the old code refused, and it needs no override flag.
+        #
+        # NOTE WHICH CLUSTER IS IN THE PATH. capella_replication_create's path
+        # cluster is the SOURCE -- the same asymmetry that made defect #8 out of
+        # capella_backup_restore. So cluster_id here is `other`, not the cluster
+        # this script is populating, and the guardrail in handlers/capella
+        # checks `target.cluster` because that is the end being written.
         if other is None:
             self.say("\n   no second cluster — skipping capella_replication_create")
-        elif not self.args.override and await self._holds_real_work(session, ids, other):
-            # The cluster being POPULATED is checked at startup; the cluster on
-            # the far end of a replication was not, and it is the one that gets
-            # WRITTEN. A one-way replication out of the test cluster into the
-            # cluster holding harvester and supportal is the exact direction this
-            # whole exercise has been avoiding, and it would have been created by
-            # a script whose safety check had already passed.
-            self.say(f"\n   NOT creating a replication into {other.get('name')!r}: "
-                     "it holds real work, and a replication WRITES to its target.")
-            self.say("   Use scripts/capella_xdcr_setup.py to choose the direction "
-                     "explicitly.")
         else:
             await self.create(
                 session, "capella_replication_create",
-                {**ids, "body": {
-                    "sourceBucket": bucket_id,
-                    "target": {"bucket": bucket_id,
-                               "cluster": str(other.get("id")),
-                               "type": "capella"},
-                    "direction": "oneWay",
-                    "priority": "low",
-                }},
-                f"replication to {other.get('name')}",
+                {**ids,
+                 "cluster_id": str(other.get("id")),
+                 "body": {
+                     "sourceBucket": bucket_id,
+                     "target": {"bucket": bucket_id,
+                                "cluster": ids["cluster_id"],
+                                "type": "capella"},
+                     "direction": "oneWay",
+                     "priority": "low",
+                 }},
+                f"replication from {other.get('name')} into this cluster",
             )
 
         # 6. Eventing. Source and metadata MUST be different keyspaces.
@@ -436,6 +444,145 @@ class Populate:
             self.say("\n   no --webhook-url — skipping capella_alert_integration_create.")
             self.say("   Capella sends a REAL request on create and fails the create")
             self.say("   unless it answers 2xx over https, so there is no safe default.")
+
+        # 10. An on/off schedule, so capella_cluster_onoff_schedule_get has
+        #     something to return instead of 404 code 11040.
+        #
+        #     days: [] IS THE POINT, not laziness. Each day entry carries a
+        #     state and a from/to window, and the rendered v4 reference does not
+        #     say what the hours OUTSIDE an "on" window mean -- specifically,
+        #     whether they are implicitly off. Guessing wrong hibernates the
+        #     cluster underneath the run that is using it.
+        #
+        #     An empty day list is a schedule that can never turn anything off,
+        #     which is all this fixture needs: the resource exists, so the GET
+        #     answers 200. If Capella rejects an empty list, the 422 names the
+        #     constraint and NOTHING has been scheduled -- a safe way to learn a
+        #     shape whose failure mode is expensive.
+        # ALL SEVEN DAYS, EVERY ONE "on". Capella requires the full week:
+        #
+        #   422 code 11042: "The schedule contains 0 days. The On/Off schedule
+        #   requires 7 days for the schedule, one for each day of the week."
+        #
+        #   (and before that, 422 code 11041 for timezone 'ET' -- the value the
+        #    tool's own description recommended until this run.)
+        #
+        # A day whose state is "on" and which carries no from/to window is on
+        # for the whole day, so seven of them is a schedule that exists and can
+        # never turn the cluster off. That is exactly what a fixture wants: the
+        # resource present for capella_cluster_onoff_schedule_get to read, with
+        # no possibility of hibernating the cluster somebody is using.
+        _WEEK = ("monday", "tuesday", "wednesday", "thursday",
+                 "friday", "saturday", "sunday")
+        await self.create(
+            session, "capella_cluster_onoff_schedule_set",
+            {**ids, "body": {
+                "timezone": "America/New_York",
+                "days": [{"day": day, "state": "on"} for day in _WEEK],
+            }},
+            "on/off schedule (every day on, never off)",
+        )
+
+        # 11. An access control function on the App Endpoint, so
+        #     capella_app_endpoint_access_control_function_get stops answering
+        #     404 because none is configured.
+        #
+        #     The function channels each document by its own id and authorises
+        #     nothing further. Deliberately NOT a permissive one: a fixture that
+        #     grants blanket write access is a bad thing to leave behind in a
+        #     cluster somebody later reuses for something real.
+        app_services = _rows(await self.call(
+            session, "capella_app_services_list", dict(ids)))
+        if app_services:
+            # 12. An App Service admin user, so capella_app_service_admin_user_delete
+            #     and capella_app_service_admin_users_list have a real subject.
+            #
+            #     `access` is REQUIRED and is a oneOf: EXACTLY ONE of
+            #     accessAllEndpoints or endpoints. Neither, or both, is 422
+            #     "contains or lacks both". Scoped to the one endpoint rather
+            #     than all of them -- a fixture credential with blanket access
+            #     is a bad thing to leave behind.
+            asid = str(app_services[0].get("id"))
+            if not await self._already(
+                session, "capella_app_service_admin_users_list",
+                {**ids, "app_service_id": asid},
+                "name", f"{PREFIX}-admin", f"app service admin user {PREFIX}-admin",
+            ):
+                endpoint_rows = _rows(await self.call(
+                    session, "capella_app_endpoints_list",
+                    {**ids, "app_service_id": asid}))
+                endpoint_names = [
+                    str(r.get("name")) for r in endpoint_rows
+                    if isinstance(r, dict) and r.get("name")
+                ]
+                await self.create(
+                    session, "capella_app_service_admin_user_create",
+                    {**ids, "app_service_id": asid, "body": {
+                        "name": f"{PREFIX}-admin",
+                        "password": "mcptest-Passw0rd!",
+                        "access": (
+                            {"endpoints": endpoint_names} if endpoint_names
+                            else {"accessAllEndpoints": True}
+                        ),
+                    }},
+                    f"app service admin user {PREFIX}-admin",
+                )
+
+        if not app_services:
+            self.say("\n   no App Service on this cluster — skipping the access "
+                     "control function.")
+            return
+        app_service_id = str(app_services[0].get("id"))
+        endpoints = _rows(await self.call(
+            session, "capella_app_endpoints_list",
+            {**ids, "app_service_id": app_service_id}))
+        if not endpoints:
+            self.say("\n   the App Service has no App Endpoint — skipping the "
+                     "access control function.")
+            return
+        # KEYSPACE = <endpoint>.<scope>.<collection>. The endpoint NAME alone
+        # earns 404 "App Endpoint keyspace <name> not found", measured
+        # 2026-09-14 -- the access control function is per collection, and the
+        # endpoint document shows it: scopes.<scope>.collections.<collection>.
+        endpoint = endpoints[0]
+        keyspace = ""
+        scopes = endpoint.get("scopes")
+        if isinstance(scopes, dict):
+            for scope_name, scope in scopes.items():
+                collections = (scope or {}).get("collections")
+                if isinstance(collections, dict) and collections:
+                    keyspace = (f"{endpoint.get('name')}.{scope_name}."
+                                f"{next(iter(collections))}")
+                    break
+        if not keyspace:
+            self.say("\n   the App Endpoint names no scope/collection — skipping "
+                     "the access control function. A two-part keyspace is not a "
+                     "keyspace and the 404 it earns teaches nothing.")
+            return
+        await self.create(
+            session, "capella_app_endpoint_access_control_function_set",
+            {**ids,
+             "app_service_id": app_service_id,
+             "app_endpoint_keyspace": keyspace,
+             # AN EXPRESSION, NOT A DECLARATION. Sync Gateway evaluates the
+             # source and requires the RESULT to be a function:
+             #
+             #   400 "collection \"airline\" sync function error: invalid
+             #        javascript syntax: JavaScript source does not evaluate to
+             #        a function"
+             #
+             # `function (doc) {...}` at the top level is a declaration and
+             # evaluates to undefined. Wrapping it in parentheses makes it a
+             # function expression, which evaluates to the function itself.
+             # Measured 2026-09-14; the tool description said only "the function
+             # source as a string", which is true and insufficient.
+             "body": {"function": (
+                 "(function (doc, oldDoc, meta) {\n"
+                 "  channel(doc._id);\n"
+                 "})"
+             )}},
+            f"access control function on app endpoint {keyspace}",
+        )
 
     async def _already(self, session, list_tool: str, args: dict,
                        field: str, value: str, label: str) -> bool:

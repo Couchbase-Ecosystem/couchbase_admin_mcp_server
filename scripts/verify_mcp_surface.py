@@ -256,6 +256,12 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
     # The FTS index and the eventing function BOTH EXIST on a populated
     # cluster; nothing was looking for either. See _ROWS_READER for why their
     # responses needed a reader rather than a field name.
+    # Self-managed XDCR. Newly discoverable on 2026-09-14: until that day
+    # admin_xdcr_replications_list returned the global tuning document rather
+    # than any replication, so there was no id to find and three tools --
+    # pause, resume, delete -- skipped for want of it. Fixing the handler is
+    # what made this line possible; see handlers/xdcr.py.
+    ("admin_xdcr_replications_list", "replication_id", "id"),
     ("admin_fts_index_list", "index_name", "name"),
     ("admin_node_list", "otpNode", "otpNode"),
     ("admin_server_groups_get", "uuid", "uuid"),
@@ -546,6 +552,25 @@ def _shape(payload: Any) -> str:
 
 
 # ── Argument resolution ──────────────────────────────────────────────────────
+
+
+def _app_endpoint_keyspace(name: Any, row: Any) -> str:
+    """`<endpoint>.<scope>.<collection>` from an App Endpoint document.
+
+    Returns "" when the endpoint has no scope/collection to name, because a
+    two-part or one-part keyspace is not a keyspace and a 404 earned by sending
+    one teaches nothing. See the retraction in _seed_derived_context.
+    """
+    if not name or not isinstance(row, dict):
+        return ""
+    scopes = row.get("scopes")
+    if not isinstance(scopes, dict):
+        return ""
+    for scope_name, scope in scopes.items():
+        collections = (scope or {}).get("collections")
+        if isinstance(collections, dict) and collections:
+            return f"{name}.{scope_name}.{next(iter(collections))}"
+    return ""
 
 
 def resolve_arguments(
@@ -1235,6 +1260,27 @@ class Run:
             self.context_for(tool)[key] = chosen
             self._report_choice(key, chosen, rows, item_field, side_of(tool))
 
+            # KEEP THE ROW, not only the id, for the one case where a later
+            # argument has to be BUILT from the object rather than copied out of
+            # it. app_endpoint_keyspace is `<endpoint>.<scope>.<collection>`,
+            # and the scope and collection live nowhere but this row. Stored
+            # under a leading underscore so it is never mistaken for a resolved
+            # argument and never sent to a tool.
+            if tool == "capella_app_endpoints_list":
+                # item_field is a str OR a tuple of candidate spellings -- see
+                # _DISCOVERY, where this entry is ("name", "id"). row.get(tuple)
+                # looks up a TUPLE KEY, finds nothing, and matches no row, so
+                # the first version of this silently stored nothing and the
+                # keyspace it exists to build stayed missing. A dict lookup with
+                # the wrong key type fails quietly, which is the whole problem.
+                fields = (item_field,) if isinstance(item_field, str) else item_field
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    if any(str(row.get(f)) == chosen for f in fields):
+                        self.context_for(tool)["_app_endpoint_row"] = row
+                        break
+
         mode_note = (self.status.get("connection") or {}).get("connection_string", "")
         if mode_note and "cloud.couchbase.com" not in mode_note:
             capella_side = any(n.startswith("capella_") for n in advertised)
@@ -1311,23 +1357,36 @@ class Run:
         # sensible root is the repository the server was started from.
         capella.setdefault("root_path", REPO_ROOT)
 
-        # ONE URL SLOT, TWO PLACEHOLDER NAMES.
+        # ONE URL SLOT, TWO PLACEHOLDER NAMES -- AND THEY ARE NOT THE SAME VALUE.
         #
         #   .../appEndpoints/{app_endpoint_name}/cors
         #   .../appEndpoints/{app_endpoint_keyspace}/accessControlFunction
         #
-        # Same position, same value, different spelling — so discovering one
-        # leaves the other unresolved and two tools skip for want of an argument
-        # the run is already holding. Seeded from the discovered endpoint rather
-        # than invented, so if no App Endpoint exists this stays missing and the
-        # skip remains honest.
+        # RETRACTED 2026-09-14. This block used to say "same position, same
+        # value, different spelling" and seeded the keyspace FROM the endpoint
+        # name. That was wrong, and it manufactured a 404 that was then read as
+        # "no access control function is configured":
         #
-        # The registry should probably settle on one placeholder; until it does,
-        # this is the harness refusing to report a spelling difference as an
-        # absent object.
+        #   PUT .../appEndpoints/test/accessControlFunction
+        #   404 {"message": "App Endpoint keyspace test not found"}
+        #
+        # An access control function is per COLLECTION, not per endpoint. The
+        # endpoint document says so plainly once you look at it:
+        #
+        #   {"name": "test",
+        #    "scopes": {"inventory": {"collections": {
+        #        "airline": {"accessControlFunction": "function (doc, oldDoc…"}}}}}
+        #
+        # So the keyspace is `<endpoint>.<scope>.<collection>` -- three parts --
+        # and the endpoint name alone is one of them. Building it from the
+        # endpoint's own scopes map is the only honest source; inventing the
+        # scope and collection would reproduce the same false 404 with more
+        # steps.
+        endpoint_row = capella.get("_app_endpoint_row")
         endpoint = capella.get("app_endpoint_name")
-        if endpoint:
-            capella.setdefault("app_endpoint_keyspace", endpoint)
+        keyspace = _app_endpoint_keyspace(endpoint, endpoint_row)
+        if keyspace:
+            capella.setdefault("app_endpoint_keyspace", keyspace)
 
         seeded = {
             "statement", "statements", "metric_name", "metrics", "tool_name",
@@ -1866,6 +1925,12 @@ class Run:
                     continue
                 self.say(f"    [{side}]")
                 for key, value in sorted(values.items()):
+                    # Underscore keys are working material kept for building
+                    # other arguments -- a whole App Endpoint document, for
+                    # instance. They are not what the run was "pointed at", and
+                    # printing one would bury the summary in JSON.
+                    if key.startswith("_"):
+                        continue
                     self.say(f"      {key:<24} {value}")
             self.say()
 

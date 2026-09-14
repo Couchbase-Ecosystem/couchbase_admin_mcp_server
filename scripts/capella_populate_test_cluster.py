@@ -90,6 +90,17 @@ PREFIX = "mcptest"
 #: RFC 5737 TEST-NET-1. Documentation-only, not routable. See the module docstring.
 SAFE_CIDR = "192.0.2.1/32"
 
+#: Written only when the App Endpoint collection has no access control function
+#: to round-trip. Deliberately the smallest thing that is still a function: it
+#: assigns every document to one named channel and asserts nothing, so it cannot
+#: reject a write the rest of the fixture depends on. Sent as a BARE STRING --
+#: see the comment in _access_control_function for why that matters.
+_DEFAULT_ACCESS_CONTROL_FUNCTION = (
+    "function (doc, oldDoc, meta) {\n"
+    "  channel('" + PREFIX + "');\n"
+    "}"
+)
+
 
 def _client_env(*, dry_run: bool) -> dict[str, str]:
     env = dict(os.environ)
@@ -114,6 +125,33 @@ def _payload(response: Any) -> dict:
                 return {"_raw": text}
             return parsed if isinstance(parsed, dict) else {"_list": parsed}
     return {}
+
+
+def _schema_refusal(body: dict) -> str:
+    """The MCP SDK's own validation message, when the call never reached a tool.
+
+    NOT AN ERROR SHAPE THIS SCRIPT KNEW ABOUT, and that cost a false green on
+    2026-09-14. capella_alert_integration_create was sent without the required
+    `method` field, and the SDK refused it before dispatch with a plain-text
+    body that _payload could not parse as JSON:
+
+        {"_raw": "Input validation error: 'method' is a required property"}
+
+    It carries no `_is_error`, no `requires_confirmation` and no HTTP status, so
+    create() fell through to `self.check(True, ...)` and reported
+
+        + alert integration mcptest-alerts
+
+    in the created list. Nothing had been created. The run was green about a
+    call that never left the client.
+
+    A refusal from the SDK is a failure of THIS SCRIPT's arguments, not of the
+    server, and it must read that way: the message names the missing field.
+    """
+    raw = body.get("_raw")
+    if isinstance(raw, str) and "validation error" in raw.lower():
+        return raw.strip()
+    return ""
 
 
 def _rows(body: dict) -> list:
@@ -150,9 +188,24 @@ def _is_already_exists(result: dict) -> bool:
     Only the first is a success. Matching on status alone would swallow the
     second and report a cluster that refused every write as fully populated.
     """
+    text = f"{result.get('error', '')} {result.get('message', '')}".lower()
+
+    # NOT EVERY "ALREADY THERE" IS A 409. The on/off schedule says it with a 422:
+    #
+    #   422 code 11050 "Cannot create a new on/off schedule as a schedule already
+    #   exists for the cluster. If you want to update the existing schedule, use
+    #   the Update on/off schedule API."
+    #
+    # Measured 2026-09-14, on the run immediately after the first successful
+    # create. Matching on 409 alone reported a fixture that was correctly built
+    # as a failed check -- the same false-negative this function exists to stop,
+    # one status code over. The code is matched as well as the words because
+    # 11050 is unambiguous where "already exists" is merely likely.
+    if "11050" in text and "already exists" in text:
+        return True
+
     if result.get("status") != 409 and "409" not in str(result.get("error", "")):
         return False
-    text = f"{result.get('error', '')} {result.get('message', '')}".lower()
     return "already exists" in text or "duplicate" in text
 
 
@@ -201,12 +254,28 @@ class Populate:
         on a representative one.
         """
         unconfirmed = await self.call(session, tool, arguments)
+        # A SCHEMA REFUSAL IS NOT A GATE REFUSAL, and conflating them hides the
+        # bug in whichever one is broken. If the SDK rejected the arguments, the
+        # gate was never reached and nothing has been learned about it -- say so
+        # and stop, rather than sending the same invalid arguments again with
+        # confirm:true and reporting whatever comes back as a creation.
+        refusal = _schema_refusal(unconfirmed)
+        if refusal:
+            self.check(False, f"{tool} arguments do not match its schema", refusal)
+            self.say(f"   NOT ATTEMPTED: {label}. The gate was never exercised, "
+                     f"so this run says nothing about it either way.")
+            return unconfirmed
         self.check(
             unconfirmed.get("requires_confirmation") is True
             or unconfirmed.get(ERROR_MARKER) is True,
             f"{tool} without confirm is refused",
         )
         result = await self.call(session, tool, {**arguments, "confirm": True})
+
+        refusal = _schema_refusal(result)
+        if refusal:
+            self.check(False, f"{label} created", refusal)
+            return result
 
         if not self.performed:
             self.check(
@@ -229,7 +298,8 @@ class Populate:
             # are distinguished by the message, not by the status, so match the
             # message and let every other 409 fail.
             if _is_already_exists(result):
-                self.say(f"   {label} is already present (409 from the create)")
+                self.say(f"   {label} is already present (the create was refused "
+                     f"as a duplicate)")
                 self.present.append(label)
                 return result
             # The message is the finding. A 422 that names a field is the schema
@@ -435,6 +505,13 @@ class Populate:
                     "kind": "webhook",
                     "config": {"webhook": {
                         "url": self.args.webhook_url,
+                        # REQUIRED, and omitting it cost a run. _ALERT_WEBHOOK in
+                        # handlers/capella/spec.py declares required ["url",
+                        # "method"]; this body sent only the url and the SDK
+                        # refused the call before dispatch with
+                        #   Input validation error: 'method' is a required property
+                        # The schema was right. The caller was wrong.
+                        "method": "POST",
                         "token": self.args.webhook_token or "mcptest",
                     }},
                 }},
@@ -448,39 +525,46 @@ class Populate:
         # 10. An on/off schedule, so capella_cluster_onoff_schedule_get has
         #     something to return instead of 404 code 11040.
         #
-        #     days: [] IS THE POINT, not laziness. Each day entry carries a
-        #     state and a from/to window, and the rendered v4 reference does not
-        #     say what the hours OUTSIDE an "on" window mean -- specifically,
-        #     whether they are implicitly off. Guessing wrong hibernates the
-        #     cluster underneath the run that is using it.
+        # THE SHAPE BELOW IS THE ONE CAPELLA ACCEPTED (204), and it is not the
+        # one this script sent for three runs. The measured rules, each from its
+        # own 422 in scripts/probe_onoff_schedule.py:
         #
-        #     An empty day list is a schedule that can never turn anything off,
-        #     which is all this fixture needs: the resource exists, so the GET
-        #     answers 200. If Capella rejects an empty list, the 422 names the
-        #     constraint and NOTHING has been scheduled -- a safe way to learn a
-        #     shape whose failure mode is expensive.
-        # ALL SEVEN DAYS, EVERY ONE "on". Capella requires the full week:
+        #   * seven days, always (422 code 11042)
+        #   * IANA timezone (422 code 11041 for 'ET')
+        #   * 'on' and 'off' are whole-day states and must carry NO boundary
+        #   * 'custom' is the only state that may carry one, and must
+        #   * minute is 0 or 30; hour is 0-23; from/to are objects
         #
-        #   422 code 11042: "The schedule contains 0 days. The On/Off schedule
-        #   requires 7 days for the schedule, one for each day of the week."
-        #
-        #   (and before that, 422 code 11041 for timezone 'ET' -- the value the
-        #    tool's own description recommended until this run.)
-        #
-        # A day whose state is "on" and which carries no from/to window is on
-        # for the whole day, so seven of them is a schedule that exists and can
-        # never turn the cluster off. That is exactly what a fixture wants: the
-        # resource present for capella_cluster_onoff_schedule_get to read, with
-        # no possibility of hibernating the cluster somebody is using.
+        # WHAT THIS COSTS, SAID PLAINLY: 00:00-23:30 is the widest window the
+        # rules allow, so this schedule leaves the cluster OFF for thirty
+        # minutes a night. There is no schedule that does not. The shape this
+        # script used to send -- seven whole-day "on" days, chosen precisely
+        # because it could never hibernate anything -- breaks no stated rule and
+        # answers 500 code 10000 every time. A fixture cannot have both "the
+        # resource exists" and "nothing ever turns off"; this picks the first,
+        # because the tool under test is the setter and a fixture cluster can
+        # afford half an hour.
         _WEEK = ("monday", "tuesday", "wednesday", "thursday",
                  "friday", "saturday", "sunday")
+
+        # WHICH VERB DEPENDS ON WHETHER ONE IS ALREADY THERE. POST creates and
+        # refuses a duplicate with 422 code 11050; PUT updates and refuses a
+        # missing one with 404 code 11040. Reading the schedule first turns a
+        # guess into a lookup, and costs one GET.
+        existing = await self.call(
+            session, "capella_cluster_onoff_schedule_get", dict(ids))
+        tool = ("capella_cluster_onoff_schedule_update"
+                if not existing.get(ERROR_MARKER) else
+                "capella_cluster_onoff_schedule_set")
         await self.create(
-            session, "capella_cluster_onoff_schedule_set",
+            session, tool,
             {**ids, "body": {
                 "timezone": "America/New_York",
-                "days": [{"day": day, "state": "on"} for day in _WEEK],
+                "days": [{"day": day, "state": "custom",
+                          "from": {"hour": 0, "minute": 0},
+                          "to": {"hour": 23, "minute": 30}} for day in _WEEK],
             }},
-            "on/off schedule (every day on, never off)",
+            "on/off schedule (custom days, 00:00-23:30)",
         )
 
         # 11. An access control function on the App Endpoint, so
@@ -546,42 +630,63 @@ class Populate:
         # endpoint document shows it: scopes.<scope>.collections.<collection>.
         endpoint = endpoints[0]
         keyspace = ""
+        existing_function = ""
         scopes = endpoint.get("scopes")
         if isinstance(scopes, dict):
             for scope_name, scope in scopes.items():
                 collections = (scope or {}).get("collections")
                 if isinstance(collections, dict) and collections:
+                    collection_name, collection = next(iter(collections.items()))
                     keyspace = (f"{endpoint.get('name')}.{scope_name}."
-                                f"{next(iter(collections))}")
+                                f"{collection_name}")
+                    # THE FUNCTION LIVES IN THE ENDPOINT DOCUMENT, not in the
+                    # response of its own getter.
+                    #
+                    # capella_app_endpoint_access_control_function_get answers
+                    # 200 with an EMPTY BODY (measured 2026-09-14) while
+                    # capella_app_endpoint_get carries the source right here, at
+                    # scopes.<scope>.collections.<collection>.
+                    # accessControlFunction. So read it from the document that
+                    # has it; a 200 with nothing in it is not a source of truth.
+                    if isinstance(collection, dict):
+                        existing_function = str(
+                            collection.get("accessControlFunction") or "")
                     break
         if not keyspace:
             self.say("\n   the App Endpoint names no scope/collection — skipping "
                      "the access control function. A two-part keyspace is not a "
                      "keyspace and the 404 it earns teaches nothing.")
             return
+        # THE BODY IS A BARE STRING, AND THAT WAS THE WHOLE BUG.
+        #
+        # Three inputs were refused with the identical 400 "invalid javascript
+        # syntax: JavaScript source does not evaluate to a function": a plain
+        # `function (doc, oldDoc, meta) {...}` declaration, the same source
+        # wrapped in parentheses, and -- decisively -- the function Capella
+        # itself had stored, read out of the endpoint document and sent back
+        # verbatim. A real syntax validator would have accepted the server's own
+        # function. One identical error from three valid inputs means the source
+        # never reached the validator at all.
+        #
+        # The cause was the envelope: the op wrapped the source in
+        # {"function": "<source>"}. App Services wants the source as a BARE JSON
+        # STRING, the same shape capella_eventing_function_code_set takes. The
+        # op now carries body_scalar; this call passes the string itself.
+        #
+        # The round-trip is still preferred when the endpoint already has a
+        # function -- it proves the PUT path, the keyspace and the body shape
+        # without depending on any syntax claim of mine. Only when there is
+        # nothing to read back do we write a minimal channel-assignment
+        # function of our own.
+        source = existing_function or _DEFAULT_ACCESS_CONTROL_FUNCTION
+        label = ("round-tripped" if existing_function else "seeded")
         await self.create(
             session, "capella_app_endpoint_access_control_function_set",
             {**ids,
              "app_service_id": app_service_id,
              "app_endpoint_keyspace": keyspace,
-             # AN EXPRESSION, NOT A DECLARATION. Sync Gateway evaluates the
-             # source and requires the RESULT to be a function:
-             #
-             #   400 "collection \"airline\" sync function error: invalid
-             #        javascript syntax: JavaScript source does not evaluate to
-             #        a function"
-             #
-             # `function (doc) {...}` at the top level is a declaration and
-             # evaluates to undefined. Wrapping it in parentheses makes it a
-             # function expression, which evaluates to the function itself.
-             # Measured 2026-09-14; the tool description said only "the function
-             # source as a string", which is true and insufficient.
-             "body": {"function": (
-                 "(function (doc, oldDoc, meta) {\n"
-                 "  channel(doc._id);\n"
-                 "})"
-             )}},
-            f"access control function on app endpoint {keyspace}",
+             "body": source},
+            f"access control function {label} on {keyspace}",
         )
 
     async def _already(self, session, list_tool: str, args: dict,

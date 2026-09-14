@@ -507,6 +507,119 @@ class Populate:
                         "in progress -- check admin_backup_repository_get",
                     )
 
+        # 7. XDCR, which needs a SECOND cluster and therefore needs the operator
+        #    to name one. Without --xdcr-remote-host this is skipped and
+        #    admin_xdcr_replication_pause / _resume / _delete stay honestly
+        #    unresolvable: there is no replication on this cluster.
+        #
+        #    DIRECTION MATTERS AND IT IS FIXED HERE. This cluster is the SOURCE,
+        #    the remote is the TARGET, because a replication WRITES to its
+        #    target and only READS its source. That also puts the replication on
+        #    THIS cluster, which is the one the surface harness is pointed at --
+        #    replications are listed on the source, the same asymmetry that made
+        #    a defect out of capella_backup_restore.
+        #
+        #    The remote bucket is NOT created here. Creating a bucket on a
+        #    cluster this script was not given is beyond what "populate the test
+        #    cluster" should do; if it is missing, the replication create fails
+        #    and says so.
+        await self._xdcr(session)
+
+    async def _xdcr(self, session) -> None:
+        host = (self.args.xdcr_remote_host or "").strip()
+        if not host:
+            self.say("\n   no --xdcr-remote-host — skipping the XDCR fixture.")
+            self.say("   XDCR needs a second cluster. Give one, and export")
+            self.say("   CB_XDCR_REMOTE_PASSWORD for it, to exercise")
+            self.say("   admin_xdcr_reference_* and admin_xdcr_replication_*.")
+            return
+
+        # CB_XDCR_REMOTE_PASSWORD first, CB_PASSWORD second. In practice these
+        # test clusters share one administrator password, so requiring a second
+        # variable was ceremony that bought nothing. The specific variable stays
+        # for the case that actually needs it -- a remote cluster with different
+        # credentials -- and SAYING WHICH ONE WAS USED matters, because "wrong
+        # password" and "no password" produce very different errors from the
+        # reference create and only one of them is obvious.
+        #
+        # Neither is ever a command-line flag: a password on a PowerShell
+        # command line is written to ConsoleHost_history.txt in the clear.
+        password = os.environ.get("CB_XDCR_REMOTE_PASSWORD", "")
+        source = "CB_XDCR_REMOTE_PASSWORD"
+        if not password:
+            password = os.environ.get("CB_PASSWORD", "")
+            source = "CB_PASSWORD"
+        if not password:
+            self.check(
+                False, "a password for the remote cluster is in the environment",
+                "a remote host was named but neither CB_XDCR_REMOTE_PASSWORD nor "
+                "CB_PASSWORD is set. Set CB_XDCR_REMOTE_PASSWORD if the remote "
+                "cluster's administrator password differs from this one.",
+            )
+            return
+        self.say(f"\n   remote credentials: {self.args.xdcr_remote_user} "
+                 f"(password from {source})")
+
+        reference = f"{PREFIX}-remote"
+        if not await self._already(session, "admin_xdcr_references_list", {},
+                                   "name", reference,
+                                   f"XDCR reference {reference}"):
+            result = await self.create(
+                session, "admin_xdcr_reference_create",
+                {"name": reference,
+                 "hostname": host,
+                 "username": self.args.xdcr_remote_user,
+                 "password": password},
+                f"XDCR reference {reference}",
+            )
+            # THE EGRESS GUARD REFUSING THIS IS THE GUARD WORKING.
+            #
+            # admin_xdcr_reference_create makes the CLUSTER connect to a host
+            # the caller named, which is the redirection this server exists to
+            # prevent by default. So do not report it as a bare failure and do
+            # not lift it from inside a fixture script -- name the variable and
+            # let the operator decide.
+            text = json.dumps(result) if isinstance(result, dict) else str(result)
+            if "EgressDenied" in text:
+                self.say(f"\n   The egress allowlist refused {host!r}. That is the")
+                self.say("   guard doing its job, not a defect: this operation points")
+                self.say("   the CLUSTER at a destination the caller chose.")
+                self.say("   To allow it for this run only:")
+                self.say(f"     $env:CB_ADMIN_EGRESS_ALLOWED_HOSTS = "
+                         f"'{host.split(':')[0]}'")
+                self.say("   Then re-run. Do NOT set CB_ADMIN_EGRESS_ALLOW_ANY.")
+            if isinstance(result, dict) and result.get(ERROR_MARKER) is True:
+                # Creating the replication now would fail with "unknown remote
+                # cluster", which is TRUE and is a consequence, not a finding.
+                # A second red line about a cascade buries the one that matters.
+                self.say("\n   skipping the replication: its remote cluster "
+                         "reference does not exist.")
+                return
+
+        # The replication id is derived by the server, not chosen here, so the
+        # already-present check compares the PAIR rather than a name.
+        target = self.args.xdcr_target_bucket
+        existing = _rows(await self.call(session, "admin_xdcr_replications_list", {}))
+        present = any(
+            isinstance(r, dict)
+            and str(r.get("source")) == self.args.bucket
+            and str(r.get("target", "")).endswith(target)
+            for r in existing
+        )
+        if present:
+            self.say(f"   replication {self.args.bucket} -> {reference}/{target} "
+                     "is already present")
+            self.present.append(f"XDCR replication to {target}")
+            return
+
+        await self.create(
+            session, "admin_xdcr_replication_create",
+            {"fromBucket": self.args.bucket,
+             "toCluster": reference,
+             "toBucket": target},
+            f"XDCR replication {self.args.bucket} -> {reference}/{target}",
+        )
+
 
 async def main_async(args) -> int:
     try:
@@ -566,6 +679,25 @@ def main() -> int:
     parser.add_argument("--i-know-what-im-doing", dest="override",
                         action="store_true",
                         help="permit a cluster holding non-sample buckets")
+    # XDCR NEEDS A SECOND CLUSTER, and the second cluster's password is never
+    # an argument. A password on a PowerShell command line is written to
+    # ConsoleHost_history.txt in the clear and stays there; the env var is read
+    # once and leaves no file behind. The remote HOST is safe on the command
+    # line and is not secret.
+    parser.add_argument(
+        "--xdcr-remote-host", default="",
+        help=("host:port of a SECOND Couchbase cluster, as THIS cluster's nodes "
+              "resolve it (e.g. cb-mcptest-n1:8091). Enables the XDCR fixture. "
+              "The password comes from CB_XDCR_REMOTE_PASSWORD, or CB_PASSWORD if "
+              "that is unset -- never from a flag."),
+    )
+    parser.add_argument("--xdcr-remote-user", default="Administrator")
+    parser.add_argument(
+        "--xdcr-target-bucket", default=f"{PREFIX}-xdcr-target",
+        help=("bucket on the REMOTE cluster that receives the replication. It "
+              "must already exist there and it WILL be written to, so name a "
+              "throwaway."),
+    )
     parser.add_argument("--timeout", type=float, default=120.0)
     return asyncio.run(main_async(parser.parse_args()))
 

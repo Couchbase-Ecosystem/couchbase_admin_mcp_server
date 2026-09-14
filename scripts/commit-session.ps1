@@ -54,10 +54,20 @@ $groups = @(
         # the same defect as the Search and Eventing prefixes -- a handler
         # pointed at a REST path the server does not serve, answering 404 on
         # every cluster, for as long as the tool has existed.
+        # xdcr.py joins the same group for the same reason as encryption.py:
+        # admin_xdcr_replications_list read /settings/replications/ -- the
+        # global tuning document -- and so never listed a replication in its
+        # life while answering 200 every time. A handler pointed at a path that
+        # cannot serve it, exactly like the Search prefixes and KMIP.
+        #
+        # test_handler_contract.py comes too: its _body() assumed every handler
+        # returns a JSON object, which is why fixing this tool broke it.
         Paths = @('handlers/search_admin.py', 'handlers/eventing.py',
                   'handlers/backup.py', 'handlers/encryption.py',
+                  'handlers/xdcr.py',
                   'tests/test_service_proxy_paths.py',
-                  'tests/test_backup_paths.py')
+                  'tests/test_backup_paths.py',
+                  'tests/test_handler_contract.py')
         Message = @'
 fix: service REST paths that 404 against every cluster
 
@@ -157,9 +167,14 @@ tests that build a symlink as their fixture.
     },
     @{
         Name  = 'One container, one control plane'
+        # .gitattributes belongs with the other repo plumbing. It pins *.ps1 to
+        # CRLF so PowerShell files stop showing as modified whenever git touches
+        # them -- noise this very script has to see through -- and pins .env* to
+        # LF, because a CRLF there ends up INSIDE the value and a correct
+        # CB_PASSWORD then fails authentication.
         Paths = @('deployment.py', 'server.py', 'deploy',
                   'tests/test_one_container_one_surface.py', '.gitignore',
-                  'pyproject.toml', 'uv.lock',
+                  '.gitattributes', 'pyproject.toml', 'uv.lock',
                   'Dockerfile', '.dockerignore')
         Message = @'
 feat: a deployment declares its control plane and must get it

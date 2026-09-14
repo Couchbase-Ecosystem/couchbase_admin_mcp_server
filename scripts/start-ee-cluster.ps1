@@ -127,6 +127,20 @@ param(
     # and a named volume plus scripts/fetch-ee-backup.ps1 is the way round it.
     [string] $BackupArchiveHost = '',
 
+    # A CLUSTER NOTHING ON THE HOST EVER DIALS.
+    #
+    # An external alternate address exists so a client on the HOST can reach
+    # remapped ports. A second cluster that serves only as an XDCR target is
+    # reached by CONTAINER NAME on the docker network, by the first cluster --
+    # the host's SDK never connects to it. Setting an alternate address for it
+    # would buy nothing and cost the Backup service, which dies when one is
+    # present (see -PortOffset).
+    #
+    # So: publish an offset port so THIS SCRIPT can initialise the node from the
+    # host, and skip the alternate address and the node rename, both of which
+    # exist only to disambiguate a map that will not be written.
+    [switch] $SkipAlternateAddress,
+
     [switch] $LoadSample,
     [switch] $WriteEnvFile,
     [int] $ReadyTimeoutSeconds = 180
@@ -257,7 +271,7 @@ while ((Get-Date) -lt $deadline) {
 if (-not $ready) { Die "ns_server did not answer on $MgmtHost within $ReadyTimeoutSeconds s. docker logs $Name" }
 Ok "ns_server answers on $MgmtHost"
 
-if ($PortOffset -ne 0) {
+if ($PortOffset -ne 0 -and -not $SkipAlternateAddress) {
 Step "name the node after its container"
 # WHY THIS MUST HAPPEN BEFORE ANYTHING ELSE
 #
@@ -320,9 +334,20 @@ try {
 
 } else {
     Step "node name"
-    Say "   left as 127.0.0.1 - ports are published 1:1, so no alternate"
-    Say "   address is needed and cbauth, the host and in-container services"
-    Say "   all agree on one identity. This is what lets Backup run."
+    # TWO REASONS TO SKIP THE RENAME, and they are not the same reason.
+    # Printing the 1:1 explanation for a cluster whose ports are offset was a
+    # false statement in the transcript -- small, but this is the project that
+    # keeps finding bugs by reading its own output.
+    if ($SkipAlternateAddress) {
+        Say "   left as 127.0.0.1 - no alternate address will be written, so"
+        Say "   there is no second map for the node's own name to be"
+        Say "   distinguished from. Host ports are offset by $PortOffset, which"
+        Say "   only this script uses."
+    } else {
+        Say "   left as 127.0.0.1 - ports are published 1:1, so no alternate"
+        Say "   address is needed and cbauth, the host and in-container services"
+        Say "   all agree on one identity. This is what lets Backup run."
+    }
 }
 
 Step "cluster-init"
@@ -497,7 +522,7 @@ if ($LASTEXITCODE -ne 0) {
     Say "         Pass -BackupArchiveHost <dir> to keep backups on a drive."
 }
 
-if ($PortOffset -ne 0) {
+if ($PortOffset -ne 0 -and -not $SkipAlternateAddress) {
 Step "external alternate address"
 # WHY THIS READS THE SERVER RATHER THAN NAMING PORTS ITSELF
 # ---------------------------------------------------------
@@ -676,10 +701,16 @@ try {
 }
 } else {
     Step "external alternate address"
+    if ($SkipAlternateAddress) {
+        Say "   NOT SET (-SkipAlternateAddress). Nothing on the host dials this"
+        Say "   cluster; it is reached by container name on '$Network'. An"
+        Say "   alternate address would break its Backup service for no gain."
+    } else {
     Say "   NOT SET, deliberately. Ports are 1:1, so 127.0.0.1:<port> already"
     Say "   reaches this node, and an alternate address here would break the"
     Say "   Backup service - it reads the alternate map, dials the address it"
     Say "   finds there, and cbauth does not recognise that hostport."
+    }
 }
 
 if ($LoadSample) {

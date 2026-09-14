@@ -460,6 +460,17 @@ def test_the_real_spec_has_no_unfillable_placeholders():
         "replication_id",
         # From the index sweep, registered when the query-index operations shipped.
         "index_name",
+        # From the sampleBuckets list, registered when capella_sample_bucket_get and
+        # _delete shipped on 2026-09-14. That list is itself one of the operations
+        # being verified, which is the documented pattern in this script: a discovery
+        # call doubles as a probe of the list path, because "none exist" and "we asked
+        # the wrong URL" are indistinguishable from an empty ids dict.
+        "sample_bucket_id",
+        # From the per-bucket backup/cycles list. Registered ahead of the operation
+        # that needs it: capella_bucket_backup_cycle_get is still PARKED, because the
+        # discovery looked for `cycleId` and the rows carry `cycleID`. Fixed the same
+        # day; the guard covers the path either way.
+        "cycle_id",
         # Registered when the alert-integration trio and the audit-log export getter
         # shipped under SHIPPED_UNVERIFIED on 2026-09-01. Discovery already looks for
         # both; the objects simply do not exist in the test organization.

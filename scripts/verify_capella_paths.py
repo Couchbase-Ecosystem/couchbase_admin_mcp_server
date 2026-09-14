@@ -1277,7 +1277,13 @@ def discover(token: str, args) -> dict:
         elif status >= 400:
             print(f"  backup cycle: HTTP {status} — {cbody[:90]}; cycle_id SKIPPED")
         else:
-            found = _first_id(cbody, "id", "cycleId")
+            # cycleID, NOT cycleId. MEASURED 2026-09-14: this looked for "cycleId",
+            # found nothing, and printed "this bucket has no cycles" in the same
+            # run where capella_bucket_backup_cycles_list returned rows keyed
+            # createdAt and cycleID. A discovery step that reports absence when
+            # it means "I looked under the wrong name" is worse than one that
+            # errors, because it reads as a fact about the cluster.
+            found = _first_id(cbody, "cycleID", "cycleId", "id")
             if found:
                 ids["cycle_id"] = found
                 print(f"  backup cycle: {found}")

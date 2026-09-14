@@ -342,16 +342,6 @@ SHIPPED_UNVERIFIED: dict[str, str] = {
     # Its two siblings were promoted to LIVE_VERIFIED the same day, on a 200 and a
     # 400 measured against a live App Service. This one stays because the cheap
     # proof does not exist for it -- see the entry.
-    "capella_app_endpoint_import_filter_delete": (
-        "2026-09-14. PATH AND METHOD from openapi.gen.go:24036. Unverified, and "
-        "the HARDEST of the three to verify honestly: a DELETE that succeeds "
-        "removes the filter, which WIDENS the endpoint so every document in the "
-        "collection becomes eligible for import, and re-adding the filter does "
-        "not undo it -- documents already imported stay until a resync. So the "
-        "cheap proof used elsewhere, perform it and then put it back, does not "
-        "apply here. Promote it only against a collection whose filter can be "
-        "lost, or leave it here and say so."
-    ),
     "capella_cluster_audit_log_export_get": (
         "RETRACTION AND RE-MEASUREMENT, 2026-09-13. The note here said an export job "
         "'WAS created successfully and did not persist to the list'. The second half "
@@ -398,6 +388,34 @@ LIVE_VERIFIED: dict[str, str] = {
     # 200 WITH AN EMPTY BODY, 2026-09-14, exactly as its twin above -- the
     # prediction in this op's description was made before the call and held.
     "capella_app_endpoint_import_filter_get": "200",
+    # 405 from the OPTIONS probe, 2026-09-14. THIS IS THE PROOF I SAID DID
+    # NOT EXIST. The op was parked in SHIPPED_UNVERIFIED on the reasoning that
+    # removing an import filter widens an endpoint irreversibly, so the
+    # perform-then-restore trick could not be used -- which was true, and
+    # missed that this repository's standard write proof does not perform the
+    # operation at all. An OPTIONS probe settles the path without sending a
+    # DELETE. Reach for the existing mechanism before concluding none exists.
+    "capella_app_endpoint_import_filter_delete": "405",
+    # ── App Endpoint completeness, promoted 2026-09-14 out of spec_pending ──
+    "capella_app_endpoint_access_control_function_delete": "405",
+    "capella_app_endpoint_admin_users_list": "200",
+    "capella_app_endpoint_collections_list": "200",
+    # 404 {"code":404,"message":"App Endpoint CORS is not enabled"}, 2026-09-14.
+    #
+    # THE PROBE SCRIPT CALLED THIS PATH WRONG AND IT IS NOT. Its report said
+    # "PATH IS WRONG (1): 404 with no sign the route matched" and listed this
+    # operation under PATHS THAT NEED FIXING. The body is JSON carrying a
+    # Capella code and a message naming CORS specifically -- which is the
+    # discriminator spec_pending.py already documents: a JSON body means the
+    # route matched and the object is absent, while Go's mux default
+    # ("404 page not found", plain text) means no route of that shape exists.
+    #
+    # The same run classified capella_cluster_onoff_schedule_get's 404 as
+    # "route matched; object absent" because code 11040 is in the script's
+    # known-codes list. The list was too narrow, not the path wrong. Fixed in
+    # scripts/verify_capella_paths.py the same day.
+    "capella_app_endpoint_cors_get": "404",
+    "capella_app_endpoint_resync_stop": "405",
     # 405 from the OPTIONS probe, 2026-09-14, scripts/verify_capella_paths.py
     # --only. Route confirmed, nothing sent, nothing changed -- the same
     # evidence every other unperformed write in this register carries.
@@ -2903,6 +2921,26 @@ OPS: tuple[Op, ...] = (
         guarded=True,
     ),
     Op(
+        name="capella_app_endpoint_cors_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/cors",
+        summary=(
+            "Read an App Endpoint's CORS configuration. We can SET this and "
+            "cannot read it back, so a caller cannot check what is configured "
+            "before replacing it -- and capella_app_endpoint_cors_set REPLACES. "
+            "[LIVE+METHOD 404, 2026-09-14: {\"code\":404, \"message\":\"App "
+            "Endpoint CORS is not enabled\"}. A SEMANTIC 404 -- the route "
+            "matched and reported the resource's own precondition, exactly as "
+            "capella_cluster_onoff_schedule_get does with Capella code 11040. "
+            "So a 404 here is NOT evidence the path is wrong; it is evidence "
+            "no CORS is configured on this endpoint, which is the normal state "
+            "until capella_app_endpoint_cors_set is called.]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
         name="capella_app_endpoint_cors_set",
         method="PUT",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/cors",
@@ -2939,6 +2977,68 @@ OPS: tuple[Op, ...] = (
         ),
         group="app_endpoints",
         body=_RESYNC_BODY,
+        guarded=True,
+    ),
+
+    Op(
+        name="capella_app_endpoint_access_control_function_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/accessControlFunction",
+        summary=(
+            "Remove a collection's access control function.\n"
+            "DESTRUCTIVE IN A WAY THAT DOES NOT LOOK DESTRUCTIVE, exactly like "
+            "its import-filter sibling: deleting the function does not delete "
+            "data, it removes the rules that decide which documents a mobile user "
+            "may see and write. Read the current source with "
+            "capella_app_endpoint_get first -- the dedicated getter answers 200 "
+            "with an EMPTY body, so it is not a backup.\n"
+            "THE KEYSPACE IS NOT THE APP ENDPOINT NAME: endpoint.scope.collection. "
+            "Expected 202, not 204. [LIVE 405 -- OPTIONS-probed 2026-09-14; DESTRUCTIVE, so the real method was deliberately not sent]"
+        ),
+        group="app_endpoints",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_app_endpoint_admin_users_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/adminUsers",
+        summary=(
+            "List an App Endpoint's admin users. Distinct from the APP SERVICE "
+            "admin users capella_app_service_admin_users_list returns -- these "
+            "are scoped to one endpoint. [LIVE+METHOD 200, 2026-09-14 -- response carries accessAllEndpoints, audit, clusterId, endpoints, id, name, projectId, tenantId]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_collections_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/collections",
+        summary=(
+            "List the collections an App Endpoint syncs. Today the only way to "
+            "see this is to read the whole endpoint document and walk "
+            "scopes.<scope>.collections. [LIVE+METHOD 200, 2026-09-14 -- response is keyed by SCOPE name ('inventory'), not a flat list of collections]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_resync_stop",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/resync",
+        summary=(
+            "Stop a running resync. We can START one and cannot cancel it.\n"
+            "That asymmetry is worse than it sounds: a resync reprocesses every "
+            "document in the endpoint through the access control function, and on "
+            "a large dataset it is long-running and load-bearing on the cluster. "
+            "An operator who starts one by mistake currently has no way to stop "
+            "it through this server. [LIVE 405 -- OPTIONS-probed 2026-09-14; DESTRUCTIVE, so the real method was deliberately not sent]"
+        ),
+        group="app_endpoints",
+        destructive=True,
         guarded=True,
     ),
     Op(

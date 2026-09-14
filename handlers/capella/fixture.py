@@ -900,6 +900,13 @@ def _export(args: dict) -> list[TextContent]:
         page_size = int(args.get("page_size") or 1000)
         xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
         wanted_keyspaces = {k for k in (args.get("keyspaces") or []) if k}
+        # MATCHED, so an unmatched request can be refused rather than ignored.
+        # Without this a single typo in `keyspaces` produced a SILENT SUCCESS: no
+        # collection matched the filter, the loop wrote nothing, and the manifest
+        # reported a clean export of zero documents. The caller asked for a named
+        # keyspace and got a fixture that does not contain it, with no indication
+        # that anything was wrong.
+        matched_keyspaces: set[str] = set()
         data_dir = root / "data"
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -912,6 +919,8 @@ def _export(args: dict) -> list[TextContent]:
                 for collection in scope.get("collections") or []:
                     keyspace = (f"{bucket['name']}.{scope['name']}."
                                 f"{collection['name']}")
+                    if wanted_keyspaces and keyspace in wanted_keyspaces:
+                        matched_keyspaces.add(keyspace)
                     if wanted_keyspaces and keyspace not in wanted_keyspaces:
                         continue
                     select = ["META().id AS id", "META().expiration AS exp", "d.*"]
@@ -1002,6 +1011,22 @@ def _export(args: dict) -> list[TextContent]:
                         "document_count": written,
                     })
                     document_total += written
+        unmatched = sorted(wanted_keyspaces - matched_keyspaces)
+        if unmatched:
+            return err(
+                f"these keyspaces were requested and do not exist on this "
+                f"cluster: {unmatched}\n"
+                f"Nothing was written. A keyspace filter that matches nothing "
+                f"would otherwise produce a clean-looking export of zero "
+                f"documents -- the caller names a keyspace, gets a fixture "
+                f"without it, and nothing says so.\n"
+                f"Check the spelling against capella_scopes_list, and note the "
+                f"filter takes bucket.scope.collection, not a bare collection "
+                f"name.",
+                tool="capella_fixture_export",
+                requested=sorted(wanted_keyspaces),
+                matched=sorted(matched_keyspaces),
+            )
         documents_ok = True
 
     finished = datetime.now(timezone.utc)
@@ -1029,7 +1054,18 @@ def _export(args: dict) -> list[TextContent]:
         # reading this cannot mistake a shape fixture for a dataset, and that is
         # the single most important field in the manifest.
         "fidelity": {
-            "documents": documents_ok,
+            # NOT `documents_ok`. That flag means "the document phase ran without
+            # failing", which is not the same claim as "this fixture contains
+            # documents" -- and an export of only-empty collections satisfied the
+            # first while a consumer reads the second.
+            #
+            # Measured 2026-09-14: exporting travel-sample.mcptest.meta, an
+            # existing but EMPTY collection, produced documents:0, data_files:0
+            # and fidelity.documents:true, with a note reading "Documents
+            # exported over the Data API". That is the false green this module's
+            # own docstring calls the worst outcome available here, produced by
+            # this module.
+            "documents": documents_ok and document_total > 0,
             "search_definitions": False,
             # Only the xattrs the caller NAMED. META().xattrs is not enumerable,
             # so anything unlisted was dropped and the manifest must not imply
@@ -1039,6 +1075,14 @@ def _export(args: dict) -> list[TextContent]:
             "gsi_definitions": bool(indexes) or not warnings,
             "eventing_functions": True,
             "note": (
+                (
+                    "include_data was requested and every keyspace exported was "
+                    "EMPTY, so this fixture contains no documents. It is a "
+                    "faithful export of an empty dataset, which is a legitimate "
+                    "thing to have and is NOT a dataset: fidelity.documents is "
+                    "false for that reason, not because anything failed."
+                )
+                if documents_ok and document_total == 0 else
                 (
                     "Documents exported over the Data API. Search index "
                     "definitions are still NOT present. CAS is not preserved by "

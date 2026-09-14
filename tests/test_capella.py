@@ -631,6 +631,9 @@ AUTHORITATIVE_APP_SERVICE_PATHS = [
     ("capella_app_service_create", "POST", _BASE),
     ("capella_app_service_get", "GET", f"{_BASE}/{{app_service_id}}"),
     ("capella_app_service_delete", "DELETE", f"{_BASE}/{{app_service_id}}"),
+    # RESIZE ONLY. UpdateAppServiceRequest is {compute, nodes} with no `version`
+    # field, so this PUT cannot upgrade an App Service -- see the op's summary.
+    ("capella_app_service_update", "PUT", f"{_BASE}/{{app_service_id}}"),
     # activationState, with a capital S and no trailing segment. POST resumes, DELETE
     # suspends. Not to be confused with the App ENDPOINT equivalent, which is
     # activationStatus.
@@ -1247,6 +1250,12 @@ def test_the_only_scalar_bodies_are_the_ones_that_need_to_be():
     assert scalar == {
         "capella_eventing_function_code_set",
         "capella_app_endpoint_access_control_function_set",
+        # The import filter is the matched half of the access control function:
+        # same resource, same keyspace segment, same raw application/javascript
+        # body. Added 2026-09-14. This pin is WIDENED deliberately, never
+        # loosened -- an operation that quietly gains a scalar body is the thing
+        # it exists to catch, and three named ops still catch a fourth.
+        "capella_app_endpoint_import_filter_set",
     }, scalar
 
     for name in sorted(scalar):

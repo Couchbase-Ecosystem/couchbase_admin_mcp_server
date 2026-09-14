@@ -434,3 +434,113 @@ def test_a_recorded_index_that_is_deferred_names_its_keyspace_in_the_problem(
           "scope_id": "s", "keyspace_id": "c"}],
     )
     assert any("on b.s.c is deferred" in problem for problem in report["problems"])
+
+
+# ── export fidelity must describe what happened ──────────────────────────────
+
+
+def _stub_export_cluster(monkeypatch, *, collections: list[str],
+                         rows_by_keyspace: dict[str, list[dict]]):
+    """Stand a cluster up in memory: one bucket, one scope, named collections."""
+    from handlers.capella import environment as env
+
+    monkeypatch.setattr(env, "_resolve_context", lambda args: ("o", "p", None))
+    monkeypatch.setattr(fixture, "_data_api_base", lambda ids: ("https://x", ""))
+    monkeypatch.setattr(fixture, "_data_api_credential", lambda: (("u", "p"), ""))
+
+    def _invoke(op_name, args, body=None, composite=""):
+        if op_name == "capella_buckets_list":
+            return {"data": [{"name": "b", "id": "Yg=="}]}
+        if op_name == "capella_scopes_list":
+            return {"scopes": [{"name": "s", "collections": [
+                {"name": c} for c in collections]}]}
+        if op_name == "capella_collections_list":
+            return {"collections": [{"name": c} for c in collections]}
+        return {"data": []}
+
+    monkeypatch.setattr(env, "_invoke", _invoke)
+    monkeypatch.setattr(fixture, "capella_request",
+                        lambda *a, **k: {"definitions": []})
+
+    def _query(base, credential, statement, parameters=None, timeout=None):
+        for keyspace, rows in rows_by_keyspace.items():
+            _b, _s, c = keyspace.rsplit(".", 2)
+            if f"`{c}`" in statement:
+                # One page, then empty, so the key-range loop terminates.
+                return {"results": [] if parameters.get("$last_key") else rows}
+        return {"results": []}
+
+    monkeypatch.setattr(fixture, "_sql_query", _query)
+
+
+def test_an_export_of_only_empty_collections_does_not_claim_document_fidelity(
+        tmp_path, monkeypatch):
+    """MEASURED 2026-09-14 and it was wrong: exporting an existing but EMPTY
+    collection produced documents:0, data_files:0 and fidelity.documents:TRUE,
+    with a note reading 'Documents exported over the Data API'.
+
+    That is the false green this module's own docstring calls the worst outcome
+    available here, produced by this module. 'The document phase ran without
+    failing' is not the same claim as 'this fixture contains documents'.
+    """
+    _stub_export_cluster(monkeypatch, collections=["empty"],
+                         rows_by_keyspace={"b.s.empty": []})
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.empty"],
+    })
+    payload = json.loads("".join(block.text for block in result))
+    assert payload["documents"] == 0
+    assert payload["fidelity"]["documents"] is False
+    assert "EMPTY" in payload["fidelity"]["note"]
+    # And it must not read as a failure either -- an empty collection is a
+    # legitimate thing to export.
+    assert "NOT a dataset" in payload["fidelity"]["note"]
+
+
+def test_an_export_that_carries_documents_still_claims_fidelity(
+        tmp_path, monkeypatch):
+    """The guard above must not be satisfiable by always answering false."""
+    _stub_export_cluster(
+        monkeypatch, collections=["full"],
+        rows_by_keyspace={"b.s.full": [{"id": "k1", "x": 1}]})
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.full"],
+    })
+    payload = json.loads("".join(block.text for block in result))
+    assert payload["documents"] == 1
+    assert payload["fidelity"]["documents"] is True
+
+
+def test_a_keyspace_filter_that_matches_nothing_is_refused(tmp_path, monkeypatch):
+    """A single typo in `keyspaces` previously produced a SILENT SUCCESS: no
+    collection matched, nothing was written, and the manifest reported a clean
+    export of zero documents. The caller named a keyspace and got a fixture
+    without it, with nothing saying so."""
+    _stub_export_cluster(monkeypatch, collections=["real"],
+                         rows_by_keyspace={"b.s.real": [{"id": "k"}]})
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.typo"],
+    })
+    body = "".join(block.text for block in result)
+    assert "do not exist on this cluster" in body
+    assert "b.s.typo" in body
+    # Nothing written: a refusal that leaves a manifest behind is not a refusal.
+    assert not (tmp_path / "fx" / "manifest.json").exists()
+
+
+def test_a_keyspace_filter_that_matches_is_not_refused(tmp_path, monkeypatch):
+    _stub_export_cluster(monkeypatch, collections=["real"],
+                         rows_by_keyspace={"b.s.real": [{"id": "k"}]})
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.real"],
+    })
+    payload = json.loads("".join(block.text for block in result))
+    assert payload["documents"] == 1

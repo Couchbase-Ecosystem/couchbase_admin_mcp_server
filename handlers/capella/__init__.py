@@ -469,7 +469,8 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
         )
     else:
         result = capella_request(
-            op.method, path, params=_query_params(op, args) or None, body=body
+            op.method, path, params=_query_params(op, args) or None, body=body,
+            content_type=op.body_content_type,
         )
 
     if op.sensitive_response:

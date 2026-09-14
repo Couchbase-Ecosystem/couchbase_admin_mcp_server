@@ -124,6 +124,42 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
     # the cluster that is WRITTEN — continuously, not once. The ownership
     # guardrail had the same blind spot here as on restore and it is now handled
     # generically; see _WRITES_ELSEWHERE in handlers/capella/__init__.py.
+    "capella_app_endpoint_update": (
+        "2026-09-14, scripts/probe_access_control_function.py --perform, ROUTE 3. "
+        "PERFORMED: the endpoint document from capella_app_endpoint_get, with "
+        "adminURL/metricsURL/publicURL/state/requireResync/isRequireResync/audit "
+        "removed and scopes.inventory.collections.airline.accessControlFunction "
+        "replaced, PUT to .../appEndpoints/test -> 204.\n"
+        "This operation did not exist until that measurement. It was found while "
+        "failing to make the DEDICATED access control function path work: 43 "
+        "combinations against .../accessControlFunction all drew one message, and "
+        "the endpoint document was tried as a last resort because the Terraform "
+        "provider's app_endpoint resource manages the function as an attribute "
+        "rather than through a resource of its own.\n"
+        "Both routes now work, for different reasons and with different encodings "
+        "-- the document carries the source as a JSON string, the dedicated path "
+        "takes it raw as application/javascript. The dedicated path's failure was "
+        "never about the body shape; see handlers/capella/client.py."
+    ),
+    "capella_cluster_onoff_schedule_set": (
+        "2026-09-14, scripts/probe_onoff_schedule.py --perform. PERFORMED: "
+        "seven 'custom' days, from {hour 0, minute 0} to {hour 23, minute 30}, "
+        "timezone America/New_York, ACCEPTED with 204. The schedule was then "
+        "DELETED (204) because the cluster had none before the run, so the "
+        "measurement cost the cluster nothing.\n"
+        "Six other bodies were refused in the same transcript, and each refusal "
+        "is one clause of the schema: a non-custom day may not carry a boundary; "
+        "a custom day must; minute is 0 or 30 and nothing else; hour is 0-23, so "
+        "24:00 is not midnight; from/to are objects, not 'HH:MM' strings; and "
+        "PUT against a cluster with no schedule answers 404, which makes POST "
+        "the create and PUT the update.\n"
+        "THE 500 IS REAL AND IT IS NARROW. Seven whole-day 'on' days -- a body "
+        "that breaks none of those clauses -- answers 500 code 10000, measured "
+        "four times across three runs. So a caller cannot express 'never turn "
+        "this off' as a schedule; the way to say that is to have no schedule. "
+        "This registry recommended the 500-ing body as 'the safe shape' until "
+        "this run, which is why the advice is now retracted in the summary."
+    ),
     "capella_replication_create": (
         "2026-09-13, scripts/capella_xdcr_setup.py --perform. PERFORMED: the "
         "body {sourceBucket, target:{bucket, cluster, type}, direction:'oneWay', "
@@ -287,6 +323,12 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_app_endpoint_access_control_function_set": "405",
     "capella_app_endpoint_cors_set": "405",
     "capella_app_endpoint_create": "405",
+    # 400 "The Update App Endpoint payload name does not match the App Endpoint
+    # name in the URL", from an empty body sent to the real route on 2026-09-14.
+    # Route and method proven, nothing written -- which is exactly what this
+    # register is for. The 204 from the real write is in
+    # LIVE_VERIFIED_OUT_OF_BAND, because a 2xx on a write may not be recorded here.
+    "capella_app_endpoint_update": "400",
     "capella_app_endpoint_delete": "405",
     "capella_app_endpoint_get": "200",
     "capella_app_endpoint_offline": "405",
@@ -331,7 +373,22 @@ LIVE_VERIFIED: dict[str, str] = {
     "capella_cluster_get": "200",
     "capella_cluster_onoff_schedule_delete": "405",
     "capella_cluster_onoff_schedule_get": "404",
+    # 405 was the OPTIONS-era path proof. A real POST was PERFORMED on
+    # 2026-09-14 and answered 204; the schedule it created was then deleted, so
+    # the cluster is as it was found. A 2xx on a write is forbidden in this
+    # register -- see test_no_write_is_recorded_with_a_success_status -- so the
+    # 204 lives in LIVE_VERIFIED_OUT_OF_BAND and this stays the probe's answer.
     "capella_cluster_onoff_schedule_set": "405",
+    # 422 "The timezone 'Mars/Olympus' is not a valid IANA timezone", from a real
+    # PUT with a deliberately invalid body at a cluster that HAS a schedule,
+    # 2026-09-14. Route and method proven, nothing written.
+    #
+    # It was briefly in SHIPPED_UNVERIFIED on 404 evidence -- a PUT at a cluster
+    # with no schedule. test_write_operations_are_path_verified_only refused that,
+    # correctly: 404 cannot tell "route exists, object does not" from "no such
+    # route". The 404 is still the useful finding (PUT updates, cannot create);
+    # it is just not proof of a route.
+    "capella_cluster_onoff_schedule_update": "422",
     "capella_cluster_stats_get": "200",
     "capella_cluster_turn_off": "405",
     "capella_cluster_turn_on": "405",
@@ -418,6 +475,14 @@ class Op:
     #: comes to modify the thing it is verifying. This field separates them: the schema
     #: keeps saying config is required, and the probe stops assuming that protects it.
     empty_body_accepted: bool = False
+    #: Content-Type for the request body. Only two values occur.
+    #:
+    #: "application/javascript" means the body is the SOURCE TEXT ITSELF, sent raw.
+    #: The App Endpoint access control function and import filter are both like
+    #: this, and both were shipped as JSON operations that could never work. See
+    #: the note in handlers/capella/client.py for the 43 measurements that finally
+    #: settled it and the provider source that explains them.
+    body_content_type: str = "application/json"
 
     #: A COMPLETE JSON schema for a request body that is not an object.
     #:
@@ -580,6 +645,24 @@ _CLUSTER_CREATE_BODY: dict[str, Any] = {
         "description": "{'plan': 'basic'|'developer pro'|'enterprise', 'timezone': 'ET'}. 'basic' is the cheapest and is appropriate for ephemeral test clusters.",
         "properties": {"plan": {"type": "string"}, "timezone": {"type": "string"}},
     },
+    # FROM THE PROVIDER, 2026-09-14. Both were absent and both are load-bearing:
+    # configurationType is how a caller asks for a cheap single-node cluster
+    # instead of a three-node one, and zones is how single-AZ placement is
+    # requested. openapi.gen.go CreateClusterRequest carries them alongside
+    # cmekId and enablePrivateDNSResolution.
+    "configurationType": {
+        "type": "string",
+        "enum": ["singleNode", "multiNode"],
+        "description": (
+            "singleNode is the cheap, non-HA shape -- the right default for an "
+            "ephemeral test environment. Immutable after creation."
+        ),
+    },
+    "zones": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Availability zones to place nodes in. Single-AZ needs one.",
+    },
 }
 
 _BUCKET_CREATE_BODY: dict[str, Any] = {
@@ -610,6 +693,18 @@ _BUCKET_CREATE_BODY: dict[str, Any] = {
         ),
     },
     "timeToLiveInSeconds": {"type": "integer"},
+    # ABSENT UNTIL 2026-09-14. CreateBucketRequest also carries priority,
+    # vbuckets and flushEnabled; this is the one callers actually set, and
+    # getting it wrong on a magma bucket is a performance decision made by
+    # default rather than on purpose.
+    "evictionPolicy": {
+        "type": "string",
+        "enum": ["fullEviction", "valueOnly"],
+        "description": (
+            "fullEviction keeps only metadata in memory; valueOnly keeps values "
+            "too. couchstore buckets default to valueOnly, magma to fullEviction."
+        ),
+    },
 }
 
 _DB_CREDENTIAL_BODY: dict[str, Any] = {
@@ -792,6 +887,164 @@ _REPLICATION_CREATE_BODY: dict[str, Any] = {
 #: An opaque object is the body={} defect wearing a different hat. The guard added on
 #: 2026-09-01 checks that a body EXISTS, not that it says anything — which is why this
 #: got through it.
+#: Request body for capella_app_endpoint_resync_start.
+#:
+#: THE OPERATION SHIPPED WITH body={} AND IT TAKES ONE. The provider builds
+#: PostAppEndpointResyncJSONRequestBody{Scopes: &converted}
+#: (internal/resources/app_endpoint_resync.go:263) against
+#: `Scopes *map[string]ResyncScopes` where ResyncScopes = []string
+#: (openapi.gen.go:5589). Omitting it resyncs EVERYTHING, which on a large
+#: endpoint is the difference between minutes and hours -- and a caller reading
+#: our schema had no way to know a narrower option existed.
+_RESYNC_BODY: dict[str, Any] = {
+    "scopes": {
+        "type": "object",
+        "description": (
+            "Which collections to resync, as {\"<scope>\": [\"<collection>\", ...]}. "
+            "OMIT IT TO RESYNC THE WHOLE ENDPOINT -- that is the expensive "
+            "default, not a safe one. A resync re-runs the access control "
+            "function over every document it covers."
+        ),
+    },
+}
+
+
+#: Request body for capella_app_endpoint_update.
+#:
+#: Derived from the endpoint document a GET returns, minus the fields the server
+#: adds and refuses back. Measured 2026-09-14: a round-trip of the document with
+#: those fields stripped answered 204.
+_APP_ENDPOINT_UPDATE_BODY: dict[str, Any] = {
+    "name": {
+        "type": "string",
+        "description": (
+            "MUST equal the app_endpoint_name in the path, exactly. A mismatch "
+            "is refused with 400."
+        ),
+    },
+    "bucket": {"type": "string", "description": "Backing Capella bucket."},
+    "scopes": {
+        "type": "object",
+        "description": (
+            "scopes.<scope>.collections.<collection>.{accessControlFunction, "
+            "importFilter} -- the JavaScript for each collection, as STRINGS in "
+            "this JSON document. Note the asymmetry: here the source is a normal "
+            "JSON string, while the dedicated "
+            "capella_app_endpoint_access_control_function_set sends it raw as "
+            "application/javascript. Same source, two encodings, depending on "
+            "which route you take."
+        ),
+    },
+    "cors": {
+        "type": "object",
+        "description": (
+            "CORS configuration, same shape capella_app_endpoint_cors_set takes: "
+            "origin, loginOrigin, headers, maxAge, disabled. Free-form here "
+            "because this operation REPLACES the whole document -- send back what "
+            "capella_app_endpoint_get returned unless you mean to change it."
+        ),
+    },
+    "oidc": {
+        "type": "array",
+        "description": "OpenID Connect providers, replaced wholesale.",
+        "items": {
+            "type": "object",
+            "description": (
+                "One provider: issuer and clientId are required, plus optional "
+                "discoveryUrl, register, rolesClaim, userPrefix, usernameClaim."
+            ),
+        },
+    },
+    "deltaSyncEnabled": {"type": "boolean"},
+    "disablePublicAllDocs": {"type": "boolean"},
+    "userXattrKey": {
+        "type": "string",
+        "description": (
+            "User xattr key readable from the access control function. Empty "
+            "disables the feature."
+        ),
+    },
+}
+
+
+#: One entry in an on/off schedule's `days` list.
+#:
+#: MEASURED 2026-09-14 against a live cluster, one 422 at a time. Every rule below
+#: is the server's own sentence, not a reading of a docs page:
+#:
+#:   state 'on'/'off' with a boundary
+#:     422 "Monday in the schedule is a non-custom day but it contains an
+#:          'on' time boundary."
+#:   state 'custom' without one
+#:     422 "Monday in the schedule is a custom day but it does not have a
+#:          'from' time boundary."
+#:   minute 59
+#:     422 "...invalid minute value of '59'. The valid minute values are 0 and 30."
+#:   hour 24
+#:     422 "...invalid hour value of '24'. The valid hour values are from 0 to 23
+#:          inclusive."
+#:   from/to as "HH:MM" strings
+#:     400 'body contains incorrect JSON type for field "days.from"'
+#:
+#: THE WHOLE-DAY 'on' SHAPE ANSWERS 500. Seven days of {"state": "on"} with no
+#: boundaries breaks none of the rules above and is refused with code 10000, "An
+#: internal server error occurred." That was measured four times across three
+#: runs. It is recorded here because the previous version of this record
+#: recommended exactly that body as "the safe shape", which was advice that could
+#: not work.
+#:
+#: The widest window the rules permit is 00:00 to 23:30 on a custom day. It was
+#: ACCEPTED (204). So a schedule cannot express "up continuously" -- 30 minutes a
+#: day is the floor -- and any caller who wants a cluster never turned off should
+#: have no schedule at all rather than a permissive one.
+_ONOFF_DAY: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "day": {
+            "type": "string",
+            "enum": ["monday", "tuesday", "wednesday", "thursday",
+                     "friday", "saturday", "sunday"],
+        },
+        "state": {
+            "type": "string",
+            "enum": ["on", "off", "custom"],
+            "description": (
+                "'on' and 'off' are whole-day states and must NOT carry from/to. "
+                "'custom' is the only state that may, and it MUST: a custom day "
+                "without a 'from' is refused. Note that seven whole-day 'on' days "
+                "-- valid by every stated rule -- answers 500."
+            ),
+        },
+        "from": {
+            "type": "object",
+            "description": (
+                "Start of the on-window, for a 'custom' day only. An OBJECT, not "
+                "a 'HH:MM' string."
+            ),
+            "properties": {
+                "hour": {"type": "integer", "minimum": 0, "maximum": 23},
+                "minute": {
+                    "type": "integer",
+                    "enum": [0, 30],
+                    "description": "Only 0 and 30 are accepted. Not free-form.",
+                },
+            },
+            "required": ["hour", "minute"],
+        },
+        "to": {
+            "type": "object",
+            "description": "End of the on-window. Same constraints as `from`.",
+            "properties": {
+                "hour": {"type": "integer", "minimum": 0, "maximum": 23},
+                "minute": {"type": "integer", "enum": [0, 30]},
+            },
+            "required": ["hour", "minute"],
+        },
+    },
+    "required": ["day", "state"],
+}
+
+
 _ALERT_WEBHOOK: dict[str, Any] = {
     "type": "object",
     "description": (
@@ -1028,6 +1281,31 @@ _EVENTING_CODE_BODY: dict[str, Any] = {
     ),
 }
 
+#: Body schema for capella_app_endpoint_access_control_function_set.
+#:
+#: SENT RAW, AS application/javascript -- see Op.body_content_type. This schema
+#: describes what the CALLER passes (a string); the client does not JSON-encode it.
+#:
+#: History, because two wrong answers are recorded in this file's git log and both
+#: looked reasonable at the time. The op shipped with body={"function": "<src>"} and
+#: answered 400 "JavaScript source does not evaluate to a function" for every input,
+#: including the function Capella itself had stored. That was read first as "the
+#: source must be parenthesised" (wrong) and then as "the body is a bare JSON string"
+#: (also wrong -- it answers "value is not an object"). 43 combinations later, a
+#: discriminator settled what the message actually means: text that is not JavaScript
+#: draws the same sentence, so the validator never sees a source and the message is
+#: boilerplate. The Terraform provider's client names the cause outright.
+_ACCESS_CONTROL_FUNCTION_BODY: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "The complete JavaScript source of the access control / validation (sync) "
+        "function, as a bare JSON string -- NOT wrapped in an object. Replaces the "
+        "existing function outright. Read the current source from "
+        "capella_app_endpoint_get at scopes.<scope>.collections.<collection>."
+        "accessControlFunction -- the dedicated getter answers 200 with an empty body."
+    ),
+}
+
 
 OPS: tuple[Op, ...] = (
     # ── Organizations ────────────────────────────────────────────────────────
@@ -1260,17 +1538,75 @@ OPS: tuple[Op, ...] = (
             "'America/New_York', 'Europe/London', 'UTC'.\n"
             "ALL SEVEN DAYS ARE REQUIRED. An empty list answers 422 code 11042, "
             "'The schedule contains 0 days. The On/Off schedule requires 7 days "
-            "for the schedule, one for each day of the week.' A day with state "
-            "'on' and no from/to window is on all day, so seven of those is a "
-            "schedule that exists and can never turn the cluster off — the safe "
-            "shape when you want the resource present without risking a "
-            "hibernation. [LIVE+METHOD 422]"
+            "for the schedule, one for each day of the week.'\n"
+            "RETRACTED 2026-09-14: this record used to say that seven whole-day "
+            "'on' days were 'the safe shape when you want the resource present "
+            "without risking a hibernation'. That body answers 500 code 10000 "
+            "and has never once succeeded. The advice was inferred from the "
+            "rules rather than measured against the server.\n"
+            "WHAT ACTUALLY WORKS, measured 204: seven 'custom' days with "
+            "from {hour 0, minute 0} to {hour 23, minute 30}. See _ONOFF_DAY for "
+            "the full constraint set and the 422 that established each one. "
+            "There is NO schedule that keeps a cluster up continuously — 30 "
+            "minutes a day off is the floor — so 'never turn it off' means "
+            "having no schedule, not a permissive one.\n"
+            "POST CREATES, PUT UPDATES. A PUT against a cluster with no schedule "
+            "answers 404 'Failed to get On/Off schedule for the database', which "
+            "reads like a missing route and is not one. [LIVE+METHOD 204]"
         ),
         group="clusters",
         body={
-            "timezone": {"type": "string"},
-            "days": {"type": "array", "items": {"type": "object"}},
+            "timezone": {
+                "type": "string",
+                "description": (
+                    "IANA name. 'ET' is refused with 422 code 11041; use "
+                    "'America/New_York', 'Europe/London', 'UTC'."
+                ),
+            },
+            "days": {
+                "type": "array",
+                "description": "Exactly seven entries, one per day of the week.",
+                "items": _ONOFF_DAY,
+                "minItems": 7,
+                "maxItems": 7,
+            },
         },
+        body_required=("timezone", "days"),
+        guarded=True,
+    ),
+    Op(
+        name="capella_cluster_onoff_schedule_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/onOffSchedule",
+        summary=(
+            "Update the EXISTING on/off schedule. Same body as "
+            "capella_cluster_onoff_schedule_set — see _ONOFF_DAY for the "
+            "constraints, all of them measured.\n"
+            "POST CREATES, PUT UPDATES, AND THEY ARE NOT INTERCHANGEABLE. POST "
+            "against a cluster that already has a schedule answers 422 code "
+            "11050, 'Cannot create a new on/off schedule as a schedule already "
+            "exists for the cluster. If you want to update the existing "
+            "schedule, use the Update on/off schedule API.' PUT against a "
+            "cluster with NO schedule answers 404 'Failed to get On/Off schedule "
+            "for the database', which reads like a missing route and is not one. "
+            "Read capella_cluster_onoff_schedule_get first: 404 code 11040 means "
+            "use POST, 200 means use this. [LIVE+METHOD 404]"
+        ),
+        group="clusters",
+        body={
+            "timezone": {
+                "type": "string",
+                "description": "IANA name. 'ET' is refused with 422 code 11041.",
+            },
+            "days": {
+                "type": "array",
+                "description": "Exactly seven entries, one per day of the week.",
+                "items": _ONOFF_DAY,
+                "minItems": 7,
+                "maxItems": 7,
+            },
+        },
+        body_required=("timezone", "days"),
         guarded=True,
     ),
     Op(
@@ -1816,6 +2152,34 @@ OPS: tuple[Op, ...] = (
         guarded=True,
     ),
     Op(
+        name="capella_app_endpoint_update",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}",
+        summary=(
+            "Replace an App Endpoint's configuration document. This is the ONLY "
+            "way to reach most of an endpoint's settings: scopes and their "
+            "per-collection accessControlFunction and importFilter, cors, oidc, "
+            "deltaSyncEnabled, userXattrKey and disablePublicAllDocs. Eleven App "
+            "Endpoint operations shipped before this one and not one of them "
+            "wrote the document, which made all of those settings unreachable.\n"
+            "A REPLACE, NOT A MERGE. Read the current document with "
+            "capella_app_endpoint_get, change what you need, send the whole "
+            "thing back. Omitting a field drops it.\n"
+            "body.name MUST EQUAL the name in the path, exactly, casing "
+            "included. A mismatch answers 400 'The Update App Endpoint payload "
+            "name does not match the App Endpoint name in the URL' — which is "
+            "also what an empty body earns, since a missing name cannot match.\n"
+            "DROP THE READ-ONLY FIELDS a GET adds before sending: adminURL, "
+            "metricsURL, publicURL, state, requireResync, isRequireResync, "
+            "audit. [LIVE+METHOD 400; a real PUT answered 204 — see "
+            "LIVE_VERIFIED_OUT_OF_BAND]"
+        ),
+        group="app_endpoints",
+        body=_APP_ENDPOINT_UPDATE_BODY,
+        body_required=("name", "bucket"),
+        guarded=True,
+    ),
+    Op(
         name="capella_app_endpoint_delete",
         method="DELETE",
         path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}",
@@ -1855,11 +2219,21 @@ OPS: tuple[Op, ...] = (
             "Upsert the access control and validation function — the JavaScript "
             "that assigns documents to channels and authorizes writes. For a test "
             "environment this is the main lever for reproducing the production "
-            "sync topology. Body is the function source as a string, and it must "
-            "EVALUATE TO A FUNCTION: a top-level `function (doc) {…}` is a "
-            "declaration, evaluates to undefined, and is refused with 400 "
-            "'JavaScript source does not evaluate to a function'. Wrap it in "
-            "parentheses — `(function (doc, oldDoc, meta) {…})`.\n"
+            "sync topology.\n"
+            "THE BODY IS RAW JAVASCRIPT, SENT AS application/javascript. It is "
+            "not a JSON object, and it is not a JSON string either — the source "
+            "text goes on the wire unquoted and unescaped. Sending it as JSON "
+            "answers 400 'invalid javascript syntax: JavaScript source does not "
+            "evaluate to a function', which reads as a verdict on the JavaScript "
+            "and is nothing of the kind: text that is not JavaScript at all draws "
+            "the identical message, so nothing is being compiled. That error cost "
+            "43 measured attempts on 2026-09-14 — five key vocabularies, four "
+            "source forms, three routes — and was settled by the Terraform "
+            "provider's own client, which special-cases this exact content type "
+            "with the comment 'json.Marshal will add escape characters to the "
+            "string payload which makes it invalid javascript'. Two earlier "
+            "claims in this record are RETRACTED: that the source needed "
+            "parentheses, and that the body was a bare JSON string.\n"
             "THE KEYSPACE IS NOT THE APP ENDPOINT NAME. It is "
             "`<endpoint>.<scope>.<collection>` — the function is per COLLECTION. "
             "Sending the endpoint name alone answers 404 'App Endpoint keyspace "
@@ -1869,12 +2243,8 @@ OPS: tuple[Op, ...] = (
             "accessControlFunction. [LIVE+METHOD 404]"
         ),
         group="app_endpoints",
-        body={
-            "function": {
-                "type": "string",
-                "description": "JavaScript source of the access control / validation function.",
-            }
-        },
+        body_scalar=_ACCESS_CONTROL_FUNCTION_BODY,
+        body_content_type="application/javascript",
         guarded=True,
     ),
     Op(
@@ -1884,7 +2254,14 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Get the current access control and validation function for a COLLECTION. "
             "The path segment is a keyspace (endpoint.scope.collection), not a bare "
-            "App Endpoint name — see app_endpoint_keyspace. [DOC]"
+            "App Endpoint name — see app_endpoint_keyspace.\n"
+            "ANSWERS 200 WITH AN EMPTY BODY on App Service 4.1.1, measured "
+            "2026-09-14 against a collection that demonstrably HAS a function: "
+            "capella_app_endpoint_get returns the source at "
+            "scopes.<scope>.collections.<collection>.accessControlFunction, and "
+            "this getter returns nothing at all. A 200 with an empty body is "
+            "NOT evidence that no function is configured — read the endpoint "
+            "document instead. [LIVE+METHOD 200, EMPTY BODY]"
         ),
         group="app_endpoints",
         read_only=True,
@@ -1906,6 +2283,12 @@ OPS: tuple[Op, ...] = (
             "maxAge": {"type": "integer"},
             "disabled": {"type": "boolean"},
         },
+        # ORIGIN IS REQUIRED AND WE DID NOT SAY SO. It is the only non-pointer,
+        # non-omitempty field in the provider's CORS struct (openapi.gen.go:1630,
+        # `Origin []string \`json:"origin"\``); every sibling is *T + omitempty.
+        # A caller following this schema could omit it and be refused for a
+        # reason the schema had the information to prevent.
+        body_required=("origin",),
         guarded=True,
     ),
     Op(
@@ -1920,6 +2303,7 @@ OPS: tuple[Op, ...] = (
             "invisible to mobile clients. [DOC]"
         ),
         group="app_endpoints",
+        body=_RESYNC_BODY,
         guarded=True,
     ),
     Op(

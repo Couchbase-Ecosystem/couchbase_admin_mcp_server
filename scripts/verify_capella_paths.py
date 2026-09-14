@@ -1247,6 +1247,47 @@ def discover(token: str, args) -> dict:
     elif not app_services_unreadable:
         print("  app service  : NONE FOUND (App Services paths will be SKIPPED)")
 
+    # ── Backup cycles, which hang off a BUCKET rather than the cluster ──────
+    #
+    # Added 2026-09-14 for P1 item 6, and deliberately separate from the loop
+    # below because the path needs {bucket_id} interpolated. Same three outcomes,
+    # and one of them matters more here than anywhere else in this file: four
+    # operations were once parked against /buckets/{id}/backupSchedule and a live
+    # sweep returned Go's PLAIN-TEXT mux default for that path and six other
+    # spellings. Those records were deleted as disconfirmed. The parked records
+    # this discovers for use /backup/cycles, a different path from a stronger
+    # source -- and if it too answers a plain-text 404, that is the same verdict
+    # and the same remedy: delete, do not leave parked.
+    bucket_for_backup = ids.get("bucket_id")
+    if bucket_for_backup:
+        cycles_path = (
+            f"{base}/buckets/{urllib.parse.quote(str(bucket_for_backup), safe='')}"
+            f"/backup/cycles"
+        )
+        status, cbody = _request("GET", cycles_path, token)
+        if status is None:
+            print("  backup cycle: request failed; cycle_id paths SKIPPED")
+        elif status == 404:
+            print(
+                "  backup cycle: HTTP 404 on backup/cycles — the PARKED LIST PATH "
+                "IS WRONG, not merely empty. This is the second path in this "
+                "subsystem to be probed; see the RETRACTED note in "
+                f"spec_pending.py. Body: {cbody[:90]}"
+            )
+        elif status >= 400:
+            print(f"  backup cycle: HTTP {status} — {cbody[:90]}; cycle_id SKIPPED")
+        else:
+            found = _first_id(cbody, "id", "cycleId")
+            if found:
+                ids["cycle_id"] = found
+                print(f"  backup cycle: {found}")
+            else:
+                print(
+                    f"  backup cycle: HTTP {status} with no items — the path looks "
+                    "right and this bucket has no cycles, which is expected while "
+                    "no schedule exists. cycle_id paths SKIPPED"
+                )
+
     # ── Eventing functions and XDCR replications ────────────────────────────
     #
     # These two identifiers were listed as a BLOCKER in spec_pending.py: without them
@@ -1277,6 +1318,11 @@ def discover(token: str, args) -> dict:
             ("name", "appname", "id"),
         ),
         ("replication ", "replications", "replication_id", ("id", "replicationId")),
+        # Added 2026-09-14 for P1 item 8. sampleBuckets is cluster-level like the
+        # two above, and the same three outcomes apply -- so this both finds
+        # sample_bucket_id for the get/delete paths AND probes the list path
+        # that capella_sample_bucket_load has never had a counterpart for.
+        ("sample bucket", "sampleBuckets", "sample_bucket_id", ("id", "name")),
     ):
         status, rbody = _request("GET", f"{base}/{segment}", token)
         if status is None:

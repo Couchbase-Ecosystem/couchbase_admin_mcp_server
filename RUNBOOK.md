@@ -391,7 +391,8 @@ successes — a refused call is the more interesting half.
 - [ ] Optional, but this is how the 61/61 result was produced. Re-run it if Capella's control
       plane has changed since `spec.LIVE_VERIFIED_ON`:
       `python scripts/verify_capella_paths.py --bootstrap-app-service --bootstrap-child-objects --yes-really-mutate`.
-      Without an App Service, 22 operations report `SKIPPED`; with one but no App Endpoint,
+      Without an App Service, the App Services and App Endpoint operations
+      report `SKIPPED` — 22 of them as of 2026-09-14; with one but no App Endpoint,
       14 still do. Their paths are real but had never been watched returning a response.
 
       It creates a two-node App Service (Capella's minimum — it refuses 1), then a database

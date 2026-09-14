@@ -34,7 +34,11 @@ as delivered until step 3 has passed.
 ### 1.2 Never invent a number
 
 `assert len(OPS) > 100` was written into a test whose own docstring said "floors,
-not exact counts". The registry holds 97. A floor that was not measured is a
+not exact counts". The registry held 97 AT THE TIME — it holds 125 as of
+2026-09-14, which
+is exactly why the sentence needed a tense: a count written in the present tense
+becomes a false claim the moment the code moves, and this one sat wrong for
+weeks. A floor that was not measured is a
 guess with an assertion wrapped round it, and it fails for a reason unrelated to
 the property under test — which trains the next person to edit the number rather
 than read why it is there.
@@ -348,30 +352,51 @@ Accepted, Bride-of-Frankenstein -> ashmahadevsatyanarayanan, bucket
 `scripts/capella_cross_cluster_restore.py --perform`. It took three attempts and
 each rejection was a finding — see "Cross-cluster restore" below.
 
-### The 244/244 target was set and not met
+### The zero-skip target was set and MET — 2026-09-14
 
-The last full `verify_mcp_surface.py` run: OK 60, EMPTY 20, PREVIEW 61, GATED
-61, GUARDED 1, UPSTREAM 7, **SKIPPED 95**.
+`verify_mcp_surface.py` reports **SKIPPED 0** and exits 0. The run that this
+section used to describe — OK 60, SKIPPED 95 — was from 2026-09-01 and sat here
+in the present tense for two weeks.
 
-Those 95 are tools whose arguments the harness could not synthesise. That is a
-limit of the measurement and NOT a defect in the tools — reporting it the other
-way round is its own failure, and this repository has done it before. But it is
-still 95 tools nobody has called, against an explicit instruction that nothing
-should be skipped.
+What got it there: the harness learned to discover the identifiers it had been
+missing, rather than the tools being changed to need fewer. Those 95 were never
+defects in the tools, and that distinction is the same one rule 1.7 is about.
 
-### Capella write bodies are mostly unproven
+**Counts move. Do not quote one here without a date beside it.** As of
+2026-09-14: 125 operations in the Capella registry, 280 tools in the server's
+raw registry, 1 entry in `SHIPPED_UNVERIFIED`.
 
-One write of roughly 45 has been performed (`capella_backup_create`, 202). The
-rest carry `[LIVE 405]`: path confirmed by an OPTIONS probe, body taken from the
-reference. This registry has already shipped three wrong bodies behind verified
-paths — `access` missing from both credential creates, and `deltaSync` for
-`deltaSyncEnabled`. A path probe cannot catch that, because it never sends a
-body.
+### Capella write bodies: MOSTLY PROVEN NOW, and the failure mode has changed
+
+This said "one write of roughly 45 has been performed". That was true on
+2026-09-01. Most writes now carry a measured 400, 405 or 422 earned by a probe
+that did not perform them, and several carry a real performed status recorded in
+`LIVE_VERIFIED_OUT_OF_BAND`.
+
+The standing hazard is unchanged and worth restating, because it bit again on
+2026-09-14: **a path probe never sends a body, so it cannot catch a wrong one.**
+This registry had already shipped three wrong bodies behind verified paths —
+`access` missing from both credential creates, and `deltaSync` for
+`deltaSyncEnabled`. Since then:
+
+- `capella_bucket_update` and `capella_app_service_update` were written as
+  PARTIAL updates and are FULL REPLACEMENTS. A partial bucket resize would have
+  returned success and silently removed the bucket's replicas, because
+  `replicas: 0` is a legal value no validator rejects.
+- Three operations answered 405 on their paths and are still parked, because
+  they declare no body at all.
 
 ### Never exercised at all
 
   * the HTTP transport. Everything has been driven over stdio.
-  * the GUI's `POST /api/call` parity with MCP dispatch.
+  * the GUI's `POST /api/call` parity with MCP dispatch. NARROWED 2026-09-14:
+    the two surfaces are now asserted to advertise an IDENTICAL tool set, in
+    both directions, by tests/test_gui_authorization.py — which was added after
+    handlers/backup_catalog.py was found to have been absent from the console
+    for its entire life. What is still unexercised is DISPATCH behaviour:
+    whether a call through the console enforces the same confirmation, scope
+    and audit path as the same call through MCP. Membership is guarded;
+    behaviour is not.
   * `deploy/k8s/*.yaml` — written, asserted by tests, never applied.
   * `deploy/docker-compose.*.yml` — never brought up. The container verification
     uses `docker run` probes, which exercise the image but not the compose files.

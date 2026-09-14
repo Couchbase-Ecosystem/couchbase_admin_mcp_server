@@ -57,6 +57,7 @@ import argparse
 import asyncio
 import json
 import os
+import pathlib
 import sys
 from typing import Any
 
@@ -307,6 +308,39 @@ async def run(args) -> int:
                 value = os.environ.get(env_name)
                 if value and arg_name in declared:
                     arguments[arg_name] = value
+            # --args-json FIRST, so an -a flag can still override one field of
+            # it without restating the file.
+            #
+            # WHY THIS FLAG EXISTS, measured 2026-09-14. The round-trip import
+            # was invoked as
+            #
+            #   -a "keyspace_map.travel-sample.inventory.airline=travel-sample..."
+            #
+            # and _collect_args built {"travel-sample": {"inventory": {"airline":
+            # ...}}}, because it reads every dot as a level of nesting. But the
+            # KEY here is the whole keyspace, "travel-sample.inventory.airline",
+            # dots included. The dotted syntax cannot express a key that
+            # contains a dot, and no amount of shell quoting changes that -- it
+            # is the syntax, not the shell.
+            #
+            # The refusal was honest ("is not of type 'string'"), and the import
+            # simply never ran. A JSON file has no such ambiguity and, like
+            # `git commit -F`, keeps structured data out of the shell entirely.
+            if args.args_json:
+                path = pathlib.Path(args.args_json).expanduser()
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                except OSError as exc:
+                    print(f"could not read {path}: {exc}")
+                    return 2
+                except ValueError as exc:
+                    print(f"{path} is not valid JSON: {exc}")
+                    return 2
+                if not isinstance(loaded, dict):
+                    print(f"{path} must hold a JSON OBJECT of arguments, not "
+                          f"{type(loaded).__name__}")
+                    return 2
+                arguments.update(loaded)
             arguments.update(_collect_args(args.arg))
 
             # DISCOVER WHAT IS STILL MISSING rather than making the caller paste
@@ -374,6 +408,12 @@ def main() -> int:
                              "Dotted names build objects (-a tags.version=1.1) "
                              "and lists (-a backup_ids.0=x, or -a backup_ids[]=x "
                              "repeated)")
+    parser.add_argument("--args-json", metavar="PATH",
+                        help="read arguments from a JSON file. USE THIS WHEN A "
+                             "KEY CONTAINS A DOT: the dotted -a syntax cannot "
+                             "express one, because it treats every dot as a "
+                             "level of nesting. Merged BEFORE -a, so a -a flag "
+                             "still wins")
     parser.add_argument("--list", action="store_true",
                         help="list advertised tools and exit")
     parser.add_argument("--schema", action="store_true",

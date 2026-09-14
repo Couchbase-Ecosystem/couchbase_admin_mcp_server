@@ -349,7 +349,7 @@ couchbase-admin-mcp-server/
 │   ├── shared.py              # HTTP client, ok()/err(), redaction, guards
 │   ├── egress.py              # Cluster-egress allowlist
 │   ├── capella/
-│   │   ├── spec.py            # Declarative v4 op registry (61 ops)
+│   │   ├── spec.py            # Declarative v4 op registry
 │   │   ├── client.py          # v4 client, cursor pagination, retries
 │   │   ├── guardrails.py      # Org pin, project allowlist, ceiling, TTL reaper
 │   │   └── environment.py     # Composite ensure/park/resume/teardown/reap

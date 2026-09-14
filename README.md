@@ -19,7 +19,9 @@ profiles, different release cadences.
 
 ## What's here
 
-~150 tools across these areas:
+**280 tools** as of 2026-09-14 — 138 `capella_*`, 123 `admin_*`, 19 `cb_*`.
+A deployment loads ONE control plane's half, never both, so a running server
+advertises far fewer than that; see "One container, one control plane" below.
 
 | Area | Examples |
 |---|---|
@@ -423,8 +425,9 @@ never Full Admin, so the `admin_*` tools in this server cannot work against a
 Capella cluster — they are an authorization boundary away, not a network hop.
 
 Point this server at a Capella connection string and it detects that, then
-**unloads the tools that cannot work** rather than offering ~130 tools that each
-fail with an opaque 401 on first use. An agent cannot misroute to a tool it never
+**unloads the tools that cannot work** rather than offering the 123 `admin_*`
+tools (count as of 2026-09-14) that would each fail with an opaque 401 on first
+use. An agent cannot misroute to a tool it never
 sees.
 
 ### What is reachable on Capella

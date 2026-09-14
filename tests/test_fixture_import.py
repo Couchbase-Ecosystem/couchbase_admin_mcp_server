@@ -727,7 +727,7 @@ def test_an_exported_row_keeps_a_document_field_named_id(tmp_path, monkeypatch):
 # ── system scopes belong to Capella, not to the fixture ──────────────────────
 
 
-def _import_against(monkeypatch, tmp_path, structure):
+def _import_against(monkeypatch, tmp_path, structure, keyspace_map=None):
     """Drive _import with a canned structure and a cluster that accepts nothing."""
     from handlers.capella import environment as env
 
@@ -761,14 +761,24 @@ def _import_against(monkeypatch, tmp_path, structure):
                     'underscore or percentage."}'
                 )
             return {}
+        if op_name == "capella_collection_create":
+            # Prefixed so the existing membership assertions on bare scope
+            # names cannot match a collection by accident.
+            attempted.append(
+                f"collection:{args.get('scope_name')}.{(body or {}).get('name')}"
+            )
+            return {}
         return {"data": []}
 
     monkeypatch.setattr(env, "_invoke", _invoke)
     monkeypatch.setattr(fixture, "capella_request", lambda *a, **k: {"definitions": []})
-    result = fixture._import({
+    call_args = {
         "fixture_path": str(directory), "cluster_id": "c",
         "organization_id": "o", "project_id": "p",
-    })
+    }
+    if keyspace_map is not None:
+        call_args["keyspace_map"] = keyspace_map
+    result = fixture._import(call_args)
     return json.loads(_text(result)), attempted
 
 
@@ -810,3 +820,72 @@ def test_a_percentage_prefixed_scope_is_skipped_for_the_same_reason(
     assert "%odd" not in attempted
     structure = next(s for s in payload["steps"] if s["step"] == "structure")
     assert "b.%odd" in structure["system_scopes_skipped"]
+
+
+def test_a_keyspace_map_within_one_bucket_creates_the_target_scope(
+    monkeypatch, tmp_path
+):
+    """MEASURED 2026-09-14 on a live Capella round trip.
+
+    The structure step remapped only the BUCKET and took the scope and
+    collection verbatim out of the manifest. Mapping
+
+        travel-sample.inventory.airline -> travel-sample.roundtrip.airline
+
+    therefore created nothing at all: the bucket rewrote to itself, `inventory`
+    already existed, and `roundtrip` was never made. The document step, which
+    has always applied the full remap, then wrote into a scope that did not
+    exist -- 24 consecutive 404 ScopeNotFound, `imported: false`, 0 of 188
+    documents loaded.
+
+    THE SAME BUCKET ON BOTH SIDES IS THE WHOLE POINT of this test. A map that
+    also changes the bucket passes with the defect present, because the bucket
+    is the one component that was being rewritten. That is why the Enterprise
+    Edition round trip into a second bucket came back clean while this one did
+    not.
+    """
+    payload, attempted = _import_against(
+        monkeypatch, tmp_path,
+        [{"name": "b", "scopes": [
+            {"name": "inventory", "collections": [{"name": "airline"}]},
+        ]}],
+        keyspace_map={"b.inventory.airline": "b.roundtrip.airline"},
+    )
+
+    assert "roundtrip" in attempted, (
+        "the mapped scope must be created; with the defect present nothing was"
+    )
+    assert "inventory" not in attempted, (
+        "the recorded scope is the SOURCE and must not be created on the target"
+    )
+    assert "collection:roundtrip.airline" in attempted, (
+        "the collection must land in the mapped scope, not the recorded one"
+    )
+
+    structure = next(s for s in payload["steps"] if s["step"] == "structure")
+    assert "b.roundtrip" in structure["scopes_created"]
+    assert "b.roundtrip.airline" in structure["collections_created"]
+    assert not payload["problems"]
+
+
+def test_an_unmapped_keyspace_still_uses_its_recorded_names(monkeypatch, tmp_path):
+    """The fallback matters as much as the remap.
+
+    Most recorded collections are not being retargeted, and a map entry for one
+    keyspace must not disturb the others. Without this, a fix for the case
+    above could quietly send every unmapped collection somewhere else.
+    """
+    payload, attempted = _import_against(
+        monkeypatch, tmp_path,
+        [{"name": "b", "scopes": [
+            {"name": "inventory", "collections": [{"name": "airline"}]},
+            {"name": "untouched", "collections": [{"name": "hotel"}]},
+        ]}],
+        keyspace_map={"b.inventory.airline": "b.roundtrip.airline"},
+    )
+
+    assert "untouched" in attempted
+    assert "collection:untouched.hotel" in attempted
+    structure = next(s for s in payload["steps"] if s["step"] == "structure")
+    assert "b.untouched.hotel" in structure["collections_created"]
+    assert not payload["problems"]

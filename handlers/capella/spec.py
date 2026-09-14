@@ -1252,8 +1252,19 @@ OPS: tuple[Op, ...] = (
         summary=(
             "Create a recurring on/off schedule — the set-and-forget way to stop "
             "paying for test clusters overnight and at weekends. Body: "
-            "{'timezone': 'ET', 'days': [{'day': 'monday', 'state': 'on', "
-            "'from': {...}, 'to': {...}}]}. [LIVE 405]"
+            "{'timezone': 'America/New_York', 'days': [{'day': 'monday', "
+            "'state': 'on', 'from': {...}, 'to': {...}}]}.\n"
+            "TIMEZONE MUST BE IANA. This description said 'ET' until 2026-09-14 "
+            "and Capella refuses it: 422 code 11041, 'The timezone ET is not a "
+            "valid IANA timezone.' Anyone following the example failed. Use "
+            "'America/New_York', 'Europe/London', 'UTC'.\n"
+            "ALL SEVEN DAYS ARE REQUIRED. An empty list answers 422 code 11042, "
+            "'The schedule contains 0 days. The On/Off schedule requires 7 days "
+            "for the schedule, one for each day of the week.' A day with state "
+            "'on' and no from/to window is on all day, so seven of those is a "
+            "schedule that exists and can never turn the cluster off — the safe "
+            "shape when you want the resource present without risking a "
+            "hibernation. [LIVE+METHOD 422]"
         ),
         group="clusters",
         body={
@@ -1844,7 +1855,18 @@ OPS: tuple[Op, ...] = (
             "Upsert the access control and validation function — the JavaScript "
             "that assigns documents to channels and authorizes writes. For a test "
             "environment this is the main lever for reproducing the production "
-            "sync topology. Body is the function source as a string. [DOC]"
+            "sync topology. Body is the function source as a string, and it must "
+            "EVALUATE TO A FUNCTION: a top-level `function (doc) {…}` is a "
+            "declaration, evaluates to undefined, and is refused with 400 "
+            "'JavaScript source does not evaluate to a function'. Wrap it in "
+            "parentheses — `(function (doc, oldDoc, meta) {…})`.\n"
+            "THE KEYSPACE IS NOT THE APP ENDPOINT NAME. It is "
+            "`<endpoint>.<scope>.<collection>` — the function is per COLLECTION. "
+            "Sending the endpoint name alone answers 404 'App Endpoint keyspace "
+            "<name> not found', measured 2026-09-14, which reads as a missing "
+            "endpoint and is not. capella_app_endpoint_get returns the shape "
+            "that shows it: scopes.<scope>.collections.<collection>."
+            "accessControlFunction. [LIVE+METHOD 404]"
         ),
         group="app_endpoints",
         body={

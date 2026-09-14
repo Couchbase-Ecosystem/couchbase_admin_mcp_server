@@ -62,6 +62,7 @@ MODULE_NAMES = [
     "eight_x",
     "encryption",
     "eventing",
+    "fixture",
     "indexes",
     "mcp_status",
     "search_admin",

@@ -640,25 +640,58 @@ def test_the_metadata_aliases_cannot_collide_with_ordinary_field_names():
     itself. It took export -> import -> export to surface it: 187 of 188 keys
     differed while zero bodies did.
     """
-    assert fixture.META_ID_ALIAS.startswith("__")
-    assert fixture.META_EXP_ALIAS.startswith("__")
+    from handlers import fixture_core
+
+    assert fixture_core.META_ID_ALIAS.startswith("__")
+    assert fixture_core.META_EXP_ALIAS.startswith("__")
     # The names must not be the bare ones that collided.
-    assert fixture.META_ID_ALIAS != "id"
-    assert fixture.META_EXP_ALIAS != "exp"
+    assert fixture_core.META_ID_ALIAS != "id"
+    assert fixture_core.META_EXP_ALIAS != "exp"
     # The xattr alias carries the same prefix for the same reason.
-    assert "__fixture_xattr_" in fixture.XATTR_SELECT
+    assert "__fixture_xattr_" in fixture_core.XATTR_SELECT
+    # The Capella module must be using THOSE, not a second set of its own --
+    # two planes writing different key columns is the portability failure.
+    assert fixture.META_ID_ALIAS is fixture_core.META_ID_ALIAS
+    assert fixture.META_EXP_ALIAS is fixture_core.META_EXP_ALIAS
 
 
 def test_the_export_query_aliases_the_metadata_before_splatting_the_document():
-    """The ORDER is what bit: d.* last means d.* wins."""
-    statement = fixture.EXPORT_QUERY.format(
-        id_alias=fixture.META_ID_ALIAS,
-        exp_alias=fixture.META_EXP_ALIAS,
-        bucket="b", scope="s", collection="c",
-    )
+    """The ORDER is what bit: d.* last means d.* wins.
+
+    Asserted against the SHARED builder, which is what both planes call. It was
+    a constant here and the Capella exporter built its own statement inline, so
+    this test was checking a string nothing executed -- while the statement that
+    did run was never checked at all.
+    """
+    from handlers import fixture_core
+
+    statement = fixture_core.export_statement("b", "s", "c", page_size=500)
     assert f"META().id AS {fixture.META_ID_ALIAS}" in statement
     assert "AS id," not in statement
     assert "AS exp," not in statement
+    # d.* must come AFTER both aliases, which is the whole property.
+    assert statement.index("d.*") > statement.index(fixture.META_EXP_ALIAS)
+    assert statement.rstrip().endswith("LIMIT 500")
+
+
+def test_the_export_statement_quotes_identifiers_that_contain_a_backtick():
+    """A bucket name may contain a backtick and Couchbase escapes one by
+    doubling it. Unescaped, the name ends the quoted identifier early and the
+    rest of it becomes syntax."""
+    from handlers import fixture_core
+
+    statement = fixture_core.export_statement("tra`vel", "s", "c", page_size=10)
+    assert "`tra``vel`" in statement
+
+
+def test_the_export_statement_cannot_carry_anything_but_a_number_as_the_limit():
+    """page_size is interpolated rather than bound, because LIMIT does not accept
+    a parameter on every server version this runs against. It is coerced, so the
+    interpolation has nothing else it could carry."""
+    from handlers import fixture_core
+
+    with pytest.raises((ValueError, TypeError)):
+        fixture_core.export_statement("b", "s", "c", page_size="1 OR TRUE")
 
 
 def test_an_exported_row_keeps_a_document_field_named_id(tmp_path, monkeypatch):

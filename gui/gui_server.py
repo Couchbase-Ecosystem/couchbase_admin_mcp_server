@@ -195,6 +195,7 @@ from handlers import (  # noqa: E402
     eight_x,
     encryption,
     eventing,
+    fixture,
     indexes,
     mcp_status,
     search_admin,
@@ -295,6 +296,7 @@ ALL_TOOLS = (
     + eventing.TOOLS
     + encryption.TOOLS
     + capella.TOOLS
+    + fixture.TOOLS
     + mcp_status.TOOLS
 )
 
@@ -311,6 +313,7 @@ HANDLERS = {
     **{t.name: eight_x for t in eight_x.TOOLS},
     **{t.name: backup for t in backup.TOOLS},
     **{t.name: backup_catalog for t in backup_catalog.TOOLS},
+    **{t.name: fixture for t in fixture.TOOLS},
     **{t.name: capella for t in capella.TOOLS},
     **{t.name: eventing for t in eventing.TOOLS},
     **{t.name: encryption for t in encryption.TOOLS},

@@ -119,7 +119,7 @@ def test_no_function_in_the_shared_module_names_a_plane():
 #: Modules that implement a fixture family for one plane. Add the Enterprise
 #: Edition one here when it lands -- the check below is what stops it growing its
 #: own copy of the manifest rules.
-_PLANE_MODULES = ["handlers.capella.fixture"]
+_PLANE_MODULES = ["handlers.capella.fixture", "handlers.fixture"]
 
 
 @pytest.mark.parametrize("module_name", _PLANE_MODULES)

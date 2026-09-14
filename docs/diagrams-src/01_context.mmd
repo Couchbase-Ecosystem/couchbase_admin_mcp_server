@@ -4,7 +4,7 @@ graph LR
   subgraph Server["Couchbase Admin MCP Server"]
     MCP["server.py<br/>stdio | streamable_http"]
     GUI["gui_server.py<br/>Flask console"]
-    CORE["authz + auth + 280 tools<br/>measured 2026-09-14"]
+    CORE["authz + auth + 284 tools<br/>measured 2026-09-14"]
     MCP --> CORE
     GUI --> CORE
   end

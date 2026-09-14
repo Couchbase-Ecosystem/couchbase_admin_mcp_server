@@ -118,6 +118,7 @@ from handlers import (
     eight_x,
     encryption,
     eventing,
+    fixture,
     indexes,
     mcp_status,
     search_admin,
@@ -164,6 +165,11 @@ _RAW_TOOLS: list[Tool] = (
     # mode, which is exactly the deployment whose backup naming is worst served
     # by the plane itself.
     + backup_catalog.TOOLS
+    # Enterprise Edition fixtures. Under handlers/ rather than handlers/capella/
+    # because this is the SELF-MANAGED family -- the Capella one is
+    # capella_fixture_*, reached through the Data API, and the two share only
+    # handlers/fixture_core.py. See docs/FIXTURE_DESIGN.md.
+    + fixture.TOOLS
 )
 
 _HANDLERS = {
@@ -183,6 +189,7 @@ _HANDLERS = {
     **{t.name: capella for t in capella.TOOLS},
     **{t.name: mcp_status for t in mcp_status.TOOLS},
     **{t.name: backup_catalog for t in backup_catalog.TOOLS},
+    **{t.name: fixture for t in fixture.TOOLS},
 }
 
 # Tools that stay loaded in read-only mode despite destructiveHint=true,

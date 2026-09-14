@@ -317,9 +317,29 @@ def _minimal_args(tool) -> dict:
 
 
 def _body(result) -> dict:
+    """The handler's JSON, AS A DICT -- and a list payload is not an error.
+
+    This returned `json.loads(...)` unconditionally and every caller then did
+    `body.get(...)`. That held only because the fake cluster always answers with
+    an object. It is not the contract: plenty of these tools return a bare JSON
+    ARRAY, because the endpoint behind them does -- admin_bucket_list,
+    admin_role_list, admin_backup_plans_list. The moment one returned a list
+    regardless of the fake (admin_xdcr_replications_list, once it stopped
+    reading the wrong endpoint on 2026-09-14) these tests raised
+    AttributeError: 'list' object has no attribute 'get'.
+
+    That was the TEST's blind spot, not the handler's bug, and it mattered:
+    a tool that fell through to "unknown tool" while returning a list would
+    have sailed past these checks. Wrapping a list payload preserves what each
+    caller is actually asking -- is there an error marker, is there an error
+    message -- and a list has neither, which is the correct answer.
+    """
     assert isinstance(result, list) and result, "handler returned no content"
     assert all(isinstance(item, TextContent) for item in result)
-    return json.loads(result[0].text)
+    payload = json.loads(result[0].text)
+    if isinstance(payload, dict):
+        return payload
+    return {"_payload": payload}
 
 
 @pytest.mark.parametrize(("module_name", "tool"), ALL_TOOLS, ids=TOOL_IDS)

@@ -1156,6 +1156,49 @@ def _load_documents(source: pathlib.Path, base: str, credential: tuple[str, str]
     return loaded, failures, expiries_dropped, ""
 
 
+def _remap_bucket(source_bucket: str, keyspace_map: dict) -> str:
+    """The bucket a recorded bucket maps onto under ``keyspace_map``.
+
+    Factored out because this loop was written twice, three lines apart, and a
+    fix applied to one copy would not have reached the other.
+    """
+    for source_keyspace, target_keyspace in keyspace_map.items():
+        if source_keyspace.split(".", 1)[0] == source_bucket:
+            return target_keyspace.split(".", 1)[0]
+    return source_bucket
+
+
+def _remap_triple(bucket: str, scope: str, collection: str,
+                  keyspace_map: dict) -> tuple[str, str, str]:
+    """Map a recorded (bucket, scope, collection) onto its import target.
+
+    THE WHOLE KEYSPACE, NOT JUST THE BUCKET. The structure step used to take
+    the scope and collection verbatim out of the manifest and remap only the
+    bucket, so a keyspace_map of
+
+        travel-sample.inventory.airline -> travel-sample.roundtrip.airline
+
+    created NOTHING: the bucket rewrote to itself, `inventory` already existed,
+    and the `roundtrip` scope was never made. The document step, which has
+    always used the full remap, then wrote into a scope that did not exist.
+
+    MEASURED 2026-09-14 on a live Capella round trip: 24 consecutive
+    404 ScopeNotFound, `imported: false`, 0 of 188 documents loaded. The
+    Enterprise Edition importer carried the same defect and it is already fixed
+    there; this is its twin, and it only shows when source and target share a
+    bucket -- which is why a round trip into a different bucket passed.
+
+    Falls back to the bucket-only remap when the map has no entry for this
+    keyspace, which is the common case: most recorded collections are not being
+    retargeted at all.
+    """
+    mapped = _remap_keyspace(f"{bucket}.{scope}.{collection}", keyspace_map)
+    parts = _split_keyspace(mapped)
+    if parts:
+        return parts
+    return (_remap_bucket(bucket, keyspace_map), scope, collection)
+
+
 def _import(args: dict) -> list[TextContent]:
     """Import a fixture into a Capella cluster.
 
@@ -1318,11 +1361,7 @@ def _import(args: dict) -> list[TextContent]:
         source_name = str(bucket.get("name") or "")
         if not source_name:
             continue
-        target_name = source_name
-        for source_keyspace, target_keyspace in keyspace_map.items():
-            if source_keyspace.split(".", 1)[0] == source_name:
-                target_name = target_keyspace.split(".", 1)[0]
-                break
+        target_name = _remap_bucket(source_name, keyspace_map)
         if target_name not in planned_buckets:
             planned_buckets.append(target_name)
 
@@ -1353,11 +1392,7 @@ def _import(args: dict) -> list[TextContent]:
         source_name = str(bucket.get("name") or "")
         if not source_name:
             continue
-        target_name = source_name
-        for source_keyspace, target_keyspace in keyspace_map.items():
-            if source_keyspace.split(".", 1)[0] == source_name:
-                target_name = target_keyspace.split(".", 1)[0]
-                break
+        target_name = _remap_bucket(source_name, keyspace_map)
 
         found = existing_by_name.get(target_name)
         if found is None:
@@ -1410,40 +1445,85 @@ def _import(args: dict) -> list[TextContent]:
                             f"{target_name}.{scope_name}.{collection_name}"
                         )
                 continue
-            if scope_name != "_default":
-                try:
-                    _env._invoke("capella_scope_create", bucket_ref,
-                                 body={"name": scope_name},
-                                 composite="capella_fixture_import")
-                    created_scopes.append(f"{target_name}.{scope_name}")
-                except Exception as exc:
-                    # An existing scope is not a failure -- this tool is
-                    # explicitly re-runnable. Anything else is.
-                    if "already exists" not in str(exc).lower():
-                        step_problems.append(
-                            f"scope {target_name}.{scope_name} could not be "
-                            f"created: {exc}"
-                        )
-                        continue
-            scope_ref = dict(bucket_ref, scope_name=scope_name)
-            for collection in scope.get("collections") or []:
+            # THE TARGET IS THE REMAPPED KEYSPACE, not the recorded one with a
+            # rewritten bucket. See _remap_triple for the failure this fixes.
+            plan: list[dict[str, Any]] = []
+            recorded = [
+                c for c in (scope.get("collections") or [])
+                if str(c.get("name") or "")
+            ]
+            if not recorded:
+                # A scope with no collections still has to exist.
+                plan.append({
+                    "source": f"{source_name}.{scope_name}",
+                    "bucket": target_name,
+                    "scope": scope_name,
+                    "collection": None,
+                    "record": {},
+                })
+            for collection in recorded:
                 collection_name = str(collection.get("name") or "")
-                if not collection_name or collection_name == "_default":
+                mapped_bucket, mapped_scope, mapped_collection = _remap_triple(
+                    source_name, scope_name, collection_name, keyspace_map
+                )
+                plan.append({
+                    "source": f"{source_name}.{scope_name}.{collection_name}",
+                    "bucket": mapped_bucket,
+                    "scope": mapped_scope,
+                    "collection": mapped_collection,
+                    "record": collection,
+                })
+
+            scopes_attempted: set[str] = set()
+            for entry in plan:
+                if entry["bucket"] != target_name:
+                    # REFUSE rather than guess. This bucket's id was resolved
+                    # above; another bucket's has not been, and inventing one
+                    # addresses the wrong cluster object.
+                    step_problems.append(
+                        f"keyspace_map sends {entry['source']} to bucket "
+                        f"{entry['bucket']!r}, which is not the bucket this "
+                        f"structure entry resolved to ({target_name!r}). Map "
+                        f"the bucket itself instead."
+                    )
                     continue
-                body = {"name": collection_name}
-                if collection.get("maxTTL"):
-                    body["maxTTL"] = collection["maxTTL"]
+
+                target_scope = str(entry["scope"])
+                if target_scope != "_default" and target_scope not in scopes_attempted:
+                    scopes_attempted.add(target_scope)
+                    try:
+                        _env._invoke("capella_scope_create", bucket_ref,
+                                     body={"name": target_scope},
+                                     composite="capella_fixture_import")
+                        created_scopes.append(f"{target_name}.{target_scope}")
+                    except Exception as exc:
+                        # An existing scope is not a failure -- this tool is
+                        # explicitly re-runnable. Anything else is.
+                        if "already exists" not in str(exc).lower():
+                            step_problems.append(
+                                f"scope {target_name}.{target_scope} could not "
+                                f"be created: {exc}"
+                            )
+                            continue
+
+                target_collection = entry["collection"]
+                if not target_collection or target_collection == "_default":
+                    continue
+                scope_ref = dict(bucket_ref, scope_name=target_scope)
+                body = {"name": target_collection}
+                if entry["record"].get("maxTTL"):
+                    body["maxTTL"] = entry["record"]["maxTTL"]
                 try:
                     _env._invoke("capella_collection_create", scope_ref, body=body,
                                  composite="capella_fixture_import")
                     created_collections.append(
-                        f"{target_name}.{scope_name}.{collection_name}"
+                        f"{target_name}.{target_scope}.{target_collection}"
                     )
                 except Exception as exc:
                     if "already exists" not in str(exc).lower():
                         step_problems.append(
-                            f"collection {target_name}.{scope_name}."
-                            f"{collection_name} could not be created: {exc}"
+                            f"collection {target_name}.{target_scope}."
+                            f"{target_collection} could not be created: {exc}"
                         )
 
     structure_step: dict[str, Any] = {

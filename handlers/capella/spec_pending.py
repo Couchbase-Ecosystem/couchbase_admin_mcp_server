@@ -124,4 +124,161 @@ __all__ = ["PENDING_OPS"]
 #: as an unexamined subsystem before anyone had probed it -- it is not
 #: hypothetical any more.
 
-PENDING_OPS: tuple[Op, ...] = ()
+#: ── PARKED 2026-09-14: P1 items 4 and 5 ──────────────────────────────────────
+#:
+#: Eight operations from the Terraform provider's generated client. They are
+#: PARKED rather than shipped for a reason worth stating, because shipping them
+#: was the obvious move and would have been wrong:
+#:
+#: SHIPPED_UNVERIFIED is capped at 8 and currently holds 2. Adding eight
+#: unverified operations would have taken it to 10, and the response to that cap
+#: firing is to EARN EVIDENCE, not to raise the number -- the cap's own test says
+#: "a cap that moves whenever it fires is decoration". This module is the
+#: mechanism that already existed for exactly this, and using it keeps the
+#: shipped registry honest while the paths are still unobserved.
+#:
+#: PROMOTE THEM WITH:
+#:     uv run python scripts/verify_capella_paths.py --method-probe --include-pending
+#: then move each confirmed record into spec.py, delete the copy here, retag
+#: [LIVE] or [LIVE+METHOD], and record the observed status in LIVE_VERIFIED.
+#:
+#: Note two of these need identifiers the probe may not synthesise:
+#: app_endpoint_keyspace (endpoint.scope.collection) and job_id, which only
+#: exists in a capella_replication_create response. A SKIPPED verdict on those is
+#: honest and is not progress.
+
+PENDING_OPS: tuple[Op, ...] = (
+    # ── P1 item 4: the replication job a create actually returns ─────────────
+    Op(
+        name="capella_replication_job_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/replications/jobs/{job_id}",
+        summary=(
+            "Fetch one XDCR replication JOB by the id capella_replication_create "
+            "returns.\n"
+            "THIS CLOSES A GAP THE REGISTRY ALREADY WORKS AROUND. "
+            "capella_replication_create answers with a jobId, NOT a replication "
+            "id, so the only way to find the resulting replication today is to "
+            "list replications afterwards and infer which one appeared -- which "
+            "is ambiguous the moment two replications are created close "
+            "together. [TF openapi.gen.go:33004]"
+        ),
+        group="replication",
+        read_only=True,
+        idempotent=True,
+    ),
+
+    # ── P1 item 5: App Endpoint completeness ─────────────────────────────────
+    #
+    # Each of these is the missing HALF of something already shipped. The pattern
+    # matters: a surface that can SET a thing and not READ it back, or START a
+    # thing and not STOP it, is one an operator cannot reason about.
+    Op(
+        name="capella_app_endpoint_cors_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/cors",
+        summary=(
+            "Read an App Endpoint's CORS configuration. We can SET this and "
+            "cannot read it back, so a caller cannot check what is configured "
+            "before replacing it -- and capella_app_endpoint_cors_set REPLACES. "
+            "[TF openapi.gen.go:24978]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_resync_stop",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/resync",
+        summary=(
+            "Stop a running resync. We can START one and cannot cancel it.\n"
+            "That asymmetry is worse than it sounds: a resync reprocesses every "
+            "document in the endpoint through the access control function, and on "
+            "a large dataset it is long-running and load-bearing on the cluster. "
+            "An operator who starts one by mistake currently has no way to stop "
+            "it through this server. [TF openapi.gen.go:25738]"
+        ),
+        group="app_endpoints",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_app_endpoint_access_control_function_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_keyspace}/accessControlFunction",
+        summary=(
+            "Remove a collection's access control function.\n"
+            "DESTRUCTIVE IN A WAY THAT DOES NOT LOOK DESTRUCTIVE, exactly like "
+            "its import-filter sibling: deleting the function does not delete "
+            "data, it removes the rules that decide which documents a mobile user "
+            "may see and write. Read the current source with "
+            "capella_app_endpoint_get first -- the dedicated getter answers 200 "
+            "with an EMPTY body, so it is not a backup.\n"
+            "THE KEYSPACE IS NOT THE APP ENDPOINT NAME: endpoint.scope.collection. "
+            "Expected 202, not 204. [TF openapi.gen.go:23848]"
+        ),
+        group="app_endpoints",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_app_endpoint_collections_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/collections",
+        summary=(
+            "List the collections an App Endpoint syncs. Today the only way to "
+            "see this is to read the whole endpoint document and walk "
+            "scopes.<scope>.collections. [TF openapi.gen.go:24862]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_admin_users_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/adminUsers",
+        summary=(
+            "List an App Endpoint's admin users. Distinct from the APP SERVICE "
+            "admin users capella_app_service_admin_users_list returns -- these "
+            "are scoped to one endpoint. [TF openapi.gen.go:24547]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_audit_log_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",
+        summary=(
+            "Read an App Endpoint's audit logging configuration. "
+            "[TF openapi.gen.go:24663]"
+        ),
+        group="app_endpoints",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_app_endpoint_audit_log_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/appEndpoints/{app_endpoint_name}/auditLog",
+        summary=(
+            "Configure an App Endpoint's audit logging.\n"
+            "THE BODY SHAPE IS NOT RECORDED HERE AND MUST BE READ FROM THE "
+            "PROVIDER BEFORE THIS SHIPS. Only the path and method were taken from "
+            "openapi.gen.go:24736; no body schema is declared, so this record is "
+            "NOT promotable on a path probe alone. Shipping it with an invented "
+            "body would repeat exactly the failure CLAUDE.md records: three wrong "
+            "request bodies sat behind verified paths, and a path probe cannot "
+            "catch that because it never sends a body.\n"
+            "Note the App Service level equivalent is entitlement-gated in this "
+            "organization (capella_cluster_audit_log_config_set answers 422 'your "
+            "support package does not include audit logging'), so this may be "
+            "unverifiable here for the same reason. [TF openapi.gen.go:24736]"
+        ),
+        group="app_endpoints",
+        guarded=True,
+    ),
+)

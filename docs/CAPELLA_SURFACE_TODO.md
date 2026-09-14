@@ -34,10 +34,25 @@ API accept".
 
 ---
 
-## P0 — reach zero SKIPPED
+## P0 — reach zero SKIPPED — **CLOSED 2026-09-14**
 
-Four tools, all OURS, all unimplemented code rather than unknowns. They are the
-entire remaining gap between the current surface run and a clean one.
+Four tools, all OURS, all unimplemented code rather than unknowns. They were the
+entire remaining gap between the surface run and a clean one.
+
+**All four are now implemented and verified against a live cluster.** The surface
+run reports 0 SKIPPED. `capella_fixture_export` exports structure, GSI
+definitions, eventing functions and documents (the last over the Data API);
+`capella_fixture_verify` verifies a fixture alone from the filesystem and, given
+a `cluster_id`, verifies a live cluster against it — per-keyspace `COUNT(*)` and
+index existence plus online state. Measured on 2026-09-14 against
+`fixtures/mcptest-data-1`: 188 documents exported, 188 counted on the cluster,
+both recorded indexes online, `verified: true` on both halves.
+
+`capella_fixture_import` remains unimplemented and still refuses. It is the one
+member of the family that writes to somebody's cluster, and a half-implemented
+importer is worse than none.
+
+The original blocking table, kept for the record:
 
 | Tool | Blocking | Note |
 |---|---|---|
@@ -217,3 +232,32 @@ callers get wrong.
   is worth knowing that the rule has an exception.
 - `ListEventsParams` supports `clusterIds`, `projectIds`, `severityLevels`,
   `userIds` and `tags` beyond the `from`/`to` we expose.
+
+---
+
+## Coverage gaps in checks we DO ship
+
+A check that silently does not cover something is worse than a missing check,
+because it reports a pass. These are the places where a shipped verification
+knows less than its name suggests, each with what would close it.
+
+- **`capella_fixture_verify` does not verify index REPLICA counts.** Measured
+  2026-09-14: `system:indexes` on Capella 7.x carries no replica column, so the
+  cluster check can confirm that each recorded index exists and is online but
+  not how many copies of it there are. The fixture side knows the answer —
+  `capella_query_index_definitions_list` enumerates each replica as its own
+  entry with `" (replica N)"` appended to `indexName`, so the entry count per
+  base name IS the expected copy count — and the code already compares them
+  whenever a replica column is present. The output says `replicas_checked:
+  false` and why, so the gap is never reported as a pass.
+  *What closes it:* establishing whether this server exposes replica identity
+  under another keyspace (`system:indexes_all` is the candidate to check, NOT
+  to assume) and, if so, adding it as the replica source. Until somebody
+  measures that, a fixture whose source carried replicas can be satisfied by a
+  cluster with fewer — which changes failover behaviour and read throughput,
+  quietly, in exactly the kind of environment a fixture exists to reproduce
+  faithfully.
+- **`capella_fixture_export` is annotated `readOnlyHint=True` and writes files.**
+  Read-only with respect to the CLUSTER, which is what the hint is about, but a
+  caller reading the annotation alone would not expect a filesystem write. Decide
+  deliberately rather than leave it as an accident.

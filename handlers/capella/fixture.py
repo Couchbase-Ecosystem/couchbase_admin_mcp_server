@@ -29,9 +29,19 @@ There is no single export endpoint on Capella, no bulk export, no bulk-get and n
 DCP over HTTP. A fixture is assembled from:
 
   Data API        POST /_p/query/query/service            SQL++ passthrough; the export engine
+                  EVERY EXPORTED COLLECTION NEEDS AN INDEX. SQL++ cannot serve a
+                  WHERE against an unindexed collection -- error 4000, "No index
+                  available on keyspace". travel-sample ships without one on a
+                  fresh Capella cluster, so this bites on the first real export.
+                  Create a primary index (and consider dropping it afterwards).
                   GET  /_p/fts/api/bucket/{b}/scope/{s}/index[/{i}]   Search definitions out
                   PUT  /_p/fts/api/bucket/{b}/scope/{s}/index/{i}     Search definitions in
-                  base https://{clusterId}.data.cloud.couchbase.com
+                  base FROM capella_data_api_get's `connectionString`, e.g.
+                       https://vn1kiibitcyvwrw.data.cloud.couchbase.com
+                       -- the SHORT connection-string id (the cluster's SDK
+                       string is cb.vn1kiibitcyvwrw.cloud.couchbase.com), NOT
+                       the v4 UUID. Read it; the same call also says whether
+                       the Data API is enabled.
                   auth HTTP Basic, CLUSTER ACCESS credential
 
   v4 Management   queryIndexes/definitions, queryIndexes/buildStatus,
@@ -78,6 +88,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -443,6 +454,150 @@ def _read_manifest(directory: pathlib.Path) -> dict:
     return entry
 
 
+#: Cluster access credential for the DATA API. Not the organization API key.
+#:
+#: TWO CREDENTIALS, AND THEY ARE NOT INTERCHANGEABLE. Everything in v4 --
+#: buckets, scopes, indexes, eventing -- authenticates with the organization API
+#: key as a Bearer token. The Data API authenticates with a CLUSTER ACCESS
+#: credential over HTTP Basic: the thing capella_database_credential_create
+#: makes. An operator who sets only the API key gets a 401 from the Data API and
+#: no hint about which of their two secrets is missing, so this names them.
+_DATA_USER_ENV = "CB_CAPELLA_CLUSTER_USER"
+_DATA_PASSWORD_ENV = "CB_CAPELLA_CLUSTER_PASSWORD"
+
+#: Data API query service path, relative to the connection string.
+_QUERY_PATH = "/_p/query/query/service"
+
+
+def _data_api_base(ids: dict) -> tuple[str, str]:
+    """(base_url, why_not). Reads the connection string from the control plane.
+
+    NOT DERIVED FROM THE CLUSTER ID. This module's docstring claimed the base was
+    https://{clusterId}.data.cloud.couchbase.com, which is the pattern the public
+    docs show -- but a Capella cluster has TWO identifiers, the v4 UUID and the
+    short connection-string id, and the docs do not say which one this is. The
+    provider does not guess either: it reads `connectionString` from
+    GET .../dataAPI, which is empty until the API is enabled and settled.
+
+    So this asks. An empty string is not an error here -- it is the answer
+    "not enabled yet", and the caller is told that rather than being handed a
+    URL that will time out.
+    """
+    from .client import build_path, capella_request
+    from .spec import OPS_BY_NAME
+
+    op = OPS_BY_NAME["capella_data_api_get"]
+    try:
+        status = capella_request(op.method, build_path(op.path, ids))
+    except Exception as exc:
+        return "", f"the Data API status could not be read: {exc}"
+    if not isinstance(status, dict):
+        return "", "the Data API status response was not an object"
+    connection = str(status.get("connectionString") or "")
+    if not connection:
+        state = status.get("state")
+        return "", (
+            f"the Data API is not usable on this cluster: enabled="
+            f"{status.get('enabled')}, state={state!r}, and connectionString is "
+            f"empty. Enable it with capella_data_api_set and wait for the state "
+            f"to settle -- it is asynchronous and takes minutes. An empty "
+            f"connection string is the control plane saying 'not yet', not a "
+            f"lookup failure."
+        )
+    if not connection.startswith("http"):
+        connection = "https://" + connection
+    return connection.rstrip("/"), ""
+
+
+def _data_api_credential() -> tuple[tuple[str, str], str]:
+    """((user, password), why_not) for HTTP Basic against the Data API."""
+    user = (os.environ.get(_DATA_USER_ENV) or "").strip()
+    password = (os.environ.get(_DATA_PASSWORD_ENV) or "").strip()
+    if not user or not password:
+        return ("", ""), (
+            f"no Data API credential. Set {_DATA_USER_ENV} and "
+            f"{_DATA_PASSWORD_ENV} to a CLUSTER ACCESS credential -- the kind "
+            f"capella_database_credential_create issues -- not the organization "
+            f"API key. The Data API uses HTTP Basic and will answer 401 to a "
+            f"Bearer token without saying which secret was wrong.\n"
+            f"The credential also needs the right privileges: data_reader is "
+            f"enough to EXPORT, and an import additionally needs data_writer on "
+            f"the target keyspaces."
+        )
+    return (user, password), ""
+
+
+#: Seconds for one Data API query. DELIBERATELY SHORTER THAN THE MCP CLIENT'S.
+#:
+#: This was 120, and scripts/dump_tool.py allows an MCP call 60 seconds by
+#: default. The client therefore gave up FIRST, every time, and the caller saw
+#: an asyncio TimeoutError traceback from deep inside anyio instead of this
+#: module's own message -- which would have named the allowed-CIDR list, the
+#: credential kind, or whatever the query service actually said.
+#:
+#: The layer that knows WHY must be the layer that fails. 45 leaves room for the
+#: handler to catch its own timeout, write a useful error and return it through
+#: the transport before the client's clock runs out. Raise both together if a
+#: fixture ever needs longer pages -- never this one alone.
+_QUERY_TIMEOUT_SECONDS = 45
+
+
+def _sql_query(base: str, credential: tuple[str, str], statement: str,
+               parameters: dict | None = None,
+               timeout: int = _QUERY_TIMEOUT_SECONDS) -> dict:
+    """One SQL++ statement over the Data API. Raises RuntimeError with the body.
+
+    Errors are returned with their FULL text. A query service refusal names the
+    keyspace and the reason -- "Keyspace not found", "User does not have
+    credentials" -- and truncating that turns a fixable problem into a mystery.
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+
+    payload = {"statement": statement}
+    if parameters:
+        payload.update(parameters)
+    data = json.dumps(payload).encode()
+    request = urllib.request.Request(base + _QUERY_PATH, data=data, method="POST")
+    token = base64.b64encode(f"{credential[0]}:{credential[1]}".encode()).decode()
+    request.add_header("Authorization", f"Basic {token}")
+    request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        hint = ""
+        if exc.code == 401:
+            hint = (
+                f" -- 401 from the Data API almost always means the wrong KIND "
+                f"of credential. It wants a cluster access credential over HTTP "
+                f"Basic ({_DATA_USER_ENV}/{_DATA_PASSWORD_ENV}), not the "
+                f"organization API key."
+            )
+        elif exc.code in (403, 0) or "timed out" in body.lower():
+            hint = (
+                " -- check the cluster's allowed CIDR list. A Data API client "
+                "is subject to it exactly like any other data-plane client, and "
+                "a fixture cluster allowlisted to 192.0.2.1/32 (RFC 5737 "
+                "documentation space) grants nothing to anybody."
+            )
+        raise RuntimeError(f"Data API {exc.code}: {body[:900]}{hint}") from exc
+    except Exception as exc:
+        raise RuntimeError(
+            f"Data API unreachable at {base} after {timeout}s: {exc}\n"
+            f"A TIMEOUT here is almost always the allowed-CIDR list: a data-plane "
+            f"client that is not allowlisted is dropped rather than refused, so "
+            f"it looks like a hang and not a rejection. Check "
+            f"capella_allowed_cidrs_list includes THIS machine's egress address "
+            f"-- and note a new entry can take a minute to take effect, so an "
+            f"immediate retry after adding one can still time out.\n"
+            f"A CONNECTION RESET instead usually means TLS interception; a "
+            f"corporate proxy cannot sit in front of a Data API call."
+        ) from exc
+
+
 #: Returned by every handler until the probe run lands. Deliberately an error
 #: response rather than a raised exception: the handler contract requires that no
 #: handler raises on empty arguments, and deliberately not a plausible empty
@@ -505,23 +660,28 @@ def _export(args: dict) -> list[TextContent]:
     if not fixture_id:
         return err("fixture_id is required", tool="capella_fixture_export")
 
-    if args.get("include_data", True):
-        return err(
-            "include_data=true is NOT YET IMPLEMENTED, and this refuses rather "
-            "than exporting an empty payload and calling it a success.\n"
-            "What is missing is a credential and a cluster setting, not a "
-            "decision: documents come from SQL++ over the DATA API "
-            "(https://{clusterId}.data.cloud.couchbase.com), which needs a "
-            "CLUSTER ACCESS credential -- HTTP Basic, not the organization API "
-            "key -- and needs enableDataApi set on the cluster via "
-            "capella_cluster_update. Search index definitions come from the same "
-            "place.\n"
-            "Pass include_data=false to export structure, GSI definitions and "
-            "eventing functions now. That is a complete, verifiable artifact for "
-            "any target that generates its own data.",
-            tool="capella_fixture_export",
-            fixture_id=fixture_id,
-        )
+    include_data = bool(args.get("include_data", True))
+
+    # NO BLANKET REFUSAL HERE ANY MORE. This used to stop every include_data=true
+    # call with "NOT YET IMPLEMENTED"; the documents are implemented below.
+    #
+    # THE BASE URL, MEASURED ON TWO CLUSTERS 2026-09-14:
+    #     https://cpvbgft3fwgwy3eu.data.cloud.couchbase.com
+    #     https://vn1kiibitcyvwrw.data.cloud.couchbase.com
+    # The second cluster's SDK connection string is
+    # cb.vn1kiibitcyvwrw.cloud.couchbase.com, so the id in the Data API host is
+    # the SHORT connection-string id -- which is what the public docs mean by
+    # "{clusterId}" -- and NOT the v4 UUID (3c5e8191-...) that this module used
+    # to interpolate. That old base could never have resolved.
+    #
+    # It is still read from capella_data_api_get rather than assembled from the
+    # cluster document, for two reasons: the same call reports whether the API
+    # is enabled at all, and a string the control plane hands you cannot drift
+    # from a rule inferred off two examples.
+    #
+    # The refusal now happens where the fact is known: if the Data API is off,
+    # or no cluster credential is configured, the document phase says which of
+    # the two it is and writes nothing.
 
     try:
         org, project, _policy = _env._resolve_context(args)
@@ -630,6 +790,136 @@ def _export(args: dict) -> list[TextContent]:
         warnings.append(f"eventing functions could not be read: {exc}")
         eventing = []
 
+    # ── documents ────────────────────────────────────────────────────────
+    data_files: list[dict] = []
+    document_total = 0
+    documents_ok = False
+    if include_data:
+        base, why = _data_api_base(ids)
+        credential, cred_why = _data_api_credential()
+        blocker = why or cred_why
+        if blocker:
+            # REFUSE, DO NOT DEGRADE. Falling back to a structure-only export
+            # here would produce a fixture that looks like a dataset and holds
+            # nothing -- which this module's docstring calls the worst outcome
+            # available. The caller asked for documents; if they cannot be had,
+            # say so and write nothing.
+            return err(
+                f"include_data=true was requested and the documents cannot be "
+                f"read.\n{blocker}\n"
+                f"Pass include_data=false for a structure-only fixture, which is "
+                f"a complete artifact in its own right -- it just is not a "
+                f"dataset, and its manifest says so.",
+                tool="capella_fixture_export",
+            )
+
+        page_size = int(args.get("page_size") or 1000)
+        xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
+        wanted_keyspaces = {k for k in (args.get("keyspaces") or []) if k}
+        data_dir = root / "data"
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return err(f"could not create {data_dir}: {exc}",
+                       tool="capella_fixture_export")
+
+        for bucket in structure:
+            for scope in bucket.get("scopes") or []:
+                for collection in scope.get("collections") or []:
+                    keyspace = (f"{bucket['name']}.{scope['name']}."
+                                f"{collection['name']}")
+                    if wanted_keyspaces and keyspace not in wanted_keyspaces:
+                        continue
+                    select = ["META().id AS id", "META().expiration AS exp", "d.*"]
+                    for name in xattrs:
+                        select.append(XATTR_SELECT.format(name=name))
+                    statement = (
+                        f"SELECT {', '.join(select)} "
+                        f"FROM `{bucket['name']}`.`{scope['name']}`."
+                        f"`{collection['name']}` AS d "
+                        f"WHERE META().id > $last_key "
+                        f"ORDER BY META().id LIMIT {page_size}"
+                    )
+                    target = data_dir / f"{keyspace}.jsonl"
+                    last_key = ""
+                    written = 0
+                    try:
+                        with target.open("w", encoding="utf-8") as handle:
+                            while True:
+                                result = _sql_query(
+                                    base, credential, statement,
+                                    {"$last_key": last_key},
+                                )
+                                rows = result.get("results") or []
+                                if not rows:
+                                    break
+                                for row in rows:
+                                    doc_id = row.pop("id", None)
+                                    expiry = row.pop("exp", 0)
+                                    carried = {
+                                        key[len("xattr_"):]: row.pop(key)
+                                        for key in list(row)
+                                        if key.startswith("xattr_")
+                                    }
+                                    handle.write(json.dumps({
+                                        "id": doc_id,
+                                        "exp": expiry,
+                                        "doc": row,
+                                        "xattrs": carried,
+                                    }) + "\n")
+                                    written += 1
+                                    last_key = doc_id or last_key
+                                if len(rows) < page_size:
+                                    break
+                    except RuntimeError as exc:
+                        # AN UNINDEXED COLLECTION IS A PRECONDITION FAILURE, NOT
+                        # A BUG, and it is the first thing a real export hits.
+                        # SQL++ cannot read a collection with no index at all:
+                        # the key-range page is a SELECT with a WHERE, and N1QL
+                        # needs an index to serve one. travel-sample's own
+                        # collections have none on a fresh Capella cluster, so
+                        # the very first document export fails here.
+                        remedy = ""
+                        if "No index available" in str(exc) or "4000" in str(exc):
+                            remedy = (
+                                f"\nTHE COLLECTION HAS NO INDEX. Create one and "
+                                f"re-run:\n"
+                                f"  capella_query_index_manage with\n"
+                                f"  CREATE PRIMARY INDEX ON `{keyspace}`\n"
+                                f"A primary index is the general answer and it is "
+                                f"not free -- it indexes every key in the "
+                                f"collection. On a large collection prefer an "
+                                f"existing secondary index that covers META().id, "
+                                f"or create the primary index, export, and drop "
+                                f"it again. This tool will NOT create one for "
+                                f"you: building an index on somebody's cluster "
+                                f"is a capacity decision, not a side effect of "
+                                f"reading."
+                            )
+                        return err(
+                            f"export failed on {keyspace} after {written} "
+                            f"document(s): {exc}{remedy}\n"
+                            f"The partial file was left at {target} so the "
+                            f"failure can be inspected; the manifest was NOT "
+                            f"written, so nothing downstream will mistake this "
+                            f"for a complete fixture.",
+                            tool="capella_fixture_export",
+                        )
+                    if written == 0:
+                        # An empty collection is legitimate. The file is removed
+                        # so the manifest does not name a data file holding
+                        # nothing, which reads as a failed export.
+                        target.unlink(missing_ok=True)
+                        continue
+                    data_files.append({
+                        "path": f"data/{target.name}",
+                        "keyspace": keyspace,
+                        "sha256": _sha256_file(target),
+                        "document_count": written,
+                    })
+                    document_total += written
+        documents_ok = True
+
     finished = datetime.now(timezone.utc)
     manifest = {
         "schema": MANIFEST_SCHEMA,
@@ -645,19 +935,34 @@ def _export(args: dict) -> list[TextContent]:
         "structure": structure,
         "gsi_definitions": indexes,
         "eventing_functions": eventing,
-        "files": [],
-        "document_count": 0,
+        "files": data_files,
+        "document_count": document_total,
+        "payload_sha256": hashlib.sha256(
+            "".join(sorted(f["sha256"] for f in data_files)).encode()
+        ).hexdigest() if data_files else None,
+        "user_xattrs": [str(x) for x in (args.get("user_xattrs") or [])],
         # FIDELITY IS WHAT ACTUALLY HAPPENED, not what was asked for. A consumer
         # reading this cannot mistake a shape fixture for a dataset, and that is
         # the single most important field in the manifest.
         "fidelity": {
-            "documents": False,
+            "documents": documents_ok,
             "search_definitions": False,
-            "xattrs": False,
+            # Only the xattrs the caller NAMED. META().xattrs is not enumerable,
+            # so anything unlisted was dropped and the manifest must not imply
+            # otherwise.
+            "xattrs": bool(args.get("user_xattrs")) and documents_ok,
             "structure": True,
             "gsi_definitions": bool(indexes) or not warnings,
             "eventing_functions": True,
             "note": (
+                (
+                    "Documents exported over the Data API. Search index "
+                    "definitions are still NOT present. CAS is not preserved by "
+                    "any documented Capella API, and in server mode system "
+                    "xattrs (including _sync) are not readable, so a "
+                    "mobile-synced dataset needs mode=mobile."
+                )
+                if documents_ok else
                 "Structure-only export. Documents, Search index definitions and "
                 "xattrs are NOT present: they require the Data API and a cluster "
                 "access credential. This fixture describes a shape, not a dataset."
@@ -685,7 +990,8 @@ def _export(args: dict) -> list[TextContent]:
                            for b in structure for sc in b.get("scopes") or []),
         "gsi_definitions": len(indexes),
         "eventing_functions": len(eventing),
-        "documents": 0,
+        "documents": document_total,
+        "data_files": len(data_files),
         "fidelity": manifest["fidelity"],
     }
     if warnings:
@@ -850,14 +1156,306 @@ def _list(args: dict) -> list[TextContent]:
     return ok(result)
 
 
+def _split_keyspace(keyspace: str) -> tuple[str, str, str] | None:
+    """`bucket.scope.collection` -> its three parts, or None if it is not three.
+
+    rsplit, NOT split. A Couchbase BUCKET NAME MAY CONTAIN DOTS -- the name
+    charset allows them -- while scope and collection names may not. Splitting
+    left-to-right therefore mangles a bucket called `my.bucket`; splitting from
+    the right takes the last two separators, which are always the scope and
+    collection ones. This is not a hypothetical: the fixture manifest stores the
+    keyspace as a single joined string, so this function is the only thing
+    standing between a dotted bucket name and a query against a keyspace that
+    does not exist.
+    """
+    parts = keyspace.rsplit(".", 2)
+    if len(parts) != 3 or not all(parts):
+        return None
+    return parts[0], parts[1], parts[2]
+
+
+#: Trailing " (replica 1)" on a control-plane index definition's indexName.
+#:
+#: A REPLICA IS NOT A SEPARATE INDEX. capella_query_index_definitions_list
+#: enumerates every replica as its own entry -- same `definition` string,
+#: verbatim, with the replica number appended to `indexName`:
+#:
+#:     {"indexName": "sg_users_x1",              "definition": "CREATE INDEX ..."}
+#:     {"indexName": "sg_users_x1 (replica 1)",  "definition": "CREATE INDEX ..."}
+#:
+#: system:indexes reports the base name only, so comparing the two registers
+#: name-for-name reported every replica as an index that does not exist on the
+#: cluster. Measured 2026-09-14 against fixtures/mcptest-data-1, whose four
+#: recorded definitions are two indexes each carrying num_replica 1; the first
+#: run of the cluster check called two of the four missing, which was wrong and
+#: was this tool's fault rather than the cluster's.
+_REPLICA_SUFFIX = re.compile(r"\s*\(replica\s+\d+\)\s*$")
+
+
+def _base_index_name(name: str) -> str:
+    """An index definition's indexName with any replica suffix removed."""
+    return _REPLICA_SUFFIX.sub("", name).strip()
+
+
+def _cluster_checks(manifest: dict, args: dict) -> dict:
+    """Compare a live cluster against the fixture that claims to describe it.
+
+    IMPLEMENTED 2026-09-14. This used to refuse, and the refusal was honest at
+    the time: it needed the Data API, which did not exist in this module yet.
+    It does now, so the refusal became the only thing standing between a fixture
+    and the question that actually matters -- is the cluster the thing the
+    fixture says it is?
+
+    TWO CHECKS, both decidable, neither of them a heuristic:
+
+      * DOCUMENT COUNTS. For every data file the manifest names, COUNT(*) on the
+        live keyspace must equal the file's recorded document_count. This is the
+        check that catches the failure mode the whole fixture design exists to
+        prevent: an import that ran, reported success, and loaded a subset.
+
+      * INDEX STATE. Every index the fixture recorded must exist on the cluster
+        AND be online. An index whose definition exists but is still building
+        makes the cluster look slow in a way that reads as a Couchbase
+        performance problem -- this module's own import docstring calls that
+        gate not optional, so verify has to be able to check it.
+
+    Index state is read with ONE `system:indexes` query rather than a
+    capella_query_index_build_status call per index. That is deliberate: the
+    per-index control-plane call needs the index's bucket as a required query
+    parameter, which means knowing the shape of the definition objects the
+    manifest stored -- and those come straight from a control-plane payload this
+    module does not own. system:indexes reports name, keyspace and state
+    together, from the data plane the counts already came from, and costs one
+    round trip regardless of index count.
+
+    A MISMATCH IS A PROBLEM, NOT A WARNING, consistent with the fixture-side
+    checks: the caller gets `verified: false` and the specific numbers.
+    """
+    from . import environment as _env  # local import: avoids a package cycle
+
+    report: dict[str, Any] = {"performed": False, "problems": []}
+    problems: list[str] = report["problems"]
+
+    cluster_id = str(args.get("cluster_id") or "").strip()
+    try:
+        org, project, _policy = _env._resolve_context(args)
+    except Exception as exc:
+        report["blocked"] = (
+            f"the organization/project context could not be resolved: {exc}"
+        )
+        return report
+
+    ids = {"organization_id": org, "project_id": project, "cluster_id": cluster_id}
+    base, why = _data_api_base(ids)
+    credential, cred_why = _data_api_credential()
+    blocker = why or cred_why
+    if blocker:
+        # NOT A PARTIAL PASS. The fixture-side result stands on its own, but the
+        # cluster question was asked and was not answered, and saying so is the
+        # whole point. Silence here would read as agreement.
+        report["blocked"] = (
+            f"the cluster could not be checked.\n{blocker}\n"
+            f"The fixture-side result is unaffected and complete; it simply does "
+            f"not speak about this cluster."
+        )
+        return report
+
+    report["cluster_id"] = cluster_id
+    report["performed"] = True
+
+    # ── document counts ──────────────────────────────────────────────────
+    keyspace_checks: list[dict] = []
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        files = []
+    for record in files:
+        if not isinstance(record, dict):
+            continue
+        keyspace = str(record.get("keyspace") or "")
+        expected = record.get("document_count")
+        if not keyspace:
+            problems.append(
+                f"{record.get('path')!r} records no keyspace, so the cluster "
+                f"cannot be checked against it"
+            )
+            continue
+        parts = _split_keyspace(keyspace)
+        if parts is None:
+            problems.append(
+                f"{keyspace!r} is not a bucket.scope.collection keyspace"
+            )
+            continue
+        bucket, scope, collection = parts
+        check: dict[str, Any] = {"keyspace": keyspace, "expected": expected}
+        try:
+            result = _sql_query(
+                base, credential,
+                f"SELECT COUNT(*) AS n FROM `{bucket}`.`{scope}`.`{collection}`",
+            )
+        except RuntimeError as exc:
+            check.update(ok=False, error=str(exc))
+            problems.append(f"{keyspace} could not be counted: {exc}")
+            keyspace_checks.append(check)
+            continue
+        rows = result.get("results") or []
+        actual = rows[0].get("n") if rows and isinstance(rows[0], dict) else None
+        check["actual"] = actual
+        if isinstance(expected, int) and actual != expected:
+            check["ok"] = False
+            problems.append(
+                f"{keyspace} holds {actual} documents on the cluster, the "
+                f"fixture holds {expected}"
+            )
+        else:
+            check["ok"] = True
+        keyspace_checks.append(check)
+    report["keyspaces"] = keyspace_checks
+
+    # ── index state ────────────────────────────────────────────
+    definitions = manifest.get("gsi_definitions")
+    if not isinstance(definitions, list):
+        definitions = []
+
+    # Recorded indexes, COLLAPSED BY BASE NAME. The number of entries sharing a
+    # base name is how many copies the control plane enumerated: the index
+    # itself plus one per replica.
+    recorded: dict[str, int] = {}
+    unnamed = 0
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            unnamed += 1
+            continue
+        raw = str(definition.get("indexName") or definition.get("name") or "")
+        name = _base_index_name(raw)
+        if not name:
+            unnamed += 1
+            continue
+        recorded[name] = recorded.get(name, 0) + 1
+
+    # `idx.*` rather than a named column list: it returns whatever fields this
+    # server version actually carries, so the replica handling below can DETECT
+    # a replica column instead of assuming one exists. A SELECT naming a column
+    # the server does not have fails the entire query.
+    try:
+        index_rows = (_sql_query(
+            base, credential, "SELECT idx.* FROM system:indexes AS idx",
+        ).get("results") or [])
+    except RuntimeError as exc:
+        report["indexes"] = {"read": False, "error": str(exc)}
+        problems.append(
+            f"index state could not be read from system:indexes: {exc}\n"
+            f"A cluster whose index states are unknown must not be reported "
+            f"ready for measurement."
+        )
+        index_rows = None
+
+    if index_rows is not None:
+        on_cluster: dict[str, list[str]] = {}
+        replica_field = ""
+        for row in index_rows:
+            if not isinstance(row, dict):
+                continue
+            name = _base_index_name(str(row.get("name") or ""))
+            if not name:
+                continue
+            on_cluster.setdefault(name, []).append(str(row.get("state") or ""))
+            if not replica_field:
+                for candidate in ("replica_id", "replicaId"):
+                    if candidate in row:
+                        replica_field = candidate
+                        break
+
+        not_online = [
+            {"name": name, "state": state}
+            for name, states in sorted(on_cluster.items())
+            for state in states
+            if state.lower() != "online"
+        ]
+
+        missing: list[str] = []
+        for name, copies in sorted(recorded.items()):
+            states = on_cluster.get(name)
+            if not states:
+                missing.append(name)
+                problems.append(
+                    f"index {name} is recorded in the fixture and does not "
+                    f"exist on the cluster"
+                )
+                continue
+            offline = [s for s in states if s.lower() != "online"]
+            if offline:
+                problems.append(
+                    f"index {name} is {', '.join(offline)}, not online -- the "
+                    f"cluster is not yet performance-comparable to the "
+                    f"fixture's source"
+                )
+
+        details: dict[str, Any] = {
+            "read": True,
+            "rows_on_cluster": len(index_rows),
+            "distinct_on_cluster": len(on_cluster),
+            "recorded_in_fixture": len(recorded),
+            "recorded_definition_entries": len(definitions),
+            "missing_on_cluster": missing,
+            "not_online": not_online,
+        }
+
+        # REPLICA COUNTS ARE REPORTED ONLY IF THE SERVER ACTUALLY NAMES THEM.
+        # Whether system:indexes carries a replica column varies by version, so
+        # this looks for one rather than assuming. When there is none, the gap
+        # is stated: an unchecked property described as checked is exactly the
+        # false green this tool exists to prevent.
+        if replica_field:
+            mismatched = [
+                {"name": name, "expected_copies": copies,
+                 "copies_on_cluster": len(on_cluster.get(name) or [])}
+                for name, copies in sorted(recorded.items())
+                if on_cluster.get(name) and len(on_cluster[name]) != copies
+            ]
+            details["replica_field"] = replica_field
+            details["replica_mismatches"] = mismatched
+            for entry in mismatched:
+                problems.append(
+                    f"index {entry['name']} has {entry['copies_on_cluster']} "
+                    f"cop(ies) on the cluster, the fixture recorded "
+                    f"{entry['expected_copies']} (the index plus its replicas)"
+                )
+        else:
+            details["replicas_checked"] = False
+            details["replicas_note"] = (
+                "system:indexes on this cluster carries no replica column, so "
+                "replica COUNT was not verified -- only that each recorded "
+                "index exists and is online. A fixture whose source carried "
+                "replicas can therefore be satisfied by a cluster with fewer, "
+                "which changes failover behaviour and read throughput."
+            )
+
+        if unnamed:
+            # NOT SILENTLY SKIPPED. An unnameable definition is a gap in what
+            # this check covers, and a coverage gap reported as a pass is the
+            # failure this module exists to avoid.
+            details["unnamed_definitions"] = unnamed
+            problems.append(
+                f"{unnamed} recorded index definition(s) carry no recognisable "
+                f"name, so their state on the cluster was NOT checked"
+            )
+        if not_online and not recorded:
+            problems.append(
+                f"{len(not_online)} index(es) on the cluster are not online"
+            )
+        report["indexes"] = details
+
+    report["verified"] = not problems
+    return report
+
+
 def _verify(args: dict) -> list[TextContent]:
     """Verify a fixture, and optionally a cluster imported from it.
 
-    IMPLEMENTED 2026-09-14 for the FIXTURE-ALONE case. The cluster case still
-    refuses, and says so specifically rather than pretending the whole tool is
-    unavailable: verifying a cluster needs the Data API for document counts and
-    capella_query_index_build_status for index states, which is the same work
-    _import is waiting on.
+    IMPLEMENTED 2026-09-14, both cases. Fixture-alone needs nothing but the
+    filesystem. The cluster case additionally needs the Data API and a cluster
+    access credential, and is implemented in _cluster_checks below; when those
+    are not configured it reports blocked rather than quietly passing.
 
     Fixture alone, all of it local and all of it decidable:
       * the manifest parses and declares the schema this module writes
@@ -971,14 +1569,21 @@ def _verify(args: dict) -> list[TextContent]:
         )
 
     if args.get("cluster_id"):
-        result["cluster_verification"] = (
-            "NOT PERFORMED. Verifying a cluster against a fixture needs per-"
-            "keyspace document counts over the Data API and index states from "
-            "capella_query_index_build_status; neither is implemented yet. The "
-            "fixture-side result above is complete and stands on its own -- it "
-            "is not a partial answer to the cluster question, it is a full "
-            "answer to a different one."
-        )
+        cluster = _cluster_checks(manifest, args)
+        result["cluster_verification"] = cluster
+        # THE TOP-LEVEL VERDICT COVERS BOTH QUESTIONS WHEN BOTH WERE ASKED.
+        # A caller that passed cluster_id and reads verified:true has been told
+        # the cluster matches; leaving the flag green while the cluster check
+        # failed would be the exact false green this tool exists to prevent.
+        if cluster.get("problems"):
+            result["verified"] = False
+            problems.extend(cluster["problems"])
+        elif not cluster.get("performed"):
+            result["verified"] = False
+            problems.append(
+                "cluster_id was supplied and the cluster was NOT checked: "
+                + str(cluster.get("blocked") or "reason unrecorded")
+            )
     return ok(result)
 
 

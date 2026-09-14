@@ -356,6 +356,7 @@ def capella_request(
     *,
     params: dict | None = None,
     body: Any | None = None,
+    content_type: str = "application/json",
 ) -> Any:
     """Execute one Capella v4 call.
 
@@ -373,8 +374,41 @@ def capella_request(
     }
     payload: bytes | None = None
     if body is not None:
-        headers["Content-Type"] = "application/json"
-        payload = json.dumps(body).encode()
+        headers["Content-Type"] = content_type
+        if content_type == "application/javascript":
+            # RAW SOURCE, NOT JSON. TWO OPERATIONS NEED THIS AND BOTH WERE BROKEN.
+            #
+            # PUT .../appEndpoints/{keyspace}/accessControlFunction takes the
+            # JavaScript itself as the request body, with Content-Type
+            # application/javascript. json.dumps() would wrap it in quotes and
+            # escape it, and the server then finds no source where it expects
+            # one. It reports that as:
+            #
+            #   400 collection "x" sync function error: invalid javascript
+            #       syntax: JavaScript source does not evaluate to a function
+            #
+            # which reads like a verdict on the JavaScript and is not one. That
+            # message cost 43 measured attempts across five body vocabularies,
+            # four source forms and three routes before the provider's own
+            # client settled it (internal/api/client.go, 2026-09-14):
+            #
+            #   // json.Marshal will add escape characters to the string payload
+            #   // which makes it invalid javascript, this is a workaround
+            #   requestBody = []byte(js)
+            #
+            # The discriminator that proved the message was boilerplate: text
+            # that is not JavaScript at all drew the identical error, so nothing
+            # was ever being compiled.
+            if not isinstance(body, str):
+                raise CapellaError(
+                    "content_type application/javascript requires the body to be "
+                    f"the source as a string, not {type(body).__name__}. Wrapping "
+                    "it in an object is what made this operation fail for months.",
+                    status=None,
+                )
+            payload = body.encode()
+        else:
+            payload = json.dumps(body).encode()
 
     timeout = get_env_int("CAPELLA_HTTP_TIMEOUT", 30)
     max_attempts = max(1, get_env_int("CAPELLA_HTTP_RETRIES", 3))

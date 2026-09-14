@@ -50,8 +50,13 @@ Claude-Session: https://claude.ai/code/session_01Tgs9tim9N1Lncch4fHv7Mg
 $groups = @(
     @{
         Name  = 'Service path defects'
+        # encryption.py belongs HERE and not with the Capella spec work: KMIP is
+        # the same defect as the Search and Eventing prefixes -- a handler
+        # pointed at a REST path the server does not serve, answering 404 on
+        # every cluster, for as long as the tool has existed.
         Paths = @('handlers/search_admin.py', 'handlers/eventing.py',
-                  'handlers/backup.py', 'tests/test_service_proxy_paths.py',
+                  'handlers/backup.py', 'handlers/encryption.py',
+                  'tests/test_service_proxy_paths.py',
                   'tests/test_backup_paths.py')
         Message = @'
 fix: service REST paths that 404 against every cluster
@@ -258,7 +263,7 @@ session.
     @{
         Name  = 'Capella surface: a bootstrap trap and a retraction'
         Paths = @('handlers/capella/spec.py', 'handlers/capella/spec_pending.py',
-                  'handlers/capella/__init__.py')
+                  'handlers/capella/__init__.py', 'handlers/capella/client.py')
         Message = @'
 spec: cloud snapshot reads, and a retracted transcription
 

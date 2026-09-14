@@ -58,7 +58,15 @@ class Recorder:
         self.clusters = clusters if clusters is not None else []
         self.requests: list[tuple[str, str]] = []
 
-    def request(self, method, path, *, params=None, body=None):
+# THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
+#
+# capella_request grew a content_type parameter on 2026-09-14, when the App
+# Endpoint access control function turned out to want raw JavaScript rather than
+# JSON. Every stub of it here is a test double of that signature, so each one
+# grew the same keyword with the same default. Five tests in this file failed
+# with "request() got an unexpected keyword argument 'content_type'" until they
+# did -- a signature mismatch in a double, not a defect in the code under test.
+    def request(self, method, path, *, params=None, body=None, content_type="application/json"):
         self.requests.append((method, path))
         # A single-cluster GET
         if method == "GET" and "/clusters/" in path:
@@ -285,7 +293,7 @@ def test_f5_park_is_allowed_on_a_deletion_protected_cluster(monkeypatch):
     the cost-saving operation would push operators to switch protection off."""
     calls: list[tuple[str, str]] = []
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         calls.append((method, path))
         # The ownership re-fetch must receive the full cluster object; returning a
         # bare {"status": "ok"} would (correctly) make the guardrail fail closed.
@@ -312,7 +320,7 @@ def test_f5_teardown_is_still_refused_on_a_deletion_protected_cluster(monkeypatc
     """A read (the ownership re-fetch) is expected; a MUTATION is not."""
     calls: list[tuple[str, str]] = []
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         calls.append((method, path))
         if method != "GET":
             raise AssertionError(f"teardown issued {method} on a protected cluster")
@@ -348,7 +356,7 @@ def test_f14_protection_visible_only_on_the_individual_get_is_honored(monkeypatc
     full = {"id": "c1", "name": "mcptest-ios-4821", "deletionProtection": True}
     calls: list[tuple[str, str]] = []
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         calls.append((method, path))
         if method == "GET":
             return full
@@ -390,7 +398,7 @@ def test_f15_ensure_refuses_to_adopt_a_protected_cluster(monkeypatch):
         "description": guardrails.build_marker("ios-4821"),
     }
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method != "GET":
             raise AssertionError(f"ensure issued {method} on a protected cluster")
         return existing
@@ -433,7 +441,7 @@ def test_f15_ensure_never_touches_an_unprefixed_cluster_of_the_same_env_name(
     unmanaged = {"id": "c1", "name": "ios-4821", "currentState": "healthy"}
     calls: list[tuple[str, str]] = []
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         calls.append((method, path))
         return {"id": "new-cluster", "status": "ok"}
 
@@ -494,7 +502,7 @@ def test_f16_ceiling_counts_every_allowlisted_project(monkeypatch):
                     data = clusters
         return {"data": data, "itemCount": len(data), "truncated": False}
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method != "GET":
             raise AssertionError("a third environment must not be created")
         return {"status": "ok"}
@@ -594,7 +602,7 @@ def test_sensitive_response_is_redacted_before_it_reaches_the_caller(monkeypatch
     which undoes nothing and leaks the stub into every later test in the session.
     """
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method == "GET":
             return MANAGED
         return {"id": "cred-1", "name": "app", "password": "SuperSecret123!"}
@@ -836,7 +844,7 @@ def test_f17_refetch_fails_closed_when_the_get_is_unusable(monkeypatch):
     guardrail would then judge deletionProtection from a summary that may omit it."""
     summary = {"id": "c1", "name": "mcptest-ios-4821"}
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method == "GET":
             return {"status": "ok"}  # 2xx with no cluster fields
         raise AssertionError(f"{method} issued without verified ownership")
@@ -857,7 +865,7 @@ def test_f17_refetch_fails_closed_when_the_get_is_unusable(monkeypatch):
 
 
 def test_f17_refetch_fails_closed_when_the_listing_has_no_id(monkeypatch):
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         raise AssertionError(f"{method} issued without a cluster id")
 
     def listing(path, *, params=None, page_size=None, max_items=None):
@@ -965,7 +973,7 @@ def test_f19_reap_refuses_when_marker_and_cluster_name_disagree(monkeypatch):
         "currentState": "healthy",
     }
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method == "GET":
             return victim if "cluster-B" in path else tampered
         raise AssertionError(f"{method} {path} — nothing should be deleted")
@@ -1000,7 +1008,7 @@ def test_f19_normal_reap_still_works_when_marker_matches(monkeypatch):
     }
     deleted: list[str] = []
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method == "GET":
             return cluster
         if method == "DELETE":
@@ -1101,7 +1109,7 @@ def test_f22_reap_refuses_an_entry_with_no_pinned_cluster_id(monkeypatch):
         "currentState": "healthy",
     }  # deliberately no "id"
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method != "GET":
             raise AssertionError(f"{method} issued for an unpinned reap target")
         return entry
@@ -1177,7 +1185,7 @@ def test_f23_dry_run_and_real_run_agree_about_what_is_reapable(monkeypatch):
         "currentState": "healthy",
     }
 
-    def request(method, path, *, params=None, body=None):
+    def request(method, path, *, params=None, body=None, content_type="application/json"):
         if method == "GET":
             return pinned
         return {"status": "ok"}

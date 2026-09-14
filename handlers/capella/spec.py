@@ -141,6 +141,30 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
         "takes it raw as application/javascript. The dedicated path's failure was "
         "never about the body shape; see handlers/capella/client.py."
     ),
+    "capella_cluster_onoff_schedule_delete": (
+        "2026-09-14: DELETE answered 204 and the schedule created earlier the "
+        "same night was gone. Recorded here rather than in LIVE_VERIFIED "
+        "because a 2xx on a write may not go in that register.\n"
+        "It was deleted because it was WORKING: a 'custom' day is off outside "
+        "its boundaries, so the fixture cluster powered down and every write to "
+        "it was refused with 422 'Temporarily unavailable while the Cluster is "
+        "in the Turning On state' until it came back.\n"
+        "WHICH DRIVER SENT THAT 204 WAS NOT RECORDED AT THE TIME, and this "
+        "entry will not invent one. Two paths could have: the cleanup step in "
+        "scripts/probe_onoff_schedule.py --perform, which sends DELETE when the "
+        "cluster had no prior schedule, or a deliberate later call. Naming the "
+        "likelier of the two would be a reconstruction, and a register that "
+        "accepts reconstructions is worth nothing.\n"
+        "RE-CONFIRMED 2026-09-14 through scripts/dump_tool.py "
+        "capella_cluster_onoff_schedule_delete --perform --allow-destructive: "
+        "404 with Capella code 11040, 'Returned from the API when a database "
+        "does not have an existing On/Off schedule'. That is a SEMANTIC 404 "
+        "from a real handler -- it names the resource's own precondition rather "
+        "than reporting an unrouted path -- so it re-proves route and method "
+        "through the MCP surface, and independently confirms the schedule is "
+        "gone and the cluster is as it was found. It is not evidence of the "
+        "delete SUCCEEDING, which is why the 204 above still carries that."
+    ),
     "capella_cluster_onoff_schedule_set": (
         "2026-09-14, scripts/probe_onoff_schedule.py --perform. PERFORMED: "
         "seven 'custom' days, from {hour 0, minute 0} to {hour 23, minute 30}, "
@@ -379,6 +403,24 @@ LIVE_VERIFIED: dict[str, str] = {
     # register -- see test_no_write_is_recorded_with_a_success_status -- so the
     # 204 lives in LIVE_VERIFIED_OUT_OF_BAND and this stays the probe's answer.
     "capella_cluster_onoff_schedule_set": "405",
+    "capella_data_api_get": "200",
+    # 400 'body contains incorrect JSON type for field "enableDataApi"', from a
+    # PUT whose enableDataApi was a string, 2026-09-14. Route and method proven,
+    # nothing changed -- a BODY refusal, which is what this register wants.
+    #
+    # An earlier attempt the same night answered 422 "Temporarily unavailable
+    # while the Cluster is in the Turning On state" instead. That is a STATE
+    # refusal and proves less: it says the route matched, not that the body was
+    # read. The cluster was mid-cycle because of the on/off schedule the fixture
+    # had just created -- worth knowing, because for those minutes every write to
+    # that cluster is refused for a reason that has nothing to do with the write.
+    #
+    # THE FIELD NAME DISPUTE IS SETTLED, and it was never a dispute. The docs say
+    # enableDataAPI, the provider's struct says enableDataApi, and BOTH spellings
+    # drew one error naming `enableDataApi`: Go's encoding/json matches keys
+    # case-insensitively, so they reach the same field. Use the provider's
+    # spelling; neither is wrong at the wire.
+    "capella_data_api_set": "400",
     # 422 "The timezone 'Mars/Olympus' is not a valid IANA timezone", from a real
     # PUT with a deliberately invalid body at a cluster that HAS a schedule,
     # 2026-09-14. Route and method proven, nothing written.
@@ -1572,6 +1614,58 @@ OPS: tuple[Op, ...] = (
             },
         },
         body_required=("timezone", "days"),
+        guarded=True,
+    ),
+    Op(
+        name="capella_data_api_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/dataAPI",
+        summary=(
+            "Data API status for a cluster: whether it is enabled, its state, "
+            "whether it is enabled for network peering, and — the part nothing "
+            "else supplies — the CONNECTION STRING to reach it.\n"
+            "THE HOST IS NOT DERIVABLE FROM THE CLUSTER ID. "
+            "handlers/capella/fixture.py documented the Data API base as "
+            "https://{clusterId}.data.cloud.couchbase.com, which was a pattern "
+            "read off one example. The provider takes it from this response's "
+            "`connectionString`, which is an empty string while the Data API is "
+            "off. Anything that needs the Data API — document export, import, "
+            "Search index definitions — starts here. [TF data_api.go]"
+        ),
+        group="clusters",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_data_api_set",
+        method="PUT",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/dataAPI",
+        summary=(
+            "Enable or disable the Data API on a cluster. ASYNCHRONOUS: answers "
+            "202 and the cluster works through a state change, so poll "
+            "capella_data_api_get until `state` settles and `connectionString` "
+            "is non-empty.\n"
+            "BOTH FIELDS ARE SENT EVERY TIME. The provider's UpdateDataApiRequest "
+            "carries enableDataApi and enableNetworkPeering as plain bools with "
+            "no omitempty, so this is a replace: omitting enableNetworkPeering "
+            "sends false and turns peering off. Read the current status first "
+            "and send back what you are not changing. [TF data_api.go]"
+        ),
+        group="clusters",
+        body={
+            "enableDataApi": {
+                "type": "boolean",
+                "description": "Turn the Data API on or off for this cluster.",
+            },
+            "enableNetworkPeering": {
+                "type": "boolean",
+                "description": (
+                    "Whether the Data API is reachable over network peering. "
+                    "NOT optional in effect — see the summary."
+                ),
+            },
+        },
+        body_required=("enableDataApi",),
         guarded=True,
     ),
     Op(

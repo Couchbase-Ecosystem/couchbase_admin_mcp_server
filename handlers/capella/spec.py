@@ -109,6 +109,35 @@ LIVE_VERIFIED_ON = "2026-09-01"
 #: silently under the LIVE_VERIFIED_ON banner and inheriting a provenance it
 #: does not have.
 LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
+    "capella_collection_update": (
+        "2026-09-14, scripts/dump_tool.py capella_collection_update --perform. "
+        "PERFORMED TWICE: 204 setting maxTTL -1 on travel-sample.mcptest.meta, "
+        "and 204 setting it back to 0. Recorded here rather than in "
+        "LIVE_VERIFIED because a 2xx on a write may not go in that register; "
+        "the 405 it carries there came from the OPTIONS probe.\n"
+        "THE PROBE WAS WRONG ABOUT WHAT IT WOULD PROVE, and that is the "
+        "finding. It was proposed as a REFUSAL probe on the expectation that a "
+        "negative maxTTL is invalid. The expectation was flagged as a guess "
+        "beforehand and it was wrong: Capella accepts -1.\n"
+        "READ BACK BETWEEN THE TWO WRITES: capella_collections_list reported "
+        "maxTTL -1 on meta and 0 on its untouched sibling events. So -1 is "
+        "STORED, not coerced. What -1 MEANS is still not measured -- Couchbase "
+        "documents it as 'no expiry, overriding the bucket' on recent server "
+        "versions, and this register does not promote documentation to "
+        "measurement.\n"
+        "THE PRIOR VALUE WAS NOT CAPTURED BEFORE THE FIRST WRITE, which was a "
+        "sequencing mistake: the read-back should have come first. The "
+        "collection is empty and is a test collection, so nothing was lost, and "
+        "the sibling reading 0 is the reason 0 was chosen for the restore -- "
+        "which is an INFERENCE about the prior value, not a record of it. The "
+        "next probe of this shape reads before it writes.\n"
+        "A SECOND ROUTE WAS TRIED AND IS CLOSED. A PUT whose maxTTL was a "
+        "STRING was expected to earn a 400 from Capella naming the JSON type. "
+        "It never left this process: the server's own input validation rejected "
+        "it first -- 'not-an-integer' is not of type 'integer'. That is the "
+        "schema working, and it means a body-TYPE refusal can only ever be "
+        "earned from Capella for a field this server types loosely."
+    ),
     # LIVE_VERIFIED still says 405 for this operation, and that is correct: 405
     # is what the non-mutating sweep observed. The 422 below came from a real
     # POST by a different tool on a different day, and recording it there would
@@ -308,63 +337,6 @@ SHIPPED_UNVERIFIED: dict[str, str] = {
     # per CLAUDE.md rule 1.5. Each carries its own promotion path, because they
     # are not equally cheap to verify and pretending otherwise is how the easy
     # one gets done and the other three sit here for a year.
-    "capella_bucket_update": (
-        "2026-09-14. PATH, METHOD and BODY from openapi.gen.go:28401 "
-        "(durabilityLevel, memoryAllocationInMb, replicas, "
-        "timeToLiveInSeconds, flush). Not yet exercised live.\n"
-        "PROMOTE WITH A REFUSAL, not a success. memoryAllocationInMb far beyond "
-        "the cluster's free quota answers 422 and changes nothing -- the same "
-        "refusal the create path already produces, so the behaviour is known. "
-        "Do NOT promote it by performing a real resize: `replicas` triggers a "
-        "rebalance and shrinking the quota makes the bucket eject to fit, and "
-        "both return before the work finishes."
-    ),
-    "capella_collection_update": (
-        "2026-09-14. PATH and METHOD from openapi.gen.go:29516; the body is "
-        "maxTTL alone. Not yet exercised live. THE CHEAPEST OF THE FOUR TO "
-        "VERIFY HONESTLY: setting maxTTL on a throwaway collection is reversible "
-        "by setting it back, affects no existing document (the new maximum "
-        "applies only to documents written afterwards), and needs no rebalance. "
-        "A negative maxTTL should earn a 422 without writing anything, which "
-        "promotes it with no change at all."
-    ),
-    "capella_database_credential_update": (
-        "2026-09-14. PATH and METHOD from openapi.gen.go:33681. Not yet "
-        "exercised live, and NOT safe to verify on a credential anything "
-        "depends on: `access` REPLACES the existing grants, so a call that omits "
-        "one revokes it, and a password change breaks every client holding the "
-        "old one at its next connection. The test organization's mcptest-data "
-        "credential is what the fixture tools authenticate with.\n"
-        "Promote it against a throwaway credential created for the purpose, or "
-        "with a deliberately malformed `access` array that earns a 422."
-    ),
-    "capella_project_update": (
-        "2026-09-14. PATH and METHOD from openapi.gen.go:18127; the body is "
-        "name and description. Not yet exercised live. Verifying it means "
-        "renaming a real project, and the project this organization uses is the "
-        "one named in CAPELLA_ALLOWED_PROJECTS -- renaming it does NOT move it "
-        "out of the allowlist, which holds UUIDs, but it does change what a "
-        "human reads when deciding whether a destructive call is safe. Promote "
-        "it on a scratch project, created and deleted for the purpose."
-    ),
-    "capella_app_service_update": (
-        "2026-09-14. PATH, METHOD and BODY from the Terraform provider's "
-        "generated client, openapi.gen.go:5811 (UpdateAppServiceRequest = "
-        "{compute: {cpu, ram}, nodes}), per CLAUDE.md rule 1.5. Not yet "
-        "exercised against a live App Service.\n"
-        "WHY IT IS NOT CHEAPLY VERIFIABLE, unlike the import filter's setter. "
-        "The invalid-body trick that promoted that op works because the App "
-        "Endpoint validator refuses bad input without acting. Here the plausible "
-        "refusals are 422s on capacity -- nodes outside 2-12, or a cpu/ram pair "
-        "the provider does not offer -- and the test organization has exactly "
-        "ONE App Service, which capella_env_* depends on. A 422 is safe, but a "
-        "typo that happens to be VALID resizes a live App Service "
-        "asynchronously, and the resize cannot be cancelled mid-flight.\n"
-        "Promote it with a deliberate 422: nodes=1 is refused with 'The "
-        "instance desired capacity must be between 2 and 12', which is measured "
-        "on the create path and writes nothing. Do that against a throwaway App "
-        "Service, not the one the environment tools use."
-    ),
     # ── App Endpoint import filter DELETE, shipped 2026-09-14 ────────────────
     #
     # Its two siblings were promoted to LIVE_VERIFIED the same day, on a 200 and a
@@ -426,6 +398,28 @@ LIVE_VERIFIED: dict[str, str] = {
     # 200 WITH AN EMPTY BODY, 2026-09-14, exactly as its twin above -- the
     # prediction in this op's description was made before the call and held.
     "capella_app_endpoint_import_filter_get": "200",
+    # 405 from the OPTIONS probe, 2026-09-14, scripts/verify_capella_paths.py
+    # --only. Route confirmed, nothing sent, nothing changed -- the same
+    # evidence every other unperformed write in this register carries.
+    #
+    # capella_collection_update ALSO has a performed 204 recorded in
+    # LIVE_VERIFIED_OUT_OF_BAND. The 405 is what it may carry HERE, because a
+    # 2xx on a write is forbidden in this register.
+    "capella_collection_update": "405",
+    "capella_database_credential_update": "405",
+    "capella_project_update": "405",
+    # 422 code 6005 "The durability level '' provided is not supported",
+    # 2026-09-14, from a PUT carrying ONLY memoryAllocationInMb. The caller
+    # never sent durabilityLevel -- which is how this operation was found to
+    # REPLACE rather than patch. See _BUCKET_UPDATE_BODY for the hazard that
+    # follows: the fields with no valid zero value error, and the ones with a
+    # valid zero value (replicas, flush, TTL) do not.
+    "capella_bucket_update": "422",
+    # 422 "The instance compute type 0vCPUs,0GB is not valid", 2026-09-14,
+    # from a PUT carrying ONLY {"nodes": 1}. Same finding: compute arrived as
+    # its zero value because it was omitted. The request never reached the
+    # node-range check, so the 2-12 floor stays unmeasured on THIS op.
+    "capella_app_service_update": "422",
     # 400 "collection \"airline\" import filter error: invalid javascript
     # syntax: (anonymous): Line 1:7 Unexpected identifier (and 3 more errors)",
     # 2026-09-14, from a PUT carrying the text "this is not javascript at all".
@@ -874,8 +868,35 @@ _DB_CREDENTIAL_BODY: dict[str, Any] = {
 
 #: Body for capella_bucket_update. FIVE FIELDS, from openapi.gen.go:28401.
 #:
-#: NOT A SUBSET OF THE CREATE BODY, and the omissions decide what a caller can
-#: and cannot change without destroying the data:
+#: THIS IS A FULL REPLACEMENT, NOT A PARTIAL UPDATE. MEASURED 2026-09-14.
+#:
+#: A PUT carrying only memoryAllocationInMb was refused with
+#:
+#:     422 code 6005: "The durability level '' provided is not supported."
+#:
+#: The caller never mentioned durability. Capella saw the field as an empty
+#: string because the request struct has no notion of "absent" -- so every
+#: omitted field is transmitted as its zero value and evaluated as if the caller
+#: had chosen it.
+#:
+#: THE DANGEROUS CASE IS THE ONE THAT DOES NOT 422. durabilityLevel and
+#: memoryAllocationInMb have no valid zero value, so an omission is caught. But:
+#:
+#:     replicas = 0   is LEGAL and correct on a single-node cluster
+#:     flush    = false is LEGAL
+#:     timeToLiveInSeconds = 0 is LEGAL and means "no bucket TTL"
+#:
+#: So a caller who sends {memoryAllocationInMb, durabilityLevel} and omits
+#: `replicas` does not get an error. They get a bucket whose REPLICAS HAVE BEEN
+#: SET TO ZERO -- redundancy silently removed, on a live bucket, by a call that
+#: reported success. Same for flush and TTL.
+#:
+#: Every field is therefore REQUIRED on this operation, which is not how the
+#: provider's struct describes it and is how the service behaves. The correct
+#: sequence is read-modify-write: capella_bucket_get, change the one field, send
+#: all five back.
+#:
+#: The omissions relative to the CREATE body decide what cannot be changed at all:
 #:
 #:   * NO `name`. A bucket cannot be renamed.
 #:   * NO `type`, NO `storageBackend`, NO `bucketConflictResolution`,
@@ -970,7 +991,18 @@ _DB_CREDENTIAL_UPDATE_BODY: dict[str, Any] = {
 MIN_APP_SERVICE_NODES = 2
 MAX_APP_SERVICE_NODES = 12
 
-#: Body for capella_app_service_update. DELIBERATELY NARROWER THAN THE CREATE BODY.
+#: Body for capella_app_service_update. DELIBERATELY NARROWER THAN THE CREATE BODY,
+#: and a FULL REPLACEMENT rather than a patch.
+#:
+#: MEASURED 2026-09-14: a PUT carrying only {"nodes": 1} was refused with
+#:
+#:     422 "The instance compute type 0vCPUs,0GB is not valid."
+#:
+#: The caller never mentioned compute. It arrived as its zero value and was
+#: evaluated. Note the request never reached the node-range check, so the 2-12
+#: floor is still unmeasured ON THIS OPERATION -- it is measured on create.
+#:
+#: Both fields are therefore required here.
 #:
 #: UpdateAppServiceRequest is {compute: {cpu, ram}, nodes} and nothing else
 #: (openapi.gen.go:5811). It is not a partial version of the create body, and the
@@ -2029,6 +2061,16 @@ OPS: tuple[Op, ...] = (
             "document in it to change a setting.\n"
             "WHAT IT CANNOT CHANGE: name, type, storageBackend, conflict "
             "resolution, eviction policy. Those are fixed at creation.\n"
+            "SEND EVERY FIELD, ALWAYS. This endpoint REPLACES the bucket's "
+            "settings rather than patching them: a PUT carrying only "
+            "memoryAllocationInMb was refused 2026-09-14 with 422 code 6005 "
+            "\"The durability level '' provided is not supported\", because an "
+            "omitted field arrives as its zero value. The refusal is the lucky "
+            "case. `replicas: 0`, `flush: false` and `timeToLiveInSeconds: 0` "
+            "are all LEGAL, so omitting those does NOT error -- it silently "
+            "removes the bucket's redundancy, disables flush, and clears the "
+            "TTL, and reports success. Read the current settings with "
+            "capella_bucket_get, change the one you mean, send all five back.\n"
             "TWO OF THESE FIELDS ARE OPERATIONS, NOT SETTINGS. Changing "
             "`replicas` triggers a REBALANCE, and shrinking "
             "`memoryAllocationInMb` makes the bucket eject to fit. Both return "
@@ -2041,6 +2083,11 @@ OPS: tuple[Op, ...] = (
         group="buckets",
         guarded=True,
         body=_BUCKET_UPDATE_BODY,
+        # ALL FIVE, because this endpoint replaces rather than patches -- see the
+        # schema's note. Declaring them optional would let a model send one field
+        # and silently zero the other four.
+        body_required=("memoryAllocationInMb", "durabilityLevel", "replicas",
+                       "flush", "timeToLiveInSeconds"),
     ),
     Op(
         name="capella_bucket_delete",
@@ -2376,6 +2423,11 @@ OPS: tuple[Op, ...] = (
             "nothing else holds a copy.\n"
             "It also cannot change `name` or `description`, so an App Service's "
             "mcp-env marker cannot be re-written by this op.\n"
+            "SEND BOTH FIELDS. This REPLACES rather than patches: a PUT "
+            "carrying only {\"nodes\": 1} was refused 2026-09-14 with 422 \"The "
+            "instance compute type 0vCPUs,0GB is not valid\" -- compute arrived "
+            "as its zero value because it was omitted. Read the current shape "
+            "with capella_app_service_get first.\n"
             "Asynchronous, like create: a 204 means accepted, not resized. Poll "
             "capella_app_service_get until currentState leaves its transitional "
             "value. [TF openapi.gen.go:5811 — UNVERIFIED PATH: not yet exercised "
@@ -2384,6 +2436,9 @@ OPS: tuple[Op, ...] = (
         ),
         group="app_services",
         body=_APP_SERVICE_UPDATE_BODY,
+        # BOTH, because this replaces rather than patches -- a PUT with only
+        # `nodes` was refused for a compute type of 0vCPUs,0GB it never sent.
+        body_required=("nodes", "compute"),
         guarded=True,
     ),
     Op(

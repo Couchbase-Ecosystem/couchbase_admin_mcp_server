@@ -191,7 +191,53 @@ def capella_error_code(exc: BaseException) -> int | None:
     return None
 
 
-def _hint_for_status(status: int) -> str:
+#: Capella 404 messages that explain themselves. When the body says WHY, the
+#: generic "your ids are probably wrong" hint is not merely redundant, it is a
+#: wrong answer printed with authority.
+#:
+#: MEASURED 2026-09-13. capella_cluster_audit_log_export_get answered:
+#:
+#:   404 {"message": "No audit log files exist within the requested time frame."}
+#:
+#: The export EXISTS -- it is in capella_cluster_audit_log_exports_list, with
+#: that same sentence as its `status` -- and the path, the project and the
+#: auditLogExportId were all correct. Capella uses 404 for "this job produced no
+#: content", not only for "no such object". The generic hint sent the reader to
+#: re-resolve ids that were already right, which cost an investigation.
+_SELF_EXPLAINING_404 = (
+    "no audit log files exist",
+    "within the requested time frame",
+)
+
+
+def _message_of(detail: Any) -> str:
+    if isinstance(detail, dict):
+        return str(detail.get("message") or "")
+    return str(detail or "")
+
+
+def _hint_for_status(status: int, detail: Any = None) -> str:
+    """The hint for a status, SILENCED when the server already gave a reason.
+
+    `detail` is optional so every existing caller keeps working; passing it is
+    what lets a self-explaining error speak for itself.
+    """
+    if status == 404:
+        message = _message_of(detail).lower()
+        if any(phrase in message for phrase in _SELF_EXPLAINING_404):
+            # Do not restate, and do not contradict. Point at the ONE thing that
+            # changes the outcome.
+            return (
+                "Capella answered 404 with a reason of its own, quoted above — the "
+                "object exists and the request was well formed. For an audit-log "
+                "export this means the window held no audit records: enable audit "
+                "logging with capella_cluster_audit_log_config_set, let the cluster "
+                "record some activity, then export a window that contains it."
+            )
+    return _hint_body(status)
+
+
+def _hint_body(status: int) -> str:
     if status == 401:
         return (
             "Capella rejected the credential. CAPELLA_API_KEY_SECRET must be the "
@@ -353,7 +399,7 @@ def capella_request(
                 detail: Any = json.loads(raw)
             except Exception:
                 detail = raw.decode(errors="replace")
-            hint = _hint_for_status(exc.code)
+            hint = _hint_for_status(exc.code, detail)
             if exc.code in _SERVER_ERROR and method.upper() not in _IDEMPOTENT_METHODS:
                 hint = (
                     "Capella returned a server error on a CREATE request. This was "

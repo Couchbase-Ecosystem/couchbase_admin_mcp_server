@@ -804,7 +804,15 @@ def test_pagination_follows_the_cursor_to_the_last_page(capella, monkeypatch):
     }
     import urllib.parse
 
-    def _paged(method, path, *, params=None, body=None):
+# THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
+#
+# capella_request grew a content_type parameter on 2026-09-14, when the App
+# Endpoint access control function turned out to want raw JavaScript rather than
+# JSON. Every stub of it here is a test double of that signature, so each one
+# grew the same keyword with the same default. Five tests in this file failed
+# with "request() got an unexpected keyword argument 'content_type'" until they
+# did -- a signature mismatch in a double, not a defect in the code under test.
+    def _paged(method, path, *, params=None, body=None, content_type="application/json"):
         page = str((params or {}).get("page", 1))
         assert urllib.parse.urlparse(path) is not None
         return pages[page]

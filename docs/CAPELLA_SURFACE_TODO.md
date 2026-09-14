@@ -85,7 +85,59 @@ probe run measuring whether expiry is a query parameter, a header, or absent.
 
 ---
 
-## P1 — add these next
+## P1 — add these next — **ALL EIGHT ADDRESSED 2026-09-14**
+
+Every item below is now either SHIPPED with live evidence or PARKED in
+`handlers/capella/spec_pending.py` with a named route to evidence. Nothing here
+is untouched, and nothing shipped on a path nobody has observed.
+
+| Item | State |
+|---|---|
+| 1. App Endpoint import filter (3 ops) | **SHIPPED.** GET 200, PUT 400, DELETE 405 |
+| 2. `capella_app_service_update` | **SHIPPED.** 422 |
+| 3. Four in-place updates | **SHIPPED.** bucket 422, app service 422, collection/credential/project 405 |
+| 4. `replications/jobs/{jobId}` | **PARKED.** Needs a `jobId`, which exists only in a `capella_replication_create` response, and this cluster has no replications |
+| 5. App Endpoint completeness (7 ops) | **5 SHIPPED** (ACF delete 405, adminUsers 200, collections 200, resync stop 405, CORS get 404). **2 PARKED** — both auditLog ops, see below |
+| 6. Bucket backup schedules (6 ops) | **PARKED**, with the 2026-09-12 retraction attached |
+| 7. App Service admin user get/update (2 ops) | **PARKED.** The update has no body schema |
+| 8. Sample buckets (3 ops) | **PARKED** |
+
+**`SHIPPED_UNVERIFIED` went 7 → 1** over the same day. The only entry left is
+`capella_cluster_audit_log_export_get`, blocked by entitlement rather than by
+anything in this repository.
+
+### What the two auditLog ops are waiting on, and why it is not laziness
+
+`capella_app_endpoint_audit_log_get` answered **422**, not 200 or 404, so
+`test_every_read_operation_was_verified_by_a_real_call` refuses it — a 422 means
+the route answered and the READ never happened. The 422 reads as an entitlement:
+the App Service level equivalent is refused in this organization with *"your
+support package does not include audit logging"*. An org with it licensed
+promotes this in one call.
+
+`capella_app_endpoint_audit_log_set` has **no body schema**, and
+`test_no_shipped_write_tool_is_missing_its_body_schema` refuses a shipped write
+without one. It was promoted on the probe's "READY TO PROMOTE" and sent straight
+back — the report judges PATHS, and a path verdict says nothing about a body.
+`capella_app_service_admin_user_update` and the three backup-schedule writes are
+parked for exactly the same reason.
+
+### Two corrections this round produced, worth keeping
+
+**A probe can perform the operation it is measuring.**
+`scripts/verify_capella_paths.py --method-probe` read
+`capella_data_api_set`'s `body_required`, inferred an empty body would be
+refused, sent one, and got 202 — **disabling the Data API on the cluster it was
+measuring**. `Op.empty_body_accepted` now guards it. See CLAUDE.md rule 1.6.
+
+**The probe called a correct path wrong.** `capella_app_endpoint_cors_get` was
+reported under PATHS THAT NEED FIXING on a 404 whose body read *"App Endpoint
+CORS is not enabled"* — a semantic 404 from a real handler. The discriminator
+was too narrow, not the path wrong.
+
+---
+
+## P1 — the original entries
 
 Ranked by how likely someone is to need them and be unable to proceed.
 
@@ -209,7 +261,7 @@ debt this repo just spent a night clearing gets recreated.
 
 **aiServices** (~25 ops, `:15573-16497`, `:21465-22001`). Models, providers,
 API keys, workflows, workflow runs. Same reasoning, plus it is new enough that
-the surface will move. **Reconsider when** it stabilizes and someone names a use.
+the surface will move. **Reconsider when** it stabilises and someone names a use.
 
 **`PUT .../organizations/{id}/configuration`** (`:17568`) and
 **`PUT .../clusters/{id}/bucketStorageMigration`** (`:27827`). Organization-wide
@@ -219,7 +271,7 @@ absent a specific request with a named reason.
 
 ---
 
-## Known behaviors worth encoding, from the same audit
+## Known behaviours worth encoding, from the same audit
 
 These are not missing operations; they are facts about operations we ship that
 callers get wrong.

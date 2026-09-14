@@ -634,6 +634,14 @@ AUTHORITATIVE_APP_SERVICE_PATHS = [
     # RESIZE ONLY. UpdateAppServiceRequest is {compute, nodes} with no `version`
     # field, so this PUT cannot upgrade an App Service -- see the op's summary.
     ("capella_app_service_update", "PUT", f"{_BASE}/{{app_service_id}}"),
+    # Promoted out of spec_pending 2026-09-14 on a live 200. Its sibling
+    # capella_app_service_admin_user_update is NOT here: it stays parked with no
+    # body schema, because a path verdict says nothing about a body.
+    (
+        "capella_app_service_admin_user_get",
+        "GET",
+        f"{_BASE}/{{app_service_id}}/adminUsers/{{admin_user_id}}",
+    ),
     # activationState, with a capital S and no trailing segment. POST resumes, DELETE
     # suspends. Not to be confused with the App ENDPOINT equivalent, which is
     # activationStatus.

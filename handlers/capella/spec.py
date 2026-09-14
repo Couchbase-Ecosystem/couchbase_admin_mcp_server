@@ -415,6 +415,19 @@ LIVE_VERIFIED: dict[str, str] = {
     # known-codes list. The list was too narrow, not the path wrong. Fixed in
     # scripts/verify_capella_paths.py the same day.
     "capella_app_endpoint_cors_get": "404",
+    # ── P1 items 6-8, promoted 2026-09-14 out of spec_pending ──────────────
+    "capella_app_service_admin_user_get": "200",
+    "capella_sample_buckets_list": "200",
+    "capella_sample_bucket_get": "200",
+    "capella_sample_bucket_delete": "405",
+    # 404 carrying Capella domain error 5029: the ROUTE MATCHED and no
+    # schedule exists on this bucket. This is the path that settles the
+    # 2026-09-12 retraction in spec_pending.py -- /backupSchedule, from a
+    # docs page, answered Go's plain-text mux default and does not exist,
+    # while /backup/schedules, from the provider, answers a structured error.
+    "capella_bucket_backup_schedules_list": "404",
+    "capella_bucket_backup_schedule_delete": "405",
+    "capella_bucket_backup_cycles_list": "200",
     "capella_app_endpoint_resync_stop": "405",
     # 405 from the OPTIONS probe, 2026-09-14, scripts/verify_capella_paths.py
     # --only. Route confirmed, nothing sent, nothing changed -- the same
@@ -2237,6 +2250,124 @@ OPS: tuple[Op, ...] = (
         group="buckets",
         destructive=True,
         guarded=True,
+    ),
+    Op(
+        name="capella_app_service_admin_user_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/appservices/{app_service_id}/adminUsers/{admin_user_id}",
+        summary=(
+            "Read one App Service admin user. The list endpoint returns every "
+            "user; this reads one by id, which is what an update needs first "
+            "given that `access` REPLACES rather than adds. "
+            "[LIVE+METHOD 200, 2026-09-14 -- the response "
+            "carries accessAllEndpoints, audit, clusterId, endpoints, id, "
+            "name, projectId and tenantId]"
+        ),
+        group="app_services",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_sample_buckets_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/sampleBuckets",
+        summary=(
+            "List the sample datasets loaded on a cluster. "
+            "[LIVE+METHOD 200, 2026-09-14.\n"
+            "THE RESPONSE IS A BUCKET DOCUMENT, not a catalogue of samples "
+            "available to load: bucketConflictResolution, durabilityLevel, "
+            "evictionPolicy, flush, memoryAllocationInMb, replicas, stats, "
+            "storageBackend. It lists the sample buckets ON the cluster, and "
+            "on this one that is travel-sample, carrying the same id "
+            "capella_buckets_list returns for it.]"
+        ),
+        group="buckets",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_sample_bucket_get",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/sampleBuckets/{sample_bucket_id}",
+        summary=(
+            "Read one loaded sample bucket. [LIVE+METHOD 200, 2026-09-14 -- the same "
+            "bucket-document shape the list returns]"
+        ),
+        group="buckets",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_sample_bucket_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/sampleBuckets/{sample_bucket_id}",
+        summary=(
+            "Unload a sample dataset, DELETING THE BUCKET AND EVERY DOCUMENT IN "
+            "IT. This is the teardown half of capella_sample_bucket_load and it "
+            "is a bucket delete in all but name -- on this organization's test "
+            "cluster that is travel-sample, which every fixture and index in "
+            "this repository currently points at. "
+            "[LIVE 405 -- OPTIONS-probed 2026-09-14. "
+            "DESTRUCTIVE, so the real method was deliberately not sent]"
+        ),
+        group="buckets",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_bucket_backup_schedule_delete",
+        method="DELETE",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/schedules",
+        summary=(
+            "Remove a bucket's backup schedule. Deleting a schedule stops future "
+            "backups and deletes none that exist. [LIVE 405 -- OPTIONS-probed 2026-09-14. "
+            "DESTRUCTIVE, so the real method was deliberately not sent]"
+        ),
+        group="backup",
+        destructive=True,
+        guarded=True,
+    ),
+    Op(
+        name="capella_bucket_backup_cycles_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/cycles",
+        summary=(
+            "List a bucket's backup cycles. A CYCLE is not a BACKUP: "
+            "capella_backups_list returns the individual backups, and a cycle is "
+            "the scheduled run that produced them. [LIVE+METHOD 200, 2026-09-14 -- rows carry "
+            "createdAt and cycleID.\n"
+            "NOTE THE CAPITALISATION: cycleID, not cycleId. The probe's own "
+            "discovery step looked for cycleId, found nothing, and reported "
+            "this bucket as having no cycles -- while this operation returned "
+            "rows in the same run.]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
+    ),
+    Op(
+        name="capella_bucket_backup_schedules_list",
+        method="GET",
+        path="/v4/organizations/{organization_id}/projects/{project_id}/clusters/{cluster_id}/buckets/{bucket_id}/backup/schedules",
+        summary=(
+            "List a bucket's backup schedules. We ship on-demand backup and no "
+            "scheduling at all. [TF openapi.gen.go:28613] -- and see the "
+            "RETRACTED note at the top of this module: a DIFFERENT, similar path "
+            "was disconfirmed live on 2026-09-12.\n"
+            "[LIVE 404, 2026-09-14: Capella domain error 5029, so the ROUTE "
+            "MATCHED and this bucket simply has no schedule. THAT SETTLES THE "
+            "RETRACTION. The four operations parked against "
+            "/buckets/{bucket_id}/backupSchedule came from a rendered docs "
+            "page and a live sweep returned Go's PLAIN-TEXT mux default for "
+            "it -- no route of that shape exists. /backup/schedules, read "
+            "from the provider's generated client, answers with a structured "
+            "Capella error instead. Same subsystem, different path, opposite "
+            "verdict, and the difference is entirely which source it was read "
+            "from -- CLAUDE.md rule 1.5 earning its keep.]"
+        ),
+        group="backup",
+        read_only=True,
+        idempotent=True,
     ),
     Op(
         name="capella_sample_bucket_load",

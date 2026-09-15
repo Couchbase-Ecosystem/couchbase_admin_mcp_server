@@ -112,8 +112,16 @@ spec:
               mountPath: /var/log/couchbase-admin-mcp
             - name: tmp
               mountPath: /tmp
+          # EXEC, NOT httpGet. Kubernetes counts only 200-399 as a passing
+          # httpGet, so it cannot express "a 401 means the server is up and
+          # enforcing auth" -- and this probe pointed at /healthz, a route this
+          # server does not have and deliberately will not add (an
+          # unauthenticated endpoint on an admin service is an attack surface).
+          # A pod would never have become ready. Neither manifest had ever been
+          # applied. See healthcheck.py.
           readinessProbe:
-            httpGet: { path: /healthz, port: 8000 }
+            exec:
+              command: ["python", "/app/healthcheck.py"]
             initialDelaySeconds: 10
           resources:
             requests: { cpu: "100m", memory: "256Mi" }

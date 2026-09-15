@@ -45,6 +45,45 @@ services:
       CB_ADMIN_READ_ONLY_MODE: ${CB_ADMIN_READ_ONLY_MODE:-true}
       CB_ADMIN_AUDIT_FILE: /var/log/couchbase-admin-mcp/audit.log
 
+      # THE ENTERPRISE PROFILE'S OWN REQUIREMENTS, passed through so this file can
+      # satisfy the profile it defaults to.
+      #
+      # It could not. This file defaulted CB_ADMIN_PROFILE to `enterprise` and
+      # named none of the variables that profile demands, so `docker compose up`
+      # produced -- MEASURED 2026-09-15, the first time it was ever brought up --
+      #
+      #   REFUSING TO START -- incoherent security posture for
+      #   CB_ADMIN_PROFILE=enterprise:
+      #     * OAUTH_ISSUER is unset ...
+      #     * OAUTH_AUDIENCE is unset ...
+      #     * The HTTP transport is bound to 0.0.0.0 with no transport encryption
+      #
+      # and, because compose substitutes only what the file NAMES, putting them in
+      # the env file changed nothing. An artifact that cannot be configured to
+      # start is worse than one that is missing, because it reads as shipped.
+      OAUTH_ISSUER: ${OAUTH_ISSUER:-}
+      OAUTH_AUDIENCE: ${OAUTH_AUDIENCE:-}
+      CB_ADMIN_HTTP_REQUIRE_AUTH: ${CB_ADMIN_HTTP_REQUIRE_AUTH:-true}
+      CB_ADMIN_SCOPE_READ: ${CB_ADMIN_SCOPE_READ:-}
+      CB_ADMIN_SCOPE_WRITE: ${CB_ADMIN_SCOPE_WRITE:-}
+      CB_ADMIN_SCOPE_AUTOMATION: ${CB_ADMIN_SCOPE_AUTOMATION:-}
+
+      # TRANSPORT ENCRYPTION. A non-loopback bind with neither a certificate nor
+      # the acknowledgement is fatal, and deliberately so: "a mesh handles it" and
+      # "nobody configured it" produce identical processes. Terminating TLS HERE
+      # also needs the files mounted -- add a read-only bind for the directory
+      # holding them, as the corporate-CA line below does.
+      CB_ADMIN_TLS_CERT_FILE: ${CB_ADMIN_TLS_CERT_FILE:-}
+      CB_ADMIN_TLS_KEY_FILE: ${CB_ADMIN_TLS_KEY_FILE:-}
+      CB_ADMIN_TLS_KEY_PASSWORD: ${CB_ADMIN_TLS_KEY_PASSWORD:-}
+      CB_ADMIN_TLS_CLIENT_CA_FILE: ${CB_ADMIN_TLS_CLIENT_CA_FILE:-}
+      CB_ADMIN_TLS_TERMINATED_EXTERNALLY: ${CB_ADMIN_TLS_TERMINATED_EXTERNALLY:-}
+
+      # Only meaningful with CB_ADMIN_PROFILE=workstation, which a lab override
+      # sets. Inside a container the process MUST bind 0.0.0.0; the isolation
+      # comes from publishing the port narrowly, not from the bind address.
+      CB_ADMIN_WORKSTATION_CONTAINER_BIND: ${CB_ADMIN_WORKSTATION_CONTAINER_BIND:-}
+
       # See the EE file: Python trusts its bundled CA set, so a re-signing proxy
       # makes cloudapi.cloud.couchbase.com look like an outage. This is the most
       # likely first failure in a corporate network.

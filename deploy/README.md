@@ -49,6 +49,41 @@ Two files, not two services in one file. Two services in one file share a
 default network and come up together on a bare `docker compose up` — that is a
 naming convention, not a separation.
 
+### `--env-file` does not win against your shell
+
+Compose resolves `${VAR}` from the **invoking shell first** and falls back to
+`--env-file`. So a shell that already carries `CB_CONNECTION_STRING`,
+`CB_USERNAME`, `CB_PASSWORD` or any `CB_ADMIN_*` — which yours will if you have
+run the server directly, and the RUNBOOK tells you to export them for that —
+silently configures the container with those values instead of the file you
+explicitly passed on the command line. Nothing warns you.
+
+MEASURED 2026-09-15: a shell holding `CB_CONNECTION_STRING=couchbase://127.0.0.1`
+from a host run produced a container that pointed at its own loopback and
+answered `RuntimeError: Network error on POST /pools/default/buckets/.../scopes:
+[Errno 111] Connection refused` — while the cluster was healthy and reachable
+from that very container. The error is accurate and points nowhere near the cause.
+
+Check before you conclude anything about networking:
+
+```bash
+docker exec <container> printenv CB_CONNECTION_STRING
+docker exec <container> python -c "import handlers.shared as s; print(s._admin_url())"
+```
+
+If that URL is not the one you configured, the shell overrode the file. Deploy
+from a clean shell, or clear them:
+
+```powershell
+Get-ChildItem Env:CB_* | Remove-Item
+```
+
+### `up -d` will not rebuild
+
+An existing `cb-admin-mcp:ee` image is reused however stale it is, so a code
+change you just made is simply not in the container. Pass `--build` after
+changing anything the image carries.
+
 ### Enterprise Edition
 
 ```bash

@@ -904,9 +904,10 @@ def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(
     cluster so it reported `existing`; against a FRESH target it would have
     built them.
 
-    The bucket-level `ON \`b\`` form is in here on purpose: it names the
-    bucket's default collection, which a fixture of b.s.airline does not carry,
-    and a filter that compared strings without expanding it would keep it.
+    The bucket-level two-part ON form, naming the bucket alone, is in here on
+    purpose: it targets that bucket's default collection, which a fixture of
+    b.s.airline does not carry, and a filter that compared strings without
+    expanding it would keep it.
     """
     _stub_export_cluster(
         monkeypatch,

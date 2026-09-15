@@ -304,6 +304,30 @@ CONTRIBUTING.md tells a contributor both harnesses must report all mutations
 caught and does not mention this. On a fresh Windows checkout that instruction
 cannot be satisfied, and the failure looks like a missing security control.
 
+**MEASURED 2026-09-15 — the container run is clean.** Both harnesses were run
+end to end in `python:3.12-slim` for the first time: **52 of 52 caught**, 25 and
+27, no survivors and no ANCHOR-GONE. Every audit-sink entry above was caught
+once its `@requires_symlinks` tests actually ran. So the survivors really were
+the blind spot and not the code, which until this run was an argument rather
+than an observation.
+
+    docker run --rm -v "C:\path\to\CB-Admin-MCP:/src:ro" python:3.12-slim bash -lc "set -e; cp -a /src /work; cd /work; rm -rf .venv .pytest_cache .ruff_cache; export PIP_CERT=/work/deploy/ca/corp-roots.crt REQUESTS_CA_BUNDLE=/work/deploy/ca/corp-roots.crt SSL_CERT_FILE=/work/deploy/ca/corp-roots.crt UV_PROJECT_ENVIRONMENT=/venv; pip install -q uv; uv sync --extra dev; set +e; /venv/bin/python scripts/mutation_rounds_1_3.py; /venv/bin/python scripts/mutation_round_4.py"
+
+Three details in that line are not incidental:
+
+  * **The three CA variables.** Behind corporate TLS interception the container
+    fails at `pip install uv` with `CERTIFICATE_VERIFY_FAILED: self-signed
+    certificate in certificate chain`, which reads as a broken image or a dead
+    network and is neither. `deploy/ca/corp-roots.crt` is already in the tree
+    for the image build; pip needs `PIP_CERT`, uv and urllib need
+    `SSL_CERT_FILE`, requests needs `REQUESTS_CA_BUNDLE`.
+  * **UV_PROJECT_ENVIRONMENT=/venv**, outside the tree. The harness copytrees
+    the working directory once per mutation -- 52 times -- and a venv inside it
+    is copied every time.
+  * **set +e before the harnesses.** They exit non-zero when a mutation
+    survives, which is a result to read, not a failure that should stop the
+    second harness from running.
+
 ### 4.1 Docker on Windows: three ways the fixture looks broken and is not
 
 Each of these produces a symptom that reads as a tool defect. All three were

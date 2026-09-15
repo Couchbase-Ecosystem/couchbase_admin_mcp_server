@@ -16,6 +16,7 @@ import sys
 import threading
 
 import pytest
+
 from tests._platform import FILE_MODES_AVAILABLE, requires_symlinks
 
 # ── H5 / M6: the JWKS refresh budget and its concurrency safety ──────────────

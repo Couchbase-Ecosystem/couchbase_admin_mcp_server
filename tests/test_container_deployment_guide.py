@@ -185,9 +185,7 @@ def test_a_documented_configuration_carries_one_surface_only(name):
             "container would refuse to start, having been told to do this"
         )
     if declared == "self_managed":
-        assert not capella, (
-            f"{name!r} declares self_managed but sets {sorted(capella)}"
-        )
+        assert not capella, f"{name!r} declares self_managed but sets {sorted(capella)}"
 
 
 def test_the_guide_never_demonstrates_both():
@@ -226,8 +224,7 @@ def test_every_pasteable_example_declares_its_surface():
         checked += 1
         assert "CB_ADMIN_REQUIRE_DEPLOYMENT" in block, (
             "a pasteable example sets CB_DEPLOYMENT without declaring "
-            "CB_ADMIN_REQUIRE_DEPLOYMENT, so the surface is inferred:\n"
-            + block[:400]
+            "CB_ADMIN_REQUIRE_DEPLOYMENT, so the surface is inferred:\n" + block[:400]
         )
 
     assert checked >= 2, (

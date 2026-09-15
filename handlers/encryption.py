@@ -237,21 +237,28 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # /settings/encryptionKeys, NOT /settings/security/kmip, which is
             # 404 on 8.0.1. See the module docstring for the measurement.
             keys = admin_request("GET", "/settings/encryptionKeys")
-            kmip = [
-                k for k in keys
-                if isinstance(k, dict) and str(k.get("type", "")).lower() == "kmip"
-            ] if isinstance(keys, list) else []
-            return ok({
-                "kmip_keys": kmip,
-                "all_encryption_keys": keys,
-                "note": (
-                    "Couchbase 8.0 has no /settings/security/kmip resource. A KMIP "
-                    "server is an ENCRYPTION KEY of type 'kmip' in "
-                    "/settings/encryptionKeys, referenced by encryptionKeyId in "
-                    "admin_encryption_get. An empty list means no encryption key "
-                    "of any kind is configured, not that KMIP is unsupported."
-                ),
-            })
+            kmip = (
+                [
+                    k
+                    for k in keys
+                    if isinstance(k, dict) and str(k.get("type", "")).lower() == "kmip"
+                ]
+                if isinstance(keys, list)
+                else []
+            )
+            return ok(
+                {
+                    "kmip_keys": kmip,
+                    "all_encryption_keys": keys,
+                    "note": (
+                        "Couchbase 8.0 has no /settings/security/kmip resource. A KMIP "
+                        "server is an ENCRYPTION KEY of type 'kmip' in "
+                        "/settings/encryptionKeys, referenced by encryptionKeyId in "
+                        "admin_encryption_get. An empty list means no encryption key "
+                        "of any kind is configured, not that KMIP is unsupported."
+                    ),
+                }
+            )
 
         if name == "admin_kmip_set":
             # Build the payload FIRST, then guard what is actually being sent.

@@ -88,7 +88,9 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-BASE = os.environ.get("CB_CAPELLA_API_URL", "https://cloudapi.cloud.couchbase.com").rstrip("/")
+BASE = os.environ.get(
+    "CB_CAPELLA_API_URL", "https://cloudapi.cloud.couchbase.com"
+).rstrip("/")
 
 #: Same order and same reasoning as scripts/probe_pending.py. CAPELLA_API_KEY_SECRET
 #: first because that is the name handlers/capella/client.py reads; preferring the
@@ -111,15 +113,23 @@ def _load_dotenv(path: pathlib.Path) -> dict[str, str]:
 
 
 def resolve_credentials(env_file: str | None) -> tuple[str, str, str]:
-    found = [(n, os.environ[n].strip()) for n in _KEY_NAMES if os.environ.get(n, "").strip()]
+    found = [
+        (n, os.environ[n].strip()) for n in _KEY_NAMES if os.environ.get(n, "").strip()
+    ]
     if found:
         name, value = found[0]
-        org = next((os.environ[n] for n in _ORG_NAMES if os.environ.get(n, "").strip()), "")
+        org = next(
+            (os.environ[n] for n in _ORG_NAMES if os.environ.get(n, "").strip()), ""
+        )
         return value, org.strip(), f"environment ${name}"
-    candidates = [pathlib.Path(env_file)] if env_file else [
-        pathlib.Path(".env"),
-        pathlib.Path(__file__).resolve().parent.parent / ".env",
-    ]
+    candidates = (
+        [pathlib.Path(env_file)]
+        if env_file
+        else [
+            pathlib.Path(".env"),
+            pathlib.Path(__file__).resolve().parent.parent / ".env",
+        ]
+    )
     for path in candidates:
         data = _load_dotenv(path)
         key = next((data[n] for n in _KEY_NAMES if data.get(n)), "")
@@ -144,7 +154,7 @@ def call(method: str, path: str, token: str, body=None):
             return r.status, r.read().decode(errors="replace")[:4000]
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode(errors="replace")[:4000]
-    except Exception as e:  # noqa: BLE001 - the message is the result here
+    except Exception as e:
         return 0, f"{type(e).__name__}: {e}"
 
 
@@ -241,11 +251,15 @@ def candidates(source: str, scope: str, collection: str) -> list[tuple[str, obje
     # JavaScript that genuinely does not evaluate to a function, so it is the
     # one input for which that message would be CORRECT.
     discriminators: list[tuple[str, object]] = [
-        ("DISCRIMINATOR: syntactically broken JavaScript",
-         {"accessControlFunction": "}}} not javascript ((("}),
+        (
+            "DISCRIMINATOR: syntactically broken JavaScript",
+            {"accessControlFunction": "}}} not javascript ((("},
+        ),
         ("DISCRIMINATOR: empty string", {"accessControlFunction": ""}),
-        ("DISCRIMINATOR: valid JS that is not a function (42)",
-         {"accessControlFunction": "42"}),
+        (
+            "DISCRIMINATOR: valid JS that is not a function (42)",
+            {"accessControlFunction": "42"},
+        ),
     ]
 
     sources: list[tuple[str, str]] = [
@@ -277,27 +291,46 @@ def candidates(source: str, scope: str, collection: str) -> list[tuple[str, obje
         # so far sent only one of them. If the server unmarshals the body into a
         # struct with both and then validates what it got, a body missing
         # importFilter could plausibly fail on the field it did find.
-        ("{accessControlFunction + importFilter}",
-         lambda src: {"accessControlFunction": src,
-                      "importFilter": "function(doc){return true;}"}),
-        ("{collections.<collection>.{acf + importFilter}}",
-         lambda src: {"collections": {collection: {
-             "accessControlFunction": src,
-             "importFilter": "function(doc){return true;}"}}}),
+        (
+            "{accessControlFunction + importFilter}",
+            lambda src: {
+                "accessControlFunction": src,
+                "importFilter": "function(doc){return true;}",
+            },
+        ),
+        (
+            "{collections.<collection>.{acf + importFilter}}",
+            lambda src: {
+                "collections": {
+                    collection: {
+                        "accessControlFunction": src,
+                        "importFilter": "function(doc){return true;}",
+                    }
+                }
+            },
+        ),
         ("{sync}  <- Sync Gateway's own config key", lambda src: {"sync": src}),
         ("{sync_fn}", lambda src: {"sync_fn": src}),
-        ("{collections.<collection>.sync}",
-         lambda src: {"collections": {collection: {"sync": src}}}),
-        ("{scopes.<scope>.collections.<collection>.sync}",
-         lambda src: {"scopes": {scope: {"collections": {collection: {"sync": src}}}}}),
+        (
+            "{collections.<collection>.sync}",
+            lambda src: {"collections": {collection: {"sync": src}}},
+        ),
+        (
+            "{scopes.<scope>.collections.<collection>.sync}",
+            lambda src: {
+                "scopes": {scope: {"collections": {collection: {"sync": src}}}}
+            },
+        ),
         # Rounds 1-2, kept so one transcript carries the whole matrix. The
         # accessControlFunction + parenthesised cell is the one round 2 lost to a
         # connection reset; call_retrying closes that hole.
         ("{accessControlFunction}", lambda src: {"accessControlFunction": src}),
         ("{function}", lambda src: {"function": src}),
         (f"{{{collection}}}", lambda src: {collection: src}),
-        ("{collections.<collection>.accessControlFunction}",
-         lambda src: {"collections": {collection: {"accessControlFunction": src}}}),
+        (
+            "{collections.<collection>.accessControlFunction}",
+            lambda src: {"collections": {collection: {"accessControlFunction": src}}},
+        ),
     ]
 
     out: list[tuple[str, object]] = list(discriminators)
@@ -334,21 +367,32 @@ def _arrow(source: str) -> str:
     brace = stripped.find("{", close_paren)
     if -1 in (open_paren, close_paren, brace):
         return stripped
-    params = stripped[open_paren:close_paren + 1]
+    params = stripped[open_paren : close_paren + 1]
     body = stripped[brace:]
     return f"{params} => {body}"
 
 
 #: Fields a GET adds that a PUT must not carry back.
 _READ_ONLY_ENDPOINT_FIELDS = (
-    "adminURL", "metricsURL", "publicURL", "state",
-    "requireResync", "isRequireResync", "audit",
+    "adminURL",
+    "metricsURL",
+    "publicURL",
+    "state",
+    "requireResync",
+    "isRequireResync",
+    "audit",
 )
 
 
-def try_endpoint_document(base: str, app_service: str, endpoint: dict,
-                          token: str, scope: str, collection: str,
-                          source: str) -> bool:
+def try_endpoint_document(
+    base: str,
+    app_service: str,
+    endpoint: dict,
+    token: str,
+    scope: str,
+    collection: str,
+    source: str,
+) -> bool:
     """Set the function by writing the ENDPOINT DOCUMENT, not the dedicated path.
 
     WHY THIS IS THE ROUTE THAT SHOULD HAVE BEEN TRIED FIRST.
@@ -413,19 +457,29 @@ def try_endpoint_document(base: str, app_service: str, endpoint: dict,
             print(f"  REGISTER EVIDENCE: empty body -> {reg_status}")
             print(f"    {_message(reg_text)[:240]}")
             if str(reg_status) in {"200", "400", "404", "405", "422"}:
-                print(f'    Put "capella_app_endpoint_update": "{reg_status}" in '
-                      f"LIVE_VERIFIED.")
+                print(
+                    f'    Put "capella_app_endpoint_update": "{reg_status}" in '
+                    f"LIVE_VERIFIED."
+                )
             else:
-                print("    NOT a usable register value. The op needs a different "
-                      "refusal to record, or it goes in SHIPPED_UNVERIFIED with "
-                      "this transcript as its reason.")
+                print(
+                    "    NOT a usable register value. The op needs a different "
+                    "refusal to record, or it goes in SHIPPED_UNVERIFIED with "
+                    "this transcript as its reason."
+                )
             return True
     return False
 
 
-def try_name_path_variants(base: str, app_service: str, endpoint_name: str,
-                           token: str, scope: str, collection: str,
-                           source: str) -> bool:
+def try_name_path_variants(
+    base: str,
+    app_service: str,
+    endpoint_name: str,
+    token: str,
+    scope: str,
+    collection: str,
+    source: str,
+) -> bool:
     """The endpoint NAME in the path, with scope and collection carried separately.
 
     WHY THIS IS A NEW HYPOTHESIS AND NOT A 33rd GUESS.
@@ -461,13 +515,17 @@ def try_name_path_variants(base: str, app_service: str, endpoint_name: str,
         ("{function}", {"function": source}),
     ]
     path_shapes = [
-        (f"name + ?scope=&collection=",
-         f"{base}/appservices/{app_service}/appEndpoints/{quote(endpoint_name)}"
-         f"/accessControlFunction?scope={quote(scope)}&collection={quote(collection)}"),
-        (f"name + ?keyspace=",
-         f"{base}/appservices/{app_service}/appEndpoints/{quote(endpoint_name)}"
-         f"/accessControlFunction?keyspace="
-         f"{quote(f'{endpoint_name}.{scope}.{collection}')}"),
+        (
+            "name + ?scope=&collection=",
+            f"{base}/appservices/{app_service}/appEndpoints/{quote(endpoint_name)}"
+            f"/accessControlFunction?scope={quote(scope)}&collection={quote(collection)}",
+        ),
+        (
+            "name + ?keyspace=",
+            f"{base}/appservices/{app_service}/appEndpoints/{quote(endpoint_name)}"
+            f"/accessControlFunction?keyspace="
+            f"{quote(f'{endpoint_name}.{scope}.{collection}')}",
+        ),
     ]
     for path_label, path in path_shapes:
         for body_label, body in body_shapes:
@@ -475,27 +533,37 @@ def try_name_path_variants(base: str, app_service: str, endpoint_name: str,
             print(f"  {status:>3}  [{path_label}] + {body_label}")
             print(f"       {_message(text)[:240]}")
             if 200 <= status < 300:
-                print(f"\n  ^ ACCEPTED. The path takes the endpoint NAME and the")
-                print(f"    collection is carried as a query parameter, not baked")
-                print(f"    into the path segment. Correct the Op's path and its")
+                print("\n  ^ ACCEPTED. The path takes the endpoint NAME and the")
+                print("    collection is carried as a query parameter, not baked")
+                print("    into the path segment. Correct the Op's path and its")
                 print(f"    body to: {path_label} + {body_label}")
                 return True
     return False
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cluster", required=True,
-                    help="cluster id, or a unique prefix of its connection string "
-                         "(the same value capella_populate_test_cluster.py takes)")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--cluster",
+        required=True,
+        help="cluster id, or a unique prefix of its connection string "
+        "(the same value capella_populate_test_cluster.py takes)",
+    )
     ap.add_argument("--project", default="", help="project id; discovered when absent")
-    ap.add_argument("--keyspace", default="",
-                    help="endpoint.scope.collection; discovered when absent")
+    ap.add_argument(
+        "--keyspace",
+        default="",
+        help="endpoint.scope.collection; discovered when absent",
+    )
     ap.add_argument("--env-file", default=None)
-    ap.add_argument("--perform", action="store_true",
-                    help="actually send the candidate bodies (each carries the "
-                         "endpoint's own current function, so a success is a no-op)")
+    ap.add_argument(
+        "--perform",
+        action="store_true",
+        help="actually send the candidate bodies (each carries the "
+        "endpoint's own current function, so a success is a no-op)",
+    )
     args = ap.parse_args()
 
     token, org, src = resolve_credentials(args.env_file)
@@ -508,8 +576,10 @@ def main() -> int:
         status, text = call("GET", "/v4/organizations", token)
         rows = _rows(text)
         if status != 200 or len(rows) != 1:
-            print(f"could not resolve exactly one organization (status {status}); "
-                  f"pass CAPELLA_ORG_ID")
+            print(
+                f"could not resolve exactly one organization (status {status}); "
+                f"pass CAPELLA_ORG_ID"
+            )
             return 2
         org = rows[0]["id"]
     print(f"[ids] organization {org}")
@@ -519,21 +589,30 @@ def main() -> int:
         status, text = call("GET", f"/v4/organizations/{org}/projects", token)
         rows = _rows(text)
         if status != 200 or len(rows) != 1:
-            print(f"could not resolve exactly one project (status {status}); pass --project")
+            print(
+                f"could not resolve exactly one project (status {status}); pass --project"
+            )
             return 2
         project = rows[0]["id"]
     print(f"[ids] project {project}")
 
-    status, text = call("GET", f"/v4/organizations/{org}/projects/{project}/clusters", token)
+    status, text = call(
+        "GET", f"/v4/organizations/{org}/projects/{project}/clusters", token
+    )
     rows = _rows(text)
     if status != 200:
         print(f"clusters list failed: {status} {_message(text)}")
         return 2
-    matched = [c for c in rows
-               if c.get("id") == args.cluster
-               or args.cluster in str(c.get("connectionString", ""))]
+    matched = [
+        c
+        for c in rows
+        if c.get("id") == args.cluster
+        or args.cluster in str(c.get("connectionString", ""))
+    ]
     if len(matched) != 1:
-        print(f"--cluster '{args.cluster}' matched {len(matched)} of {len(rows)} clusters")
+        print(
+            f"--cluster '{args.cluster}' matched {len(matched)} of {len(rows)} clusters"
+        )
         for c in rows:
             print(f"    {c.get('id')}  {c.get('name')}  {c.get('connectionString')}")
         return 2
@@ -554,10 +633,13 @@ def main() -> int:
     # returned rows. capella_app_services_list in handlers/capella/spec.py has
     # recorded this since it was written; the probe simply did not follow it.
     status, text = call(
-        "GET", f"/v4/organizations/{org}/appservices?projectId={project}", token)
+        "GET", f"/v4/organizations/{org}/appservices?projectId={project}", token
+    )
     if status == 405:
-        print("405 listing App Services. That is a route fact, not an environment "
-              "fact -- the list is organization-wide, not cluster-scoped.")
+        print(
+            "405 listing App Services. That is a route fact, not an environment "
+            "fact -- the list is organization-wide, not cluster-scoped."
+        )
         return 2
     rows = [r for r in _rows(text) if r.get("clusterId") == cluster]
     if status != 200:
@@ -601,10 +683,12 @@ def main() -> int:
             break
 
     if not source:
-        print("no collection on this endpoint carries an accessControlFunction.\n"
-              "REFUSING to probe: every candidate would have to carry an invented\n"
-              "source, and an invented source cannot tell 'wrong envelope' apart\n"
-              "from 'wrong JavaScript' -- which is the only question being asked.")
+        print(
+            "no collection on this endpoint carries an accessControlFunction.\n"
+            "REFUSING to probe: every candidate would have to carry an invented\n"
+            "source, and an invented source cannot tell 'wrong envelope' apart\n"
+            "from 'wrong JavaScript' -- which is the only question being asked."
+        )
         return 2
 
     keyspace = f"{endpoint.get('name')}.{scope}.{collection}"
@@ -614,7 +698,9 @@ def main() -> int:
 
     cands = candidates(source, scope, collection)
     if not args.perform:
-        print(f"{len(cands)} candidate bodies, in send order (not sent -- pass --perform):")
+        print(
+            f"{len(cands)} candidate bodies, in send order (not sent -- pass --perform):"
+        )
         for label, body in cands:
             print(f"  - {label}: {json.dumps(body)[:160]}")
         return 0
@@ -668,16 +754,18 @@ def main() -> int:
     print("=" * 66)
     print("ROUTE 2: endpoint NAME in the path, collection carried separately")
     print("=" * 66)
-    if try_name_path_variants(base, app_service, str(endpoint.get("name")),
-                              token, scope, collection, source):
+    if try_name_path_variants(
+        base, app_service, str(endpoint.get("name")), token, scope, collection, source
+    ):
         return 0
 
     print()
     print("=" * 66)
     print("ROUTE 3: write the endpoint DOCUMENT (what Terraform does)")
     print("=" * 66)
-    if try_endpoint_document(base, app_service, endpoint, token,
-                             scope, collection, source):
+    if try_endpoint_document(
+        base, app_service, endpoint, token, scope, collection, source
+    ):
         return 0
 
     print()

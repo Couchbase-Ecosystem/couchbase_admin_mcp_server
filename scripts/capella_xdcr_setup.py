@@ -102,8 +102,10 @@ def _matches(cluster: dict, needle: str) -> bool:
     needle = needle.strip().lower()
     if not needle:
         return False
-    return any(needle in str(cluster.get(k, "")).lower()
-               for k in ("id", "name", "connectionString"))
+    return any(
+        needle in str(cluster.get(k, "")).lower()
+        for k in ("id", "name", "connectionString")
+    )
 
 
 class Xdcr:
@@ -138,15 +140,21 @@ class Xdcr:
         return body
 
     async def _buckets(self, session, scope: dict, cluster: dict) -> dict:
-        rows = _rows(await self.call(
-            session, "capella_buckets_list",
-            {**scope, "cluster_id": cluster.get("id")}))
+        rows = _rows(
+            await self.call(
+                session,
+                "capella_buckets_list",
+                {**scope, "cluster_id": cluster.get("id")},
+            )
+        )
         return {b.get("name"): b.get("id") for b in rows if isinstance(b, dict)}
 
     async def run(self, session) -> None:
         self.say("=" * 70)
         self.say("capella XDCR — one-way replication")
-        self.say(f"mode   {'PERFORM (real write)' if self.performed else 'DRY RUN (preview)'}")
+        self.say(
+            f"mode   {'PERFORM (real write)' if self.performed else 'DRY RUN (preview)'}"
+        )
         self.say("=" * 70)
 
         body = await self.call(session, "capella_organizations_list", {})
@@ -155,57 +163,84 @@ class Xdcr:
             return
         org = self.args.org or orgs[0].get("id")
 
-        projects = _rows(await self.call(session, "capella_projects_list",
-                                         {"organization_id": org}))
+        projects = _rows(
+            await self.call(session, "capella_projects_list", {"organization_id": org})
+        )
         if not self.check(bool(projects), "a project is visible"):
             return
-        scope = {"organization_id": org,
-                 "project_id": self.args.project or projects[0].get("id")}
+        scope = {
+            "organization_id": org,
+            "project_id": self.args.project or projects[0].get("id"),
+        }
 
-        rows = [c for c in _rows(await self.call(
-            session, "capella_clusters_list", dict(scope))) if isinstance(c, dict)]
+        rows = [
+            c
+            for c in _rows(
+                await self.call(session, "capella_clusters_list", dict(scope))
+            )
+            if isinstance(c, dict)
+        ]
 
         pair = {}
-        for role, needle in (("source", getattr(self.args, "from")),
-                             ("target", self.args.to)):
+        for role, needle in (
+            ("source", getattr(self.args, "from")),
+            ("target", self.args.to),
+        ):
             picked = [c for c in rows if _matches(c, needle)]
-            if not self.check(len(picked) == 1,
-                              f"--{'from' if role == 'source' else 'to'} {needle!r} "
-                              "names exactly one cluster",
-                              f"matched {len(picked)} of {len(rows)}"):
+            if not self.check(
+                len(picked) == 1,
+                f"--{'from' if role == 'source' else 'to'} {needle!r} "
+                "names exactly one cluster",
+                f"matched {len(picked)} of {len(rows)}",
+            ):
                 return
             pair[role] = picked[0]
 
         source, target = pair["source"], pair["target"]
-        if not self.check(source.get("id") != target.get("id"),
-                          "source and target are different clusters"):
+        if not self.check(
+            source.get("id") != target.get("id"),
+            "source and target are different clusters",
+        ):
             return
 
-        self.say(f"\n   FROM  {source.get('name')!r}  {source.get('id')}"
-                 "   <- read")
-        self.say(f"   INTO  {target.get('name')!r}  {target.get('id')}"
-                 "   <- WRITTEN, continuously, for as long as this runs")
+        self.say(f"\n   FROM  {source.get('name')!r}  {source.get('id')}   <- read")
+        self.say(
+            f"   INTO  {target.get('name')!r}  {target.get('id')}"
+            "   <- WRITTEN, continuously, for as long as this runs"
+        )
 
         # The guard, on the end being written, read off the LIVE bucket list.
         target_buckets = await self._buckets(session, scope, target)
         found = REAL_WORK & set(target_buckets)
         if found and not self.args.override:
-            self.check(False, f"{target.get('name')!r} is safe as a replication TARGET",
-                       f"it holds {', '.join(sorted(found))}. A replication writes "
-                       "to its target continuously; pass --i-know-what-im-doing "
-                       "only if that is genuinely intended.")
+            self.check(
+                False,
+                f"{target.get('name')!r} is safe as a replication TARGET",
+                f"it holds {', '.join(sorted(found))}. A replication writes "
+                "to its target continuously; pass --i-know-what-im-doing "
+                "only if that is genuinely intended.",
+            )
             return
-        self.check(True, f"{target.get('name')!r} is safe as a replication TARGET",
-                   f"buckets: {sorted(target_buckets)}")
+        self.check(
+            True,
+            f"{target.get('name')!r} is safe as a replication TARGET",
+            f"buckets: {sorted(target_buckets)}",
+        )
 
         source_buckets = await self._buckets(session, scope, source)
         name = self.args.bucket
-        if not self.check(name in source_buckets, f"source holds {name!r}",
-                          f"available: {sorted(source_buckets)}"):
+        if not self.check(
+            name in source_buckets,
+            f"source holds {name!r}",
+            f"available: {sorted(source_buckets)}",
+        ):
             return
-        if not self.check(name in target_buckets, f"target holds {name!r}",
-                          f"available: {sorted(target_buckets)}. XDCR replicates "
-                          "INTO an existing bucket; create it first."):
+        if not self.check(
+            name in target_buckets,
+            f"target holds {name!r}",
+            f"available: {sorted(target_buckets)}. XDCR replicates "
+            "INTO an existing bucket; create it first.",
+        ):
             return
 
         # v4 addresses both ends by bucket ID, not by name — the ids differ per
@@ -233,13 +268,15 @@ class Xdcr:
             "replication_create without confirm is refused",
         )
 
-        result = await self.call(session, "capella_replication_create",
-                                 {**args, "confirm": True})
+        result = await self.call(
+            session, "capella_replication_create", {**args, "confirm": True}
+        )
 
         if not self.performed:
-            self.check(result.get("dry_run") is True
-                       and result.get("executed") is False,
-                       "replication_create is previewed, not executed")
+            self.check(
+                result.get("dry_run") is True and result.get("executed") is False,
+                "replication_create is previewed, not executed",
+            )
             self.say("\nDry run complete. No replication was created.")
             return
 
@@ -255,32 +292,47 @@ class Xdcr:
             # against capella_replications_list needs to recognise it.
             if result.get("status") == 409 and "already exists" in message.lower():
                 ids = re.findall(r"\[([^\]]+)\]", message)
-                self.check(True, "a replication already exists for this pair",
-                           f"id(s): {ids[0] if ids else 'not named in the message'}")
-                for raw in (ids[0].split(",") if ids else []):
+                self.check(
+                    True,
+                    "a replication already exists for this pair",
+                    f"id(s): {ids[0] if ids else 'not named in the message'}",
+                )
+                for raw in ids[0].split(",") if ids else []:
                     try:
                         decoded = base64.b64decode(raw.strip() + "==").decode("utf-8")
                     except Exception:
                         continue
                     self.say(f"     {raw.strip()}")
-                    self.say(f"       decodes to {decoded!r} "
-                             "(cluster uuid / source bucket / target bucket)")
-                self.say("\n   Nothing was created; the existing replication is "
-                         "unchanged. Delete it first if you meant to recreate it.")
+                    self.say(
+                        f"       decodes to {decoded!r} "
+                        "(cluster uuid / source bucket / target bucket)"
+                    )
+                self.say(
+                    "\n   Nothing was created; the existing replication is "
+                    "unchanged. Delete it first if you meant to recreate it."
+                )
                 return
-            self.say("\n   Rejected. Read the message as the finding: if it names a "
-                     "field, that is the body spec.py should carry.")
-            self.check(False, "replication_create was accepted",
-                       json.dumps(result)[:500])
+            self.say(
+                "\n   Rejected. Read the message as the finding: if it names a "
+                "field, that is the body spec.py should carry."
+            )
+            self.check(
+                False, "replication_create was accepted", json.dumps(result)[:500]
+            )
             return
 
-        self.check(True, "replication_create was accepted",
-                   "the target object shape is now OBSERVED, not transcribed")
-        self.say("\n   XDCR is CONTINUOUS. It will keep writing to "
-                 f"{target.get('name')!r} until it is paused or deleted, and it "
-                 "puts a cluster into `peering` while it establishes its network "
-                 "path — which blocks a restore. Delete it before the next "
-                 "backup/restore cycle.")
+        self.check(
+            True,
+            "replication_create was accepted",
+            "the target object shape is now OBSERVED, not transcribed",
+        )
+        self.say(
+            "\n   XDCR is CONTINUOUS. It will keep writing to "
+            f"{target.get('name')!r} until it is paused or deleted, and it "
+            "puts a cluster into `peering` while it establishes its network "
+            "path — which blocks a restore. Delete it before the next "
+            "backup/restore cycle."
+        )
 
 
 async def main_async(args) -> int:
@@ -317,21 +369,31 @@ async def main_async(args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--from", required=True, metavar="ID|NAME|HOST",
-                        help="SOURCE cluster. Read only.")
-    parser.add_argument("--to", required=True, metavar="ID|NAME|HOST",
-                        help="TARGET cluster. WRITTEN continuously.")
-    parser.add_argument("--bucket", default="travel-sample",
-                        help="Must already exist on BOTH clusters.")
-    parser.add_argument("--priority", default="low",
-                        choices=["low", "medium", "high"])
-    parser.add_argument("--perform", dest="dry_run", action="store_false",
-                        default=True)
+    parser.add_argument(
+        "--from",
+        required=True,
+        metavar="ID|NAME|HOST",
+        help="SOURCE cluster. Read only.",
+    )
+    parser.add_argument(
+        "--to",
+        required=True,
+        metavar="ID|NAME|HOST",
+        help="TARGET cluster. WRITTEN continuously.",
+    )
+    parser.add_argument(
+        "--bucket", default="travel-sample", help="Must already exist on BOTH clusters."
+    )
+    parser.add_argument("--priority", default="low", choices=["low", "medium", "high"])
+    parser.add_argument("--perform", dest="dry_run", action="store_false", default=True)
     parser.add_argument("--org", default=None)
     parser.add_argument("--project", default=None)
-    parser.add_argument("--i-know-what-im-doing", dest="override",
-                        action="store_true",
-                        help="permit a target holding real work")
+    parser.add_argument(
+        "--i-know-what-im-doing",
+        dest="override",
+        action="store_true",
+        help="permit a target holding real work",
+    )
     parser.add_argument("--timeout", type=float, default=180.0)
     return asyncio.run(main_async(parser.parse_args()))
 

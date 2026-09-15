@@ -29,6 +29,7 @@ import logging
 import os
 
 import pytest
+
 from tests._platform import (
     FILE_MODES_AVAILABLE,
     SYMLINKS_AVAILABLE,

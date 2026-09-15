@@ -96,8 +96,14 @@ META_ID_ALIAS = "__fixture_meta_id"
 META_EXP_ALIAS = "__fixture_meta_exp"
 
 
-def export_statement(bucket: str, scope: str, collection: str, *,
-                     page_size: int, user_xattrs: list[str] | None = None) -> str:
+def export_statement(
+    bucket: str,
+    scope: str,
+    collection: str,
+    *,
+    page_size: int,
+    user_xattrs: list[str] | None = None,
+) -> str:
     """The SELECT both planes page a collection with.
 
     A CONSTANT WAS NOT ENOUGH, and the gap is why this is a function. The
@@ -124,6 +130,7 @@ def export_statement(bucket: str, scope: str, collection: str, *,
     ]
     for name in user_xattrs or []:
         select.append(XATTR_SELECT.format(name=name))
+
     # Identifier quoting: a bucket, scope or collection name may contain a
     # backtick, and Couchbase escapes one by doubling it. Without this a name
     # carrying a backtick would end the quoted identifier early.
@@ -391,9 +398,9 @@ def with_defer_build(statement: str) -> tuple[str, str]:
 #: and rewriting every occurrence of it rewrites those too.
 _ON_KEYSPACE = re.compile(
     r"(\bON\s+)"
-    r"`((?:[^`]|``)+)`"                      # bucket
-    r"(?:\s*\.\s*`((?:[^`]|``)+)`"          # optional scope
-    r"\s*\.\s*`((?:[^`]|``)+)`)?",          # optional collection
+    r"`((?:[^`]|``)+)`"  # bucket
+    r"(?:\s*\.\s*`((?:[^`]|``)+)`"  # optional scope
+    r"\s*\.\s*`((?:[^`]|``)+)`)?",  # optional collection
     re.IGNORECASE,
 )
 
@@ -541,9 +548,7 @@ def rewrite_index_keyspace(statement: str, keyspace_map: dict) -> tuple[str, str
                 f"one target ({sorted(targets)}), so the bucket this index "
                 f"belongs to is ambiguous"
             )
-        statement = statement.replace(
-            f"`{source_bucket}`", f"`{targets.pop()}`"
-        )
+        statement = statement.replace(f"`{source_bucket}`", f"`{targets.pop()}`")
     return statement, ""
     sources = {k.split(".", 1)[0] for k in keyspace_map}
     for source in sorted(sources):
@@ -583,8 +588,9 @@ def split_keyspace(keyspace: str) -> tuple[str, str, str] | None:
     return parts[0], parts[1], parts[2]
 
 
-def fixture_integrity(directory: pathlib.Path,
-                       manifest: dict) -> tuple[list[dict], list[str], str | None]:
+def fixture_integrity(
+    directory: pathlib.Path, manifest: dict
+) -> tuple[list[dict], list[str], str | None]:
     """(file checks, problems, payload hash) for a fixture on disk.
 
     EXTRACTED so that _verify and _import run the SAME check rather than two
@@ -653,9 +659,11 @@ def fixture_integrity(directory: pathlib.Path,
         checks.append(check)
 
     expected_payload = manifest.get("payload_sha256")
-    payload_sha = hashlib.sha256(
-        "".join(sorted(file_hashes)).encode()
-    ).hexdigest() if file_hashes else None
+    payload_sha = (
+        hashlib.sha256("".join(sorted(file_hashes)).encode()).hexdigest()
+        if file_hashes
+        else None
+    )
     if expected_payload and payload_sha and expected_payload != payload_sha:
         problems.append(
             f"payload_sha256 is {payload_sha}, manifest says {expected_payload}"

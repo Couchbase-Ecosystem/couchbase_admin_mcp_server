@@ -306,7 +306,8 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # time.
             tasks = admin_request("GET", "/pools/default/tasks")
             replications = [
-                t for t in (tasks if isinstance(tasks, list) else [])
+                t
+                for t in (tasks if isinstance(tasks, list) else [])
                 if isinstance(t, dict) and t.get("type") == "xdcr"
             ]
             return ok(replications)

@@ -59,15 +59,17 @@ class FakeCapella:
             if resource["_ticks"] == 0:
                 resource["currentState"] = "healthy"
 
-# THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
-#
-# capella_request grew a content_type parameter on 2026-09-14, when the App
-# Endpoint access control function turned out to want raw JavaScript rather than
-# JSON. Every stub of it here is a test double of that signature, so each one
-# grew the same keyword with the same default. Five tests in this file failed
-# with "request() got an unexpected keyword argument 'content_type'" until they
-# did -- a signature mismatch in a double, not a defect in the code under test.
-    def request(self, method, path, *, params=None, body=None, content_type="application/json"):
+    # THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
+    #
+    # capella_request grew a content_type parameter on 2026-09-14, when the App
+    # Endpoint access control function turned out to want raw JavaScript rather than
+    # JSON. Every stub of it here is a test double of that signature, so each one
+    # grew the same keyword with the same default. Five tests in this file failed
+    # with "request() got an unexpected keyword argument 'content_type'" until they
+    # did -- a signature mismatch in a double, not a defect in the code under test.
+    def request(
+        self, method, path, *, params=None, body=None, content_type="application/json"
+    ):
         self.calls.append((method, path))
         parts = [p for p in path.split("/") if p]
 
@@ -217,7 +219,9 @@ class FakeCapella:
 def fake(monkeypatch):
     api = FakeCapella()
 
-    def request(method, path, *, params=None, body=None, content_type="application/json"):
+    def request(
+        method, path, *, params=None, body=None, content_type="application/json"
+    ):
         return api.request(method, path, params=params, body=body)
 
     def listing(path, *, params=None, page_size=None, max_items=None):

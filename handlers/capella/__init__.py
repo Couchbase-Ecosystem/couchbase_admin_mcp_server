@@ -262,8 +262,11 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
             project_id,
             kind="cluster",
             policy=policy,
-            verb=("overwrite data on" if name == "capella_backup_restore"
-                  else "replicate into"),
+            verb=(
+                "overwrite data on"
+                if name == "capella_backup_restore"
+                else "replicate into"
+            ),
         )
 
     # 2b. Deleting a PROJECT is an indirect route to its clusters — no cluster
@@ -469,7 +472,10 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
         )
     else:
         result = capella_request(
-            op.method, path, params=_query_params(op, args) or None, body=body,
+            op.method,
+            path,
+            params=_query_params(op, args) or None,
+            body=body,
             content_type=op.body_content_type,
         )
 

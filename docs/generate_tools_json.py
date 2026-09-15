@@ -51,8 +51,8 @@ os.environ.setdefault("CB_USERNAME", "inventory")
 os.environ.setdefault("CB_PASSWORD", "inventory")
 os.environ.setdefault("CAPELLA_API_KEY_SECRET", "inventory")
 
-import mcp_compat  # noqa: E402
-import server  # noqa: E402
+import mcp_compat
+import server
 
 
 def category(tool) -> str:

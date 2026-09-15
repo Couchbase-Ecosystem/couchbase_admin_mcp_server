@@ -168,7 +168,8 @@ def test_the_plane_module_list_is_not_empty_and_is_current():
 
     package = pathlib.Path(inspect.getsourcefile(core)).parent
     found = {
-        "handlers.capella.fixture" if path.parent.name == "capella"
+        "handlers.capella.fixture"
+        if path.parent.name == "capella"
         else f"handlers.{path.stem}"
         for path in package.rglob("fixture.py")
     }

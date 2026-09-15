@@ -132,8 +132,10 @@ def _rows(body: Any) -> list:
     class as verify_mcp_surface.py's _ROWS_READER, and the same remedy.
     """
     if isinstance(body, list):
-        return [{"name": r, "appname": r, "id": r} if isinstance(r, str) else r
-                for r in body]
+        return [
+            {"name": r, "appname": r, "id": r} if isinstance(r, str) else r
+            for r in body
+        ]
     if not isinstance(body, dict):
         return []
 
@@ -142,22 +144,37 @@ def _rows(body: Any) -> list:
     if isinstance(defs, dict):
         inner = defs.get("indexDefs")
         if isinstance(inner, dict):
-            return [{"name": name, **(d if isinstance(d, dict) else {})}
-                    for name, d in inner.items()]
+            return [
+                {"name": name, **(d if isinstance(d, dict) else {})}
+                for name, d in inner.items()
+            ]
 
-    for key in ("data", "items", "buckets", "users", "groups", "indexes",
-                "repositories", "functions", "scopes"):
+    for key in (
+        "data",
+        "items",
+        "buckets",
+        "users",
+        "groups",
+        "indexes",
+        "repositories",
+        "functions",
+        "scopes",
+    ):
         value = body.get(key)
         if isinstance(value, list):
             # Eventing hands back bare names; give every caller a dict so a
             # .get() on a row can never silently miss.
-            return [{"name": r, "appname": r, "id": r} if isinstance(r, str) else r
-                    for r in value]
+            return [
+                {"name": r, "appname": r, "id": r} if isinstance(r, str) else r
+                for r in value
+            ]
     lists = [v for v in body.values() if isinstance(v, list)]
     if len(lists) != 1:
         return []
-    return [{"name": r, "appname": r, "id": r} if isinstance(r, str) else r
-            for r in lists[0]]
+    return [
+        {"name": r, "appname": r, "id": r} if isinstance(r, str) else r
+        for r in lists[0]
+    ]
 
 
 def _is_already_exists(result: Any) -> bool:
@@ -290,8 +307,9 @@ class Populate:
             # write really did not happen. So match the message, never the code,
             # and let every other error fail loudly.
             if _is_already_exists(result):
-                self.say(f"   {label} is already present "
-                         "(the server refused the duplicate)")
+                self.say(
+                    f"   {label} is already present (the server refused the duplicate)"
+                )
                 self.present.append(label)
                 return result
             self.check(False, f"{label} created", json.dumps(result)[:400])
@@ -300,8 +318,9 @@ class Populate:
         self.created.append(label)
         return result
 
-    async def _already(self, session, tool: str, args: dict,
-                       field: str, value: str, label: str) -> bool:
+    async def _already(
+        self, session, tool: str, args: dict, field: str, value: str, label: str
+    ) -> bool:
         body = await self.call(session, tool, args)
         if isinstance(body, dict) and body.get(ERROR_MARKER) is True:
             return False
@@ -317,7 +336,9 @@ class Populate:
     async def run(self, session) -> None:
         self.say("=" * 70)
         self.say("populate a self-managed test cluster, through the tools themselves")
-        self.say(f"mode   {'PERFORM (real writes)' if self.performed else 'DRY RUN (preview)'}")
+        self.say(
+            f"mode   {'PERFORM (real writes)' if self.performed else 'DRY RUN (preview)'}"
+        )
         self.say("=" * 70)
 
         # IS THE CLUSTER THERE AT ALL? Asked before "does it have buckets",
@@ -329,27 +350,39 @@ class Populate:
         # one to act on.
         first = await self.call(session, "admin_bucket_list", {})
         if isinstance(first, dict) and first.get(ERROR_MARKER) is True:
-            self.check(False, "the cluster answers admin_bucket_list",
-                       json.dumps(first)[:400])
-            self.say("\n   A refused connection or a timeout here means the node is"
-                     "\n   NOT UP YET, not that it is misconfigured. A restarted"
-                     "\n   container re-warms its buckets before ns_server answers,"
-                     "\n   and travel-sample on magma takes appreciably longer than"
-                     "\n   a fresh empty node. Poll /pools/default until it answers"
-                     "\n   rather than sleeping a fixed interval, then re-run.")
+            self.check(
+                False, "the cluster answers admin_bucket_list", json.dumps(first)[:400]
+            )
+            self.say(
+                "\n   A refused connection or a timeout here means the node is"
+                "\n   NOT UP YET, not that it is misconfigured. A restarted"
+                "\n   container re-warms its buckets before ns_server answers,"
+                "\n   and travel-sample on magma takes appreciably longer than"
+                "\n   a fresh empty node. Poll /pools/default until it answers"
+                "\n   rather than sleeping a fixed interval, then re-run."
+            )
             return
         buckets = _rows(first)
         names = {b.get("name") for b in buckets if isinstance(b, dict)}
-        if not self.check(bool(names), "the cluster has at least one bucket",
-                          "create one first; every keyspace tool needs it"):
+        if not self.check(
+            bool(names),
+            "the cluster has at least one bucket",
+            "create one first; every keyspace tool needs it",
+        ):
             return
-        stranger = {n for n in names
-                    if n not in THROWAWAY_BUCKETS and not str(n).startswith(PREFIX)}
+        stranger = {
+            n
+            for n in names
+            if n not in THROWAWAY_BUCKETS and not str(n).startswith(PREFIX)
+        }
         if stranger and not self.args.override:
-            self.check(False, "this is a throwaway cluster",
-                       f"it holds {', '.join(sorted(stranger))}, which is not a sample "
-                       "bucket. This script CREATES objects including a USER; pass "
-                       "--i-know-what-im-doing only if that is genuinely intended.")
+            self.check(
+                False,
+                "this is a throwaway cluster",
+                f"it holds {', '.join(sorted(stranger))}, which is not a sample "
+                "bucket. This script CREATES objects including a USER; pass "
+                "--i-know-what-im-doing only if that is genuinely intended.",
+            )
             return
         self.check(True, "this is a throwaway cluster", f"buckets: {sorted(names)}")
 
@@ -357,24 +390,31 @@ class Populate:
         self.say(f"\n   working in {bucket!r}")
 
         # 1. scope + two collections.
-        scopes = _rows(await self.call(session, "admin_scope_list",
-                                       {"bucket_name": bucket}))
-        have_scope = any(isinstance(s, dict) and s.get("name") == PREFIX
-                         for s in scopes)
+        scopes = _rows(
+            await self.call(session, "admin_scope_list", {"bucket_name": bucket})
+        )
+        have_scope = any(
+            isinstance(s, dict) and s.get("name") == PREFIX for s in scopes
+        )
         if have_scope:
             self.say(f"   scope {PREFIX!r} is already present")
             self.present.append(f"scope {PREFIX}")
         else:
-            await self.create(session, "admin_scope_create",
-                              {"bucket_name": bucket, "scope_name": PREFIX},
-                              f"scope {PREFIX}")
+            await self.create(
+                session,
+                "admin_scope_create",
+                {"bucket_name": bucket, "scope_name": PREFIX},
+                f"scope {PREFIX}",
+            )
 
         existing_collections: set[str] = set()
-        for row in _rows(await self.call(session, "admin_scope_list",
-                                         {"bucket_name": bucket})):
+        for row in _rows(
+            await self.call(session, "admin_scope_list", {"bucket_name": bucket})
+        ):
             if isinstance(row, dict) and row.get("name") == PREFIX:
                 existing_collections = {
-                    c.get("name") for c in (row.get("collections") or [])
+                    c.get("name")
+                    for c in (row.get("collections") or [])
                     if isinstance(c, dict)
                 }
         for collection in ("events", "meta"):
@@ -383,52 +423,93 @@ class Populate:
                 self.present.append(f"collection {PREFIX}.{collection}")
                 continue
             await self.create(
-                session, "admin_collection_create",
-                {"bucket_name": bucket, "scope_name": PREFIX,
-                 "collection_name": collection},
+                session,
+                "admin_collection_create",
+                {
+                    "bucket_name": bucket,
+                    "scope_name": PREFIX,
+                    "collection_name": collection,
+                },
                 f"collection {PREFIX}.{collection}",
             )
 
         # 2. A group first, then a user -- a user can reference a group only if
         #    the group exists, and doing it the other way round would work here
         #    but teaches the wrong order.
-        if not await self._already(session, "admin_group_list", {}, "id",
-                                   f"{PREFIX}-group", f"group {PREFIX}-group"):
+        if not await self._already(
+            session,
+            "admin_group_list",
+            {},
+            "id",
+            f"{PREFIX}-group",
+            f"group {PREFIX}-group",
+        ):
             await self.create(
-                session, "admin_group_create",
-                {"group_name": f"{PREFIX}-group", "roles": GROUP_ROLES,
-                 "description": "mcptest fixture"},
+                session,
+                "admin_group_create",
+                {
+                    "group_name": f"{PREFIX}-group",
+                    "roles": GROUP_ROLES,
+                    "description": "mcptest fixture",
+                },
                 f"group {PREFIX}-group",
             )
 
-        if not await self._already(session, "admin_user_list", {}, "id",
-                                   f"{PREFIX}-user", f"user {PREFIX}-user"):
+        if not await self._already(
+            session,
+            "admin_user_list",
+            {},
+            "id",
+            f"{PREFIX}-user",
+            f"user {PREFIX}-user",
+        ):
             await self.create(
-                session, "admin_user_create",
-                {"username": f"{PREFIX}-user",
-                 "password": self.args.user_password,
-                 "name": "mcptest fixture",
-                 "roles": USER_ROLES},
+                session,
+                "admin_user_create",
+                {
+                    "username": f"{PREFIX}-user",
+                    "password": self.args.user_password,
+                    "name": "mcptest fixture",
+                    "roles": USER_ROLES,
+                },
                 f"user {PREFIX}-user",
             )
 
         # 3. FTS index.
-        if not await self._already(session, "admin_fts_index_list", {}, "name",
-                                   f"{PREFIX}-fts", f"FTS index {PREFIX}-fts"):
+        if not await self._already(
+            session,
+            "admin_fts_index_list",
+            {},
+            "name",
+            f"{PREFIX}-fts",
+            f"FTS index {PREFIX}-fts",
+        ):
             await self.create(
-                session, "admin_fts_index_create",
-                {"index_name": f"{PREFIX}-fts",
-                 "definition": _fts_definition(f"{PREFIX}-fts", bucket)},
+                session,
+                "admin_fts_index_create",
+                {
+                    "index_name": f"{PREFIX}-fts",
+                    "definition": _fts_definition(f"{PREFIX}-fts", bucket),
+                },
                 f"FTS index {PREFIX}-fts",
             )
 
         # 4. Eventing function.
-        if not await self._already(session, "admin_eventing_list", {}, "appname",
-                                   f"{PREFIX}-fn", f"eventing function {PREFIX}-fn"):
+        if not await self._already(
+            session,
+            "admin_eventing_list",
+            {},
+            "appname",
+            f"{PREFIX}-fn",
+            f"eventing function {PREFIX}-fn",
+        ):
             await self.create(
-                session, "admin_eventing_create_or_update",
-                {"function_name": f"{PREFIX}-fn",
-                 "definition": _eventing_definition(f"{PREFIX}-fn", bucket)},
+                session,
+                "admin_eventing_create_or_update",
+                {
+                    "function_name": f"{PREFIX}-fn",
+                    "definition": _eventing_definition(f"{PREFIX}-fn", bucket),
+                },
                 f"eventing function {PREFIX}-fn",
             )
 
@@ -451,15 +532,23 @@ class Populate:
         else:
             plan = self.args.plan if self.args.plan in plan_names else plan_names[0]
             self.say(f"\n   using plan {plan!r} of {plan_names}")
-            if not await self._already(session, "admin_backup_repository_list", {},
-                                       "id", f"{PREFIX}-repo",
-                                       f"backup repository {PREFIX}-repo"):
+            if not await self._already(
+                session,
+                "admin_backup_repository_list",
+                {},
+                "id",
+                f"{PREFIX}-repo",
+                f"backup repository {PREFIX}-repo",
+            ):
                 await self.create(
-                    session, "admin_backup_repository_create",
-                    {"repository_id": f"{PREFIX}-repo",
-                     "plan": plan,
-                     "archive": self.args.archive,
-                     "bucket_name": bucket},
+                    session,
+                    "admin_backup_repository_create",
+                    {
+                        "repository_id": f"{PREFIX}-repo",
+                        "plan": plan,
+                        "archive": self.args.archive,
+                        "bucket_name": bucket,
+                    },
                     f"backup repository {PREFIX}-repo",
                 )
 
@@ -474,7 +563,8 @@ class Populate:
             #    backup: a second backup is a second restore point, not a
             #    duplicate object, so there is nothing to skip.
             await self.create(
-                session, "admin_backup_run",
+                session,
+                "admin_backup_run",
                 {"repository_id": f"{PREFIX}-repo"},
                 f"backup run in {PREFIX}-repo",
             )
@@ -487,9 +577,13 @@ class Populate:
                 rows = []
                 for _ in range(60):
                     await asyncio.sleep(2)
-                    rows = _rows(await self.call(
-                        session, "admin_backup_list",
-                        {"repository_id": f"{PREFIX}-repo"}))
+                    rows = _rows(
+                        await self.call(
+                            session,
+                            "admin_backup_list",
+                            {"repository_id": f"{PREFIX}-repo"},
+                        )
+                    )
                     if rows:
                         break
                 if rows:
@@ -502,7 +596,8 @@ class Populate:
                     self.say(json.dumps(rows[0], indent=2)[:1200])
                 else:
                     self.check(
-                        False, "admin_backup_list returned a backup",
+                        False,
+                        "admin_backup_list returned a backup",
                         "no backup appeared within 120 s; the run may still be "
                         "in progress -- check admin_backup_repository_get",
                     )
@@ -551,25 +646,36 @@ class Populate:
             source = "CB_PASSWORD"
         if not password:
             self.check(
-                False, "a password for the remote cluster is in the environment",
+                False,
+                "a password for the remote cluster is in the environment",
                 "a remote host was named but neither CB_XDCR_REMOTE_PASSWORD nor "
                 "CB_PASSWORD is set. Set CB_XDCR_REMOTE_PASSWORD if the remote "
                 "cluster's administrator password differs from this one.",
             )
             return
-        self.say(f"\n   remote credentials: {self.args.xdcr_remote_user} "
-                 f"(password from {source})")
+        self.say(
+            f"\n   remote credentials: {self.args.xdcr_remote_user} "
+            f"(password from {source})"
+        )
 
         reference = f"{PREFIX}-remote"
-        if not await self._already(session, "admin_xdcr_references_list", {},
-                                   "name", reference,
-                                   f"XDCR reference {reference}"):
+        if not await self._already(
+            session,
+            "admin_xdcr_references_list",
+            {},
+            "name",
+            reference,
+            f"XDCR reference {reference}",
+        ):
             result = await self.create(
-                session, "admin_xdcr_reference_create",
-                {"name": reference,
-                 "hostname": host,
-                 "username": self.args.xdcr_remote_user,
-                 "password": password},
+                session,
+                "admin_xdcr_reference_create",
+                {
+                    "name": reference,
+                    "hostname": host,
+                    "username": self.args.xdcr_remote_user,
+                    "password": password,
+                },
                 f"XDCR reference {reference}",
             )
             # THE EGRESS GUARD REFUSING THIS IS THE GUARD WORKING.
@@ -585,15 +691,18 @@ class Populate:
                 self.say("   guard doing its job, not a defect: this operation points")
                 self.say("   the CLUSTER at a destination the caller chose.")
                 self.say("   To allow it for this run only:")
-                self.say(f"     $env:CB_ADMIN_EGRESS_ALLOWED_HOSTS = "
-                         f"'{host.split(':')[0]}'")
+                self.say(
+                    f"     $env:CB_ADMIN_EGRESS_ALLOWED_HOSTS = '{host.split(':')[0]}'"
+                )
                 self.say("   Then re-run. Do NOT set CB_ADMIN_EGRESS_ALLOW_ANY.")
             if isinstance(result, dict) and result.get(ERROR_MARKER) is True:
                 # Creating the replication now would fail with "unknown remote
                 # cluster", which is TRUE and is a consequence, not a finding.
                 # A second red line about a cascade buries the one that matters.
-                self.say("\n   skipping the replication: its remote cluster "
-                         "reference does not exist.")
+                self.say(
+                    "\n   skipping the replication: its remote cluster "
+                    "reference does not exist."
+                )
                 return
 
         # The replication id is derived by the server, not chosen here, so the
@@ -607,16 +716,21 @@ class Populate:
             for r in existing
         )
         if present:
-            self.say(f"   replication {self.args.bucket} -> {reference}/{target} "
-                     "is already present")
+            self.say(
+                f"   replication {self.args.bucket} -> {reference}/{target} "
+                "is already present"
+            )
             self.present.append(f"XDCR replication to {target}")
             return
 
         await self.create(
-            session, "admin_xdcr_replication_create",
-            {"fromBucket": self.args.bucket,
-             "toCluster": reference,
-             "toBucket": target},
+            session,
+            "admin_xdcr_replication_create",
+            {
+                "fromBucket": self.args.bucket,
+                "toCluster": reference,
+                "toBucket": target,
+            },
             f"XDCR replication {self.args.bucket} -> {reference}/{target}",
         )
 
@@ -664,39 +778,56 @@ async def main_async(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", default="travel-sample")
-    parser.add_argument("--user-password", default="mcptest-Passw0rd!",
-                        help="Password for the fixture user. It is a FIXTURE "
-                             "credential on a throwaway cluster; do not reuse it.")
-    parser.add_argument("--plan", default="_daily_backups",
-                        help="Backup plan name. Falls back to the first plan the "
-                             "service lists, so a wrong name is not fatal.")
-    parser.add_argument("--archive", default="/opt/couchbase/var/lib/couchbase/backup-archive",
-                        help="Archive path AS THE BACKUP SERVICE SEES IT — inside "
-                             "the container, not on this machine. Must exist: "
-                             "docker exec <container> mkdir -p <path>")
-    parser.add_argument("--perform", dest="dry_run", action="store_false",
-                        default=True)
-    parser.add_argument("--i-know-what-im-doing", dest="override",
-                        action="store_true",
-                        help="permit a cluster holding non-sample buckets")
+    parser.add_argument(
+        "--user-password",
+        default="mcptest-Passw0rd!",
+        help="Password for the fixture user. It is a FIXTURE "
+        "credential on a throwaway cluster; do not reuse it.",
+    )
+    parser.add_argument(
+        "--plan",
+        default="_daily_backups",
+        help="Backup plan name. Falls back to the first plan the "
+        "service lists, so a wrong name is not fatal.",
+    )
+    parser.add_argument(
+        "--archive",
+        default="/opt/couchbase/var/lib/couchbase/backup-archive",
+        help="Archive path AS THE BACKUP SERVICE SEES IT — inside "
+        "the container, not on this machine. Must exist: "
+        "docker exec <container> mkdir -p <path>",
+    )
+    parser.add_argument("--perform", dest="dry_run", action="store_false", default=True)
+    parser.add_argument(
+        "--i-know-what-im-doing",
+        dest="override",
+        action="store_true",
+        help="permit a cluster holding non-sample buckets",
+    )
     # XDCR NEEDS A SECOND CLUSTER, and the second cluster's password is never
     # an argument. A password on a PowerShell command line is written to
     # ConsoleHost_history.txt in the clear and stays there; the env var is read
     # once and leaves no file behind. The remote HOST is safe on the command
     # line and is not secret.
     parser.add_argument(
-        "--xdcr-remote-host", default="",
-        help=("host:port of a SECOND Couchbase cluster, as THIS cluster's nodes "
-              "resolve it (e.g. cb-mcptest-n1:8091). Enables the XDCR fixture. "
-              "The password comes from CB_XDCR_REMOTE_PASSWORD, or CB_PASSWORD if "
-              "that is unset -- never from a flag."),
+        "--xdcr-remote-host",
+        default="",
+        help=(
+            "host:port of a SECOND Couchbase cluster, as THIS cluster's nodes "
+            "resolve it (e.g. cb-mcptest-n1:8091). Enables the XDCR fixture. "
+            "The password comes from CB_XDCR_REMOTE_PASSWORD, or CB_PASSWORD if "
+            "that is unset -- never from a flag."
+        ),
     )
     parser.add_argument("--xdcr-remote-user", default="Administrator")
     parser.add_argument(
-        "--xdcr-target-bucket", default=f"{PREFIX}-xdcr-target",
-        help=("bucket on the REMOTE cluster that receives the replication. It "
-              "must already exist there and it WILL be written to, so name a "
-              "throwaway."),
+        "--xdcr-target-bucket",
+        default=f"{PREFIX}-xdcr-target",
+        help=(
+            "bucket on the REMOTE cluster that receives the replication. It "
+            "must already exist there and it WILL be written to, so name a "
+            "throwaway."
+        ),
     )
     parser.add_argument("--timeout", type=float, default=120.0)
     return asyncio.run(main_async(parser.parse_args()))

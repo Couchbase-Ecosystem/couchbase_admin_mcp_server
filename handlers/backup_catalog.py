@@ -76,7 +76,9 @@ _DEFAULT_CATALOG_DIR = ".backup-catalog"
 _READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 #: Writes touch LOCAL FILES ONLY -- never a cluster, never a backup. destructiveHint
 #: is still true for the delete: it destroys a record someone may be relying on.
-_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
+_WRITE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False
+)
 _DELETE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
 
 _TAGS = {
@@ -159,8 +161,11 @@ def _root(args: dict, *, writing: bool = False) -> pathlib.Path:
 
     So: set CB_ADMIN_CATALOG_ROOT to a mounted volume, or pass catalog_root.
     """
-    explicit = (args.get("catalog_root") or "").strip() if isinstance(
-        args.get("catalog_root"), str) else args.get("catalog_root")
+    explicit = (
+        (args.get("catalog_root") or "").strip()
+        if isinstance(args.get("catalog_root"), str)
+        else args.get("catalog_root")
+    )
     configured = (os.environ.get(_CATALOG_ROOT_ENV) or "").strip()
     if writing and not explicit and not configured:
         raise ValueError(
@@ -250,16 +255,19 @@ def _matches(entry: dict, args: dict) -> bool:
     for key, value in _string_tags(args.get("exclude_tags") or {}).items():
         if str(tags.get(key)) == value:
             return False
-    for field, wanted in (("plane", args.get("plane")),
-                          ("cluster_id", args.get("cluster_id")),
-                          ("bucket", args.get("bucket"))):
+    for field, wanted in (
+        ("plane", args.get("plane")),
+        ("cluster_id", args.get("cluster_id")),
+        ("bucket", args.get("bucket")),
+    ):
         if wanted and str(entry.get(field)) != str(wanted):
             return False
     after = _parse_timestamp(args.get("created_after"))
     before = _parse_timestamp(args.get("created_before"))
     if after or before:
-        created = _parse_timestamp(entry.get("backup_created_at")
-                                   or entry.get("recorded_at"))
+        created = _parse_timestamp(
+            entry.get("backup_created_at") or entry.get("recorded_at")
+        )
         # An entry with no readable timestamp CANNOT satisfy a date filter.
         # Matching it would answer "what did we take last month" with something
         # of unknown age.
@@ -522,8 +530,11 @@ def _record(args: dict):
         root.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(entry, indent=2, sort_keys=True), encoding="utf-8")
     except OSError as exc:
-        return err(f"could not write the entry: {exc}",
-                   tool="cb_backup_catalog_record", catalog_root=str(root))
+        return err(
+            f"could not write the entry: {exc}",
+            tool="cb_backup_catalog_record",
+            catalog_root=str(root),
+        )
     entry["_file"] = str(path)
     return ok(entry)
 
@@ -544,9 +555,10 @@ def _list(args: dict):
     entries, unreadable = _read_entries(root)
     matched = [e for e in entries if _matches(e, args)]
     matched.sort(
-        key=lambda e: (_parse_timestamp(e.get("backup_created_at")
-                                        or e.get("recorded_at"))
-                       or datetime.min.replace(tzinfo=timezone.utc)),
+        key=lambda e: (
+            _parse_timestamp(e.get("backup_created_at") or e.get("recorded_at"))
+            or datetime.min.replace(tzinfo=timezone.utc)
+        ),
         reverse=True,
     )
     if args.get("latest_only") and matched:
@@ -580,8 +592,10 @@ def _get(args: dict):
     except ValueError as exc:
         return err(str(exc), tool="cb_backup_catalog_get")
     if not path.is_file():
-        return err(f"no catalogue entry {args.get('catalog_id')!r} under {root}",
-                   tool="cb_backup_catalog_get")
+        return err(
+            f"no catalogue entry {args.get('catalog_id')!r} under {root}",
+            tool="cb_backup_catalog_get",
+        )
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -597,8 +611,10 @@ def _update(args: dict):
     except ValueError as exc:
         return err(str(exc), tool="cb_backup_catalog_update")
     if not path.is_file():
-        return err(f"no catalogue entry {args.get('catalog_id')!r} under {root}",
-                   tool="cb_backup_catalog_update")
+        return err(
+            f"no catalogue entry {args.get('catalog_id')!r} under {root}",
+            tool="cb_backup_catalog_update",
+        )
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -633,8 +649,13 @@ def _delete(args: dict):
     if not path.is_file():
         # Idempotent on purpose: deleting an entry that is already gone is the
         # desired end state, not an error worth failing a cleanup script over.
-        return ok({"catalog_id": args.get("catalog_id"), "deleted": False,
-                   "note": "no such entry; nothing to delete"})
+        return ok(
+            {
+                "catalog_id": args.get("catalog_id"),
+                "deleted": False,
+                "note": "no such entry; nothing to delete",
+            }
+        )
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -642,16 +663,20 @@ def _delete(args: dict):
     try:
         path.unlink()
     except OSError as exc:
-        return err(f"could not delete the entry: {exc}", tool="cb_backup_catalog_delete")
-    return ok({
-        "catalog_id": args.get("catalog_id"),
-        "deleted": True,
-        "removed_entry": entry,
-        "note": (
-            "The catalogue ENTRY is gone. The BACKUP is untouched — this server "
-            "cannot delete backup bytes from here, deliberately."
-        ),
-    })
+        return err(
+            f"could not delete the entry: {exc}", tool="cb_backup_catalog_delete"
+        )
+    return ok(
+        {
+            "catalog_id": args.get("catalog_id"),
+            "deleted": True,
+            "removed_entry": entry,
+            "note": (
+                "The catalogue ENTRY is gone. The BACKUP is untouched — this server "
+                "cannot delete backup bytes from here, deliberately."
+            ),
+        }
+    )
 
 
 def _sync(args: dict):
@@ -682,8 +707,11 @@ def _sync(args: dict):
         (present if status == "present" else missing).append(entry.get("catalog_id"))
         try:
             pathlib.Path(entry["_file"]).write_text(
-                json.dumps({k: v for k, v in entry.items() if k != "_file"},
-                           indent=2, sort_keys=True),
+                json.dumps(
+                    {k: v for k, v in entry.items() if k != "_file"},
+                    indent=2,
+                    sort_keys=True,
+                ),
                 encoding="utf-8",
             )
         except OSError as exc:

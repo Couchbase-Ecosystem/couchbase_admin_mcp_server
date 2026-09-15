@@ -217,7 +217,7 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
         "2026-09-13, scripts/capella_xdcr_setup.py --perform. PERFORMED: the "
         "body {sourceBucket, target:{bucket, cluster, type}, direction:'oneWay', "
         "priority:'low'} was ACCEPTED and answered {\"jobId\": "
-        "\"46b2431d-9821-4a2b-8d10-7a1c891c728e\"} — note the response names a "
+        '"46b2431d-9821-4a2b-8d10-7a1c891c728e"} — note the response names a '
         "JOB, not the replication, so the id a caller needs for "
         "capella_replication_get comes from capella_replications_list and not "
         "from this create.\n"
@@ -349,12 +349,12 @@ SHIPPED_UNVERIFIED: dict[str, str] = {
         "on 2026-09-13, and the earlier conclusion came from reading a list that had "
         "been queried before the create settled.\n\n"
         "What is actually true, all of it measured the same day:\n"
-        "  capella_cluster_audit_log_export_create -> 202 {\"exportId\": \"f198d096-...\"}\n"
+        '  capella_cluster_audit_log_export_create -> 202 {"exportId": "f198d096-..."}\n'
         "  capella_cluster_audit_log_exports_list  -> 200, rows keyed auditLogExportId,\n"
         "        each carrying status 'no audit log files exist within the requested\n"
         "        time frame'\n"
-        "  capella_cluster_audit_log_export_get    -> 404 {\"message\": \"No audit log\n"
-        "        files exist within the requested time frame.\"}\n"
+        '  capella_cluster_audit_log_export_get    -> 404 {"message": "No audit log\n'
+        '        files exist within the requested time frame."}\n'
         "  capella_cluster_audit_log_config_set    -> 422 'your support package does\n"
         "        not include audit logging'\n\n"
         "So the PATH, the METHOD and the ID FIELD are all confirmed -- the getter was "
@@ -1238,7 +1238,7 @@ _RESYNC_BODY: dict[str, Any] = {
     "scopes": {
         "type": "object",
         "description": (
-            "Which collections to resync, as {\"<scope>\": [\"<collection>\", ...]}. "
+            'Which collections to resync, as {"<scope>": ["<collection>", ...]}. '
             "OMIT IT TO RESYNC THE WHOLE ENDPOINT -- that is the expensive "
             "default, not a safe one. A resync re-runs the access control "
             "function over every document it covers."
@@ -1340,8 +1340,15 @@ _ONOFF_DAY: dict[str, Any] = {
     "properties": {
         "day": {
             "type": "string",
-            "enum": ["monday", "tuesday", "wednesday", "thursday",
-                     "friday", "saturday", "sunday"],
+            "enum": [
+                "monday",
+                "tuesday",
+                "wednesday",
+                "thursday",
+                "friday",
+                "saturday",
+                "sunday",
+            ],
         },
         "state": {
             "type": "string",
@@ -2140,8 +2147,13 @@ OPS: tuple[Op, ...] = (
         # ALL FIVE, because this endpoint replaces rather than patches -- see the
         # schema's note. Declaring them optional would let a model send one field
         # and silently zero the other four.
-        body_required=("memoryAllocationInMb", "durabilityLevel", "replicas",
-                       "flush", "timeToLiveInSeconds"),
+        body_required=(
+            "memoryAllocationInMb",
+            "durabilityLevel",
+            "replicas",
+            "flush",
+            "timeToLiveInSeconds",
+        ),
     ),
     Op(
         name="capella_bucket_delete",
@@ -2614,8 +2626,8 @@ OPS: tuple[Op, ...] = (
             "It also cannot change `name` or `description`, so an App Service's "
             "mcp-env marker cannot be re-written by this op.\n"
             "SEND BOTH FIELDS. This REPLACES rather than patches: a PUT "
-            "carrying only {\"nodes\": 1} was refused 2026-09-14 with 422 \"The "
-            "instance compute type 0vCPUs,0GB is not valid\" -- compute arrived "
+            'carrying only {"nodes": 1} was refused 2026-09-14 with 422 "The '
+            'instance compute type 0vCPUs,0GB is not valid" -- compute arrived '
             "as its zero value because it was omitted. Read the current shape "
             "with capella_app_service_get first.\n"
             "Asynchronous, like create: a 204 means accepted, not resized. Poll "
@@ -3082,8 +3094,8 @@ OPS: tuple[Op, ...] = (
             "Read an App Endpoint's CORS configuration. We can SET this and "
             "cannot read it back, so a caller cannot check what is configured "
             "before replacing it -- and capella_app_endpoint_cors_set REPLACES. "
-            "[LIVE+METHOD 404, 2026-09-14: {\"code\":404, \"message\":\"App "
-            "Endpoint CORS is not enabled\"}. A SEMANTIC 404 -- the route "
+            '[LIVE+METHOD 404, 2026-09-14: {"code":404, "message":"App '
+            'Endpoint CORS is not enabled"}. A SEMANTIC 404 -- the route '
             "matched and reported the resource's own precondition, exactly as "
             "capella_cluster_onoff_schedule_get does with Capella code 11040. "
             "So a 404 here is NOT evidence the path is wrong; it is evidence "
@@ -3133,7 +3145,6 @@ OPS: tuple[Op, ...] = (
         body=_RESYNC_BODY,
         guarded=True,
     ),
-
     Op(
         name="capella_app_endpoint_access_control_function_delete",
         method="DELETE",

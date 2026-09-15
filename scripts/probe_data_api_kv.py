@@ -99,8 +99,14 @@ _PROBE_BODY = {"_probe": "probe_data_api_kv.py", "note": "safe to delete"}
 _PROBE_BODY_2 = {"_probe": "probe_data_api_kv.py", "note": "upserted"}
 
 
-def _request(method: str, url: str, user: str, password: str,
-             body: dict | None = None, timeout: int = 30) -> tuple[int, str]:
+def _request(
+    method: str,
+    url: str,
+    user: str,
+    password: str,
+    body: dict | None = None,
+    timeout: int = 30,
+) -> tuple[int, str]:
     """One Data API call. Returns (status, body) and never raises on an HTTP error."""
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(url, data=data, method=method)
@@ -124,16 +130,22 @@ def _request(method: str, url: str, user: str, password: str,
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cluster", required=True,
-                    help="cluster id or connection-string id")
-    ap.add_argument("--keyspace", required=True,
-                    help="bucket.scope.collection to probe in")
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--cluster", required=True, help="cluster id or connection-string id"
+    )
+    ap.add_argument(
+        "--keyspace", required=True, help="bucket.scope.collection to probe in"
+    )
     ap.add_argument("--project", default="")
     ap.add_argument("--env-file", default=None)
     ap.add_argument("--key", default=_PROBE_KEY)
-    ap.add_argument("--perform", action="store_true",
-                    help="actually create, upsert and delete the probe document")
+    ap.add_argument(
+        "--perform",
+        action="store_true",
+        help="actually create, upsert and delete the probe document",
+    )
     args = ap.parse_args()
 
     parts = args.keyspace.rsplit(".", 2)
@@ -145,8 +157,10 @@ def main() -> int:
     user = (os.environ.get("CB_CAPELLA_CLUSTER_USER") or "").strip()
     password = (os.environ.get("CB_CAPELLA_CLUSTER_PASSWORD") or "").strip()
     if not user or not password:
-        print("set CB_CAPELLA_CLUSTER_USER and CB_CAPELLA_CLUSTER_PASSWORD to a "
-              "CLUSTER ACCESS credential (not the organization API key).")
+        print(
+            "set CB_CAPELLA_CLUSTER_USER and CB_CAPELLA_CLUSTER_PASSWORD to a "
+            "CLUSTER ACCESS credential (not the organization API key)."
+        )
         return 2
 
     token, org, src = resolve_credentials(args.env_file)
@@ -175,9 +189,12 @@ def main() -> int:
     clusters_path = f"/v4/organizations/{org}/projects/{project}/clusters"
     status, text = call("GET", clusters_path, token)
     rows = _rows(text)
-    matched = [c for c in rows
-               if c.get("id") == args.cluster
-               or args.cluster in str(c.get("connectionString", ""))]
+    matched = [
+        c
+        for c in rows
+        if c.get("id") == args.cluster
+        or args.cluster in str(c.get("connectionString", ""))
+    ]
     if len(matched) != 1:
         print(f"--cluster {args.cluster!r} matched {len(matched)} of {len(rows)}")
         return 2
@@ -191,8 +208,10 @@ def main() -> int:
         return 2
     connection = str((json.loads(text) or {}).get("connectionString") or "")
     if not connection:
-        print("the Data API is not enabled on this cluster (empty connectionString). "
-              "Enable it with capella_data_api_set and wait for the state to settle.")
+        print(
+            "the Data API is not enabled on this cluster (empty connectionString). "
+            "Enable it with capella_data_api_set and wait for the state to settle."
+        )
         return 2
     if not connection.startswith("http"):
         connection = "https://" + connection
@@ -201,8 +220,10 @@ def main() -> int:
     print(f"[base] {api_base}")
 
     urls = [
-        api_base + candidate.format(bucket=bucket, scope=scope,
-                                    collection=collection, key=args.key)
+        api_base
+        + candidate.format(
+            bucket=bucket, scope=scope, collection=collection, key=args.key
+        )
         for candidate in _CANDIDATES
     ]
     print("\nCandidate document URLs, in the order they will be tried:")
@@ -211,8 +232,10 @@ def main() -> int:
 
     if not args.perform:
         print("\nDRY RUN. Nothing was sent. Re-run with --perform to measure.")
-        print("It will create one document, read it back, upsert it, read it "
-              "again, and delete it.")
+        print(
+            "It will create one document, read it back, upsert it, read it "
+            "again, and delete it."
+        )
         return 0
 
     # ── 1. find the spelling that routes ─────────────────────────────────
@@ -237,13 +260,17 @@ def main() -> int:
             live = url
             break
         if status in (401, 403):
-            print("  -> authentication or allowlist problem, not a path problem. "
-                  "Fix that before reading anything else here.")
+            print(
+                "  -> authentication or allowlist problem, not a path problem. "
+                "Fix that before reading anything else here."
+            )
             return 2
     if not live:
         print("\nNone of the candidate spellings routed. Do NOT ship any of them.")
-        print("Read the Data API reference for the document endpoint and add the "
-              "real spelling to _CANDIDATES, then re-run.")
+        print(
+            "Read the Data API reference for the document endpoint and add the "
+            "real spelling to _CANDIDATES, then re-run."
+        )
         return 1
 
     print(f"\n=== the live spelling is ===\n  {live}\n")
@@ -275,11 +302,15 @@ def main() -> int:
             status, body = _request("DELETE", live, user, password)
             print(f"\nDELETE (cleanup)\n  {status}  {body[:300]}")
             if not (200 <= status < 300 or status == 404):
-                print(f"*** COULD NOT REMOVE THE PROBE DOCUMENT {args.key!r}. "
-                      f"*** Delete it by hand -- the collection is not as it was found.")
+                print(
+                    f"*** COULD NOT REMOVE THE PROBE DOCUMENT {args.key!r}. "
+                    f"*** Delete it by hand -- the collection is not as it was found."
+                )
 
-    print("\nRecord the live spelling and the create/upsert statuses in "
-          "handlers/capella/fixture.py before implementing document import.")
+    print(
+        "\nRecord the live spelling and the create/upsert statuses in "
+        "handlers/capella/fixture.py before implementing document import."
+    )
     return 0
 
 

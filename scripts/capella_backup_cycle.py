@@ -137,7 +137,8 @@ class Cycle:
         ids["organization_id"] = self.args.org or orgs[0].get("id")
 
         body = await self.call(
-            session, "capella_projects_list",
+            session,
+            "capella_projects_list",
             {"organization_id": ids["organization_id"]},
         )
         projects = _rows(body)
@@ -146,8 +147,12 @@ class Cycle:
         ids["project_id"] = self.args.project or projects[0].get("id")
 
         body = await self.call(
-            session, "capella_clusters_list",
-            {"organization_id": ids["organization_id"], "project_id": ids["project_id"]},
+            session,
+            "capella_clusters_list",
+            {
+                "organization_id": ids["organization_id"],
+                "project_id": ids["project_id"],
+            },
         )
         clusters = _rows(body)
         if not self.check(bool(clusters), "a cluster is visible"):
@@ -169,7 +174,9 @@ class Cycle:
             )
             return None
         if wanted not in names:
-            self.check(False, f"bucket {wanted!r} exists", f"available: {sorted(names)}")
+            self.check(
+                False, f"bucket {wanted!r} exists", f"available: {sorted(names)}"
+            )
             return None
 
         # v4 addresses a bucket by a base64 id, keyspaces use NAMES, and
@@ -182,17 +189,22 @@ class Cycle:
     async def run(self, session) -> None:
         self.say("=" * 70)
         self.say(f"capella backup cycle   bucket={self.args.bucket}")
-        self.say(f"mode                   {'PERFORM (real write)' if self.performed else 'DRY RUN (preview)'}")
+        self.say(
+            f"mode                   {'PERFORM (real write)' if self.performed else 'DRY RUN (preview)'}"
+        )
         self.say("=" * 70)
 
         ids = await self.discover(session)
         if ids is None:
             return
 
-        cluster_scope = {k: ids[k] for k in
-                         ("organization_id", "project_id", "cluster_id")}
+        cluster_scope = {
+            k: ids[k] for k in ("organization_id", "project_id", "cluster_id")
+        }
 
-        before = _rows(await self.call(session, "capella_backups_list", dict(cluster_scope)))
+        before = _rows(
+            await self.call(session, "capella_backups_list", dict(cluster_scope))
+        )
         self.say(f"   backups before: {len(before)}")
 
         # Unconfirmed first: a write that proceeds without confirm:true means
@@ -221,17 +233,26 @@ class Cycle:
         # wanted -- and a 422 naming fields is a RESULT, not a failure: it is
         # the schema `body={}` has been missing.
         if created.get(ERROR_MARKER) is True:
-            self.say("\n   The create was rejected. This is the finding, not a failure:")
+            self.say(
+                "\n   The create was rejected. This is the finding, not a failure:"
+            )
             self.say("   the message below is what the API wants in the body, which")
             self.say("   `capella_backup_create` declares as empty. Record it in")
             self.say("   handlers/capella/spec.py and the body is no longer a guess.")
-            self.check(False, "create accepted an empty body", json.dumps(created)[:400])
+            self.check(
+                False, "create accepted an empty body", json.dumps(created)[:400]
+            )
             return
 
-        self.check(True, "create accepted an empty body",
-                   "so body={} in spec.py is correct, now by observation")
+        self.check(
+            True,
+            "create accepted an empty body",
+            "so body={} in spec.py is correct, now by observation",
+        )
 
-        after = _rows(await self.call(session, "capella_backups_list", dict(cluster_scope)))
+        after = _rows(
+            await self.call(session, "capella_backups_list", dict(cluster_scope))
+        )
         self.say(f"   backups after: {len(after)}")
         self.check(
             len(after) >= len(before),
@@ -281,8 +302,12 @@ def main() -> int:
     parser.add_argument("--org", default=None)
     parser.add_argument("--project", default=None)
     parser.add_argument("--cluster", default=None)
-    parser.add_argument("--i-know-what-im-doing", dest="override", action="store_true",
-                        help="permit a protected bucket")
+    parser.add_argument(
+        "--i-know-what-im-doing",
+        dest="override",
+        action="store_true",
+        help="permit a protected bucket",
+    )
     parser.add_argument("--timeout", type=float, default=120.0)
     return asyncio.run(main_async(parser.parse_args()))
 

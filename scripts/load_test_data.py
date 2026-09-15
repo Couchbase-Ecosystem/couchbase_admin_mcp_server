@@ -82,7 +82,9 @@ def _connect(args):
         pwd = os.environ.get("CB_PASSWORD")
 
     if not user or not pwd:
-        sys.exit("CB_USERNAME / CB_PASSWORD are not set. Run cbenv.bat, then a NEW shell.")
+        sys.exit(
+            "CB_USERNAME / CB_PASSWORD are not set. Run cbenv.bat, then a NEW shell."
+        )
 
     print(f"connecting to {conn}")
     options = ClusterOptions(PasswordAuthenticator(user, pwd))
@@ -106,8 +108,10 @@ def _ensure_keyspaces(cluster, bucket_name: str) -> None:
     any index exists, and so a permission failure names the collection manager
     rather than surfacing as a query error.
     """
-    from couchbase.exceptions import ScopeAlreadyExistsException
-    from couchbase.exceptions import CollectionAlreadyExistsException
+    from couchbase.exceptions import (
+        CollectionAlreadyExistsException,
+        ScopeAlreadyExistsException,
+    )
 
     manager = cluster.bucket(bucket_name).collections()
 
@@ -195,7 +199,7 @@ def _index(cluster, bucket: str) -> None:
         try:
             cluster.query(statement).execute()
             print(f"  {label}")
-        except Exception as exc:  # noqa: BLE001 - report and carry on
+        except Exception as exc:
             print(f"  {label} FAILED: {type(exc).__name__}: {exc}")
 
 
@@ -255,9 +259,11 @@ def main() -> int:
                 f"  NOTE: expected {args.events}. Indexes are eventually "
                 "consistent; re-read in a few seconds before concluding anything."
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"  count query failed ({type(exc).__name__}: {exc})")
-        print("  the documents may still be there -- this is the INDEX, not the KV write.")
+        print(
+            "  the documents may still be there -- this is the INDEX, not the KV write."
+        )
 
     print(f"\ndone. ~{total} documents in {args.bucket}.\n")
     return 0

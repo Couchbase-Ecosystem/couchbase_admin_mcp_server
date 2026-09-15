@@ -137,14 +137,16 @@ def _number_before(text: str, phrase: str, source: str) -> int:
 
 
 def test_the_context_diagram_states_the_real_tool_count():
-    assert _number_before(_text("01_context.mmd"), "tools", "01_context.mmd") == (
-        MEASURED["tools"]
+    assert (
+        _number_before(_text("01_context.mmd"), "tools", "01_context.mmd")
+        == (MEASURED["tools"])
     ), "docs/diagrams-src/01_context.mmd states a tool count the registry does not have"
 
 
 def test_the_module_map_states_the_real_tool_count():
-    assert _number_before(_text("03_modules.mmd"), "tools", "03_modules.mmd") == (
-        MEASURED["tools"]
+    assert (
+        _number_before(_text("03_modules.mmd"), "tools", "03_modules.mmd")
+        == (MEASURED["tools"])
     )
 
 

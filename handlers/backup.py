@@ -145,9 +145,7 @@ def _repository_path(args: dict, *, suffix: str = "") -> str:
     """
     state = (args.get("state") or "active").strip().lower()
     if state not in _STATES:
-        raise ValueError(
-            f"state must be one of {', '.join(_STATES)}, not {state!r}"
-        )
+        raise ValueError(f"state must be one of {', '.join(_STATES)}, not {state!r}")
     rid = quote_path(args["repository_id"])
     return f"{_BACKUP}/cluster/self/repository/{state}/{rid}{suffix}"
 
@@ -384,9 +382,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
                     tool=name,
                 )
             return ok(
-                admin_request(
-                    "GET", f"{_BACKUP}/cluster/self/repository/{state}"
-                )
+                admin_request("GET", f"{_BACKUP}/cluster/self/repository/{state}")
             )
 
         if name == "admin_backup_plans_list":

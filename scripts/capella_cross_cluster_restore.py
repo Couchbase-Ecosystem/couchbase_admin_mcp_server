@@ -127,8 +127,12 @@ def _rows(body: dict) -> list:
 
 def _provider(cluster: dict) -> str:
     """CSP, which v4 spells differently depending on how the cluster was made."""
-    for path in (("cloudProvider", "type"), ("cloudProvider", "provider"),
-                 ("provider",), ("cloudProvider",)):
+    for path in (
+        ("cloudProvider", "type"),
+        ("cloudProvider", "provider"),
+        ("provider",),
+        ("cloudProvider",),
+    ):
         node: Any = cluster
         for key in path:
             node = node.get(key) if isinstance(node, dict) else None
@@ -213,8 +217,9 @@ class Restore:
             return None
         org = self.args.org or orgs[0].get("id")
 
-        body = await self.call(session, "capella_projects_list",
-                               {"organization_id": org})
+        body = await self.call(
+            session, "capella_projects_list", {"organization_id": org}
+        )
         projects = _rows(body)
         if not self.check(bool(projects), "a project is visible"):
             return None
@@ -226,26 +231,34 @@ class Restore:
         rows = [c for c in _rows(body) if isinstance(c, dict)]
         self.say("\n   clusters in this project:")
         for c in rows:
-            self.say(f"     {c.get('name')!r}  id={c.get('id')}  "
-                     f"provider={_provider(c) or '?'}  version={_version(c) or '?'}")
+            self.say(
+                f"     {c.get('name')!r}  id={c.get('id')}  "
+                f"provider={_provider(c) or '?'}  version={_version(c) or '?'}"
+            )
 
-        if not self.check(len(rows) >= 2,
-                          "at least two clusters exist",
-                          "a cross-cluster restore needs somewhere to restore INTO"):
+        if not self.check(
+            len(rows) >= 2,
+            "at least two clusters exist",
+            "a cross-cluster restore needs somewhere to restore INTO",
+        ):
             return None
 
         targets = [c for c in rows if _matches(c, self.args.target)]
-        if not self.check(len(targets) == 1,
-                          f"--target {self.args.target!r} names exactly one cluster",
-                          f"matched {len(targets)}"):
+        if not self.check(
+            len(targets) == 1,
+            f"--target {self.args.target!r} names exactly one cluster",
+            f"matched {len(targets)}",
+        ):
             return None
         target = targets[0]
 
         if self.args.source:
             sources = [c for c in rows if _matches(c, self.args.source)]
-            if not self.check(len(sources) == 1,
-                              f"--source {self.args.source!r} names exactly one cluster",
-                              f"matched {len(sources)}"):
+            if not self.check(
+                len(sources) == 1,
+                f"--source {self.args.source!r} names exactly one cluster",
+                f"matched {len(sources)}",
+            ):
                 return None
             source = sources[0]
         else:
@@ -254,42 +267,63 @@ class Restore:
             # "more than two clusters exist" underneath a PASS, which reads as a
             # warning about the run that just succeeded.
             if len(others) != 1:
-                self.check(False, "the source cluster is unambiguous",
-                           f"{len(others)} candidate(s) besides the target -- "
-                           "name one with --source")
+                self.check(
+                    False,
+                    "the source cluster is unambiguous",
+                    f"{len(others)} candidate(s) besides the target -- "
+                    "name one with --source",
+                )
                 return None
             self.check(True, "the source cluster is unambiguous")
             source = others[0]
 
-        if not self.check(source.get("id") != target.get("id"),
-                          "source and target are different clusters"):
+        if not self.check(
+            source.get("id") != target.get("id"),
+            "source and target are different clusters",
+        ):
             return None
 
-        self.say(f"\n   FROM  {source.get('name')!r}  {source.get('id')}"
-                 "   <- read only, and the cluster in the request PATH")
-        self.say(f"   INTO  {target.get('name')!r}  {target.get('id')}"
-                 "   <- OVERWRITTEN, named in the body only")
+        self.say(
+            f"\n   FROM  {source.get('name')!r}  {source.get('id')}"
+            "   <- read only, and the cluster in the request PATH"
+        )
+        self.say(
+            f"   INTO  {target.get('name')!r}  {target.get('id')}"
+            "   <- OVERWRITTEN, named in the body only"
+        )
         return source, target
 
     # ── the five documented constraints ──────────────────────────────────────
 
     def preflight(self, source: dict, target: dict) -> bool:
         self.say("\n" + "-" * 70)
-        self.say("preflight: the constraints Capella documents on a cross-cluster restore")
+        self.say(
+            "preflight: the constraints Capella documents on a cross-cluster restore"
+        )
         self.say("-" * 70)
 
         # 1 and 4 hold by construction: both clusters came out of one
         # capella_clusters_list call scoped to one organization, which is a
         # stronger statement than comparing two strings we were handed.
-        self.check(True, "same organization",
-                   "both were returned by one clusters_list in this org and project")
-        self.check(True, "the source cluster still exists",
-                   "it answered capella_clusters_list in this run")
+        self.check(
+            True,
+            "same organization",
+            "both were returned by one clusters_list in this org and project",
+        )
+        self.check(
+            True,
+            "the source cluster still exists",
+            "it answered capella_clusters_list in this run",
+        )
 
         sp, tp = _provider(source), _provider(target)
         ok = bool(sp) and sp == tp
-        self.check(ok, "same cloud provider", f"source={sp or '?'} target={tp or '?'}"
-                   + ("" if ok else "  -- Capella refuses across CSPs"))
+        self.check(
+            ok,
+            "same cloud provider",
+            f"source={sp or '?'} target={tp or '?'}"
+            + ("" if ok else "  -- Capella refuses across CSPs"),
+        )
 
         # 6. BOTH CLUSTERS HEALTHY. Capella has a dedicated code for this too:
         #    422 / 5022 "Unable to target a restore for a cluster that is not in
@@ -301,57 +335,86 @@ class Restore:
         #    bucket has already been created.
         for role, cluster in (("source", source), ("target", target)):
             state = str(cluster.get("currentState") or "")
-            self.check(state == "healthy",
-                       f"{role} cluster is healthy",
-                       f"{cluster.get('name')!r} is {state or 'in an unreported state'}"
-                       + ("" if state == "healthy" else
-                          " — Capella refuses a restore with 422 code 5022. Wait for "
-                          "it to settle; `peering` means a network change (XDCR, a "
-                          "private endpoint) is still in progress."))
+            self.check(
+                state == "healthy",
+                f"{role} cluster is healthy",
+                f"{cluster.get('name')!r} is {state or 'in an unreported state'}"
+                + (
+                    ""
+                    if state == "healthy"
+                    else " — Capella refuses a restore with 422 code 5022. Wait for "
+                    "it to settle; `peering` means a network change (XDCR, a "
+                    "private endpoint) is still in progress."
+                ),
+            )
 
         sv, tv = _version(source), _version(target)
         smaj, tmaj = _major(sv), _major(tv)
         if smaj < 0 or tmaj < 0:
             # Unreadable is not the same as wrong. Say so rather than passing a
             # check on a version string nobody parsed.
-            self.check(False, "target major version >= source",
-                       f"could not read a version: source={sv or '?'} target={tv or '?'}")
+            self.check(
+                False,
+                "target major version >= source",
+                f"could not read a version: source={sv or '?'} target={tv or '?'}",
+            )
         else:
-            self.check(tmaj >= smaj, "target major version >= source",
-                       f"source={sv} target={tv}")
+            self.check(
+                tmaj >= smaj,
+                "target major version >= source",
+                f"source={sv} target={tv}",
+            )
         return not self.failures
 
     # ── constraint 5: the bucket must already be there ───────────────────────
 
-    async def ensure_bucket(self, session, scope: dict, source: dict,
-                            target: dict) -> bool:
+    async def ensure_bucket(
+        self, session, scope: dict, source: dict, target: dict
+    ) -> bool:
         name = self.args.bucket
         src_scope = {**scope, "cluster_id": source.get("id")}
         tgt_scope = {**scope, "cluster_id": target.get("id")}
 
-        src_buckets = {b.get("name"): b for b in
-                       _rows(await self.call(session, "capella_buckets_list", src_scope))
-                       if isinstance(b, dict)}
-        if not self.check(name in src_buckets,
-                          f"the source holds {name!r}",
-                          f"source buckets: {sorted(src_buckets)}"):
+        src_buckets = {
+            b.get("name"): b
+            for b in _rows(await self.call(session, "capella_buckets_list", src_scope))
+            if isinstance(b, dict)
+        }
+        if not self.check(
+            name in src_buckets,
+            f"the source holds {name!r}",
+            f"source buckets: {sorted(src_buckets)}",
+        ):
             return False
-        src_res = (src_buckets[name].get("bucketConflictResolution")
-                   or src_buckets[name].get("conflictResolution") or "seqno")
+        src_res = (
+            src_buckets[name].get("bucketConflictResolution")
+            or src_buckets[name].get("conflictResolution")
+            or "seqno"
+        )
 
-        tgt_buckets = {b.get("name"): b for b in
-                       _rows(await self.call(session, "capella_buckets_list", tgt_scope))
-                       if isinstance(b, dict)}
+        tgt_buckets = {
+            b.get("name"): b
+            for b in _rows(await self.call(session, "capella_buckets_list", tgt_scope))
+            if isinstance(b, dict)
+        }
 
         if name in tgt_buckets:
-            tgt_res = (tgt_buckets[name].get("bucketConflictResolution")
-                       or tgt_buckets[name].get("conflictResolution") or "seqno")
-            self.check(tgt_res == src_res,
-                       "target bucket's conflict resolution matches the source",
-                       f"source={src_res} target={tgt_res}")
+            tgt_res = (
+                tgt_buckets[name].get("bucketConflictResolution")
+                or tgt_buckets[name].get("conflictResolution")
+                or "seqno"
+            )
+            self.check(
+                tgt_res == src_res,
+                "target bucket's conflict resolution matches the source",
+                f"source={src_res} target={tgt_res}",
+            )
             if name in PROTECTED and not self.args.override:
-                self.check(False, f"target bucket {name!r} is not protected",
-                           "restore OVERWRITES it; pass --i-know-what-im-doing")
+                self.check(
+                    False,
+                    f"target bucket {name!r} is not protected",
+                    "restore OVERWRITES it; pass --i-know-what-im-doing",
+                )
                 return False
             return True
 
@@ -369,20 +432,26 @@ class Restore:
         body = {
             "name": name,
             "type": src.get("type") or "couchbase",
-            "storageBackend": (self.args.storage
-                               or src.get("storageBackend") or "couchstore"),
-            "memoryAllocationInMb": (self.args.quota
-                                     or src.get("memoryAllocationInMb") or 256),
+            "storageBackend": (
+                self.args.storage or src.get("storageBackend") or "couchstore"
+            ),
+            "memoryAllocationInMb": (
+                self.args.quota or src.get("memoryAllocationInMb") or 256
+            ),
             "bucketConflictResolution": src_res,
-            "replicas": (self.args.replicas
-                         if self.args.replicas is not None
-                         else src.get("replicas", 1)),
+            "replicas": (
+                self.args.replicas
+                if self.args.replicas is not None
+                else src.get("replicas", 1)
+            ),
             "flush": True,
         }
-        self.say(f"   copied from the source bucket: "
-                 f"storage={body['storageBackend']} "
-                 f"quota={body['memoryAllocationInMb']}MB "
-                 f"replicas={body['replicas']} conflict={src_res}")
+        self.say(
+            f"   copied from the source bucket: "
+            f"storage={body['storageBackend']} "
+            f"quota={body['memoryAllocationInMb']}MB "
+            f"replicas={body['replicas']} conflict={src_res}"
+        )
         args = {**tgt_scope, "body": body}
 
         unconfirmed = await self.call(session, "capella_bucket_create", args)
@@ -392,19 +461,23 @@ class Restore:
             "bucket_create without confirm is refused",
         )
 
-        created = await self.call(session, "capella_bucket_create",
-                                  {**args, "confirm": True})
+        created = await self.call(
+            session, "capella_bucket_create", {**args, "confirm": True}
+        )
         if not self.performed:
-            self.check(created.get("dry_run") is True
-                       and created.get("executed") is False,
-                       "bucket_create is previewed, not executed")
+            self.check(
+                created.get("dry_run") is True and created.get("executed") is False,
+                "bucket_create is previewed, not executed",
+            )
             return True
         if created.get(ERROR_MARKER) is True:
-            self.check(False, "bucket_create was accepted",
-                       json.dumps(created)[:400])
+            self.check(False, "bucket_create was accepted", json.dumps(created)[:400])
             return False
-        self.check(True, "bucket_create was accepted",
-                   f"conflict resolution {src_res!r}, copied from the source")
+        self.check(
+            True,
+            "bucket_create was accepted",
+            f"conflict resolution {src_res!r}, copied from the source",
+        )
         return True
 
     # ── the restore itself ───────────────────────────────────────────────────
@@ -412,7 +485,9 @@ class Restore:
     async def run(self, session) -> None:
         self.say("=" * 70)
         self.say("capella CROSS-CLUSTER restore")
-        self.say(f"mode   {'PERFORM (real restore)' if self.performed else 'DRY RUN (preview)'}")
+        self.say(
+            f"mode   {'PERFORM (real restore)' if self.performed else 'DRY RUN (preview)'}"
+        )
         self.say("=" * 70)
 
         scope = await self.scope(session)
@@ -431,26 +506,36 @@ class Restore:
             return
 
         src_scope = {**scope, "cluster_id": source.get("id")}
-        backups = [b for b in
-                   _rows(await self.call(session, "capella_backups_list", src_scope))
-                   if isinstance(b, dict)]
-        mine = [b for b in backups
-                if (b.get("bucketName") or b.get("bucket")) in (None, self.args.bucket)]
-        if not self.check(bool(mine),
-                          f"the source has a backup of {self.args.bucket!r}",
-                          f"{len(backups)} backup(s) on the source"):
+        backups = [
+            b
+            for b in _rows(await self.call(session, "capella_backups_list", src_scope))
+            if isinstance(b, dict)
+        ]
+        mine = [
+            b
+            for b in backups
+            if (b.get("bucketName") or b.get("bucket")) in (None, self.args.bucket)
+        ]
+        if not self.check(
+            bool(mine),
+            f"the source has a backup of {self.args.bucket!r}",
+            f"{len(backups)} backup(s) on the source",
+        ):
             return
 
         # Newest by DATE, not by position. v4 happens to return newest first,
         # but that ordering is not documented, and "restore whichever row came
         # back first" is not a sentence anyone wants to read after restoring the
         # wrong month onto a cluster. Undated rows sort last rather than crashing.
-        mine.sort(key=lambda b: str(b.get("date") or b.get("createdAt") or ""),
-                  reverse=True)
+        mine.sort(
+            key=lambda b: str(b.get("date") or b.get("createdAt") or ""), reverse=True
+        )
         backup = mine[0]
         if self.args.backup:
             picked = [b for b in mine if b.get("id") == self.args.backup]
-            if not self.check(len(picked) == 1, f"--backup {self.args.backup!r} exists"):
+            if not self.check(
+                len(picked) == 1, f"--backup {self.args.backup!r} exists"
+            ):
                 return
             backup = picked[0]
         backup_id = backup.get("id")
@@ -459,12 +544,20 @@ class Restore:
         # used to prove it afterwards -- and this cluster also holds backups of
         # harvester and supportal.
         self.say(f"\n   restoring backup {backup_id}")
-        self.say(f"     bucket : {backup.get('bucketName') or backup.get('bucket') or '?'}")
-        self.say(f"     taken  : {backup.get('date') or backup.get('createdAt') or 'undated'}")
-        self.say(f"     method : {backup.get('method') or '?'}   "
-                 f"items={((backup.get('stats') or {}).get('items', '?'))}")
-        self.say(f"     chosen as the newest of {len(mine)} backup(s) of "
-                 f"{self.args.bucket!r}")
+        self.say(
+            f"     bucket : {backup.get('bucketName') or backup.get('bucket') or '?'}"
+        )
+        self.say(
+            f"     taken  : {backup.get('date') or backup.get('createdAt') or 'undated'}"
+        )
+        self.say(
+            f"     method : {backup.get('method') or '?'}   "
+            f"items={((backup.get('stats') or {}).get('items', '?'))}"
+        )
+        self.say(
+            f"     chosen as the newest of {len(mine)} backup(s) of "
+            f"{self.args.bucket!r}"
+        )
 
         # THE PATH CLUSTER IS THE SOURCE.
         #
@@ -500,13 +593,15 @@ class Restore:
             "this is the destructive tool; the gate matters more here than anywhere",
         )
 
-        result = await self.call(session, "capella_backup_restore",
-                                 {**args, "confirm": True})
+        result = await self.call(
+            session, "capella_backup_restore", {**args, "confirm": True}
+        )
 
         if not self.performed:
-            self.check(result.get("dry_run") is True
-                       and result.get("executed") is False,
-                       "restore is previewed, not executed")
+            self.check(
+                result.get("dry_run") is True and result.get("executed") is False,
+                "restore is previewed, not executed",
+            )
             self.say("\nDry run complete. Nothing was restored.")
             self.say("Re-run with --perform to settle the request body.")
             return
@@ -519,8 +614,11 @@ class Restore:
             self.check(False, "restore was accepted", json.dumps(result)[:600])
             return
 
-        self.check(True, "restore was accepted",
-                   "the four required fields are now OBSERVED, not transcribed")
+        self.check(
+            True,
+            "restore was accepted",
+            "the four required fields are now OBSERVED, not transcribed",
+        )
         self.say("\n   Capella restores are ASYNCHRONOUS. Poll the target with")
         self.say("   capella_buckets_list until its item count stops climbing;")
         self.say("   indexes come back DEFERRED and must be built before the")
@@ -562,34 +660,60 @@ async def main_async(args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", required=True,
-                        help="the cluster to restore INTO, by id, name, or a "
-                             "fragment of its connection string. THIS ONE IS "
-                             "WRITTEN.")
-    parser.add_argument("--source", default="",
-                        help="the cluster that owns the backup. Inferred when "
-                             "exactly two clusters exist.")
+    parser.add_argument(
+        "--target",
+        required=True,
+        help="the cluster to restore INTO, by id, name, or a "
+        "fragment of its connection string. THIS ONE IS "
+        "WRITTEN.",
+    )
+    parser.add_argument(
+        "--source",
+        default="",
+        help="the cluster that owns the backup. Inferred when "
+        "exactly two clusters exist.",
+    )
     parser.add_argument("--bucket", default="travel-sample")
-    parser.add_argument("--backup", default="",
-                        help="restore this backup id rather than the first listed.")
-    parser.add_argument("--services", nargs="+", default=["data"],
-                        help="services to restore. 'data' alone is the honest "
-                             "default: index definitions restore DEFERRED.")
-    parser.add_argument("--quota", type=int, default=None,
-                        help="per-node RAM for a target bucket this script "
-                             "creates. Default: whatever the source bucket has.")
-    parser.add_argument("--replicas", type=int, default=None,
-                        help="Default: whatever the source bucket has.")
-    parser.add_argument("--storage", default=None,
-                        choices=["couchstore", "magma"],
-                        help="Default: whatever the source bucket has.")
-    parser.add_argument("--perform", dest="dry_run", action="store_false",
-                        default=True)
+    parser.add_argument(
+        "--backup",
+        default="",
+        help="restore this backup id rather than the first listed.",
+    )
+    parser.add_argument(
+        "--services",
+        nargs="+",
+        default=["data"],
+        help="services to restore. 'data' alone is the honest "
+        "default: index definitions restore DEFERRED.",
+    )
+    parser.add_argument(
+        "--quota",
+        type=int,
+        default=None,
+        help="per-node RAM for a target bucket this script "
+        "creates. Default: whatever the source bucket has.",
+    )
+    parser.add_argument(
+        "--replicas",
+        type=int,
+        default=None,
+        help="Default: whatever the source bucket has.",
+    )
+    parser.add_argument(
+        "--storage",
+        default=None,
+        choices=["couchstore", "magma"],
+        help="Default: whatever the source bucket has.",
+    )
+    parser.add_argument("--perform", dest="dry_run", action="store_false", default=True)
     parser.add_argument("--org", default=None)
     parser.add_argument("--project", default=None)
-    parser.add_argument("--i-know-what-im-doing", dest="override",
-                        action="store_true",
-                        help="permit a protected bucket as the RESTORE TARGET")
+    parser.add_argument(
+        "--i-know-what-im-doing",
+        dest="override",
+        action="store_true",
+        help="permit a protected bucket as the RESTORE TARGET",
+    )
     parser.add_argument("--timeout", type=float, default=180.0)
     return asyncio.run(main_async(parser.parse_args()))
 

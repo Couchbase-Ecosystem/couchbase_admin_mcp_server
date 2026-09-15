@@ -317,14 +317,17 @@ def _posture_guard():
     problems = _posture_problems()
     if problems:
         return (
-            jsonify({
-                "error": "refusing to serve: incoherent security posture",
-                "problems": problems,
-                "hint": 'start with gunicorn "gui.gui_server:create_app()"',
-            }),
+            jsonify(
+                {
+                    "error": "refusing to serve: incoherent security posture",
+                    "problems": problems,
+                    "hint": 'start with gunicorn "gui.gui_server:create_app()"',
+                }
+            ),
             503,
         )
     return None
+
 
 # CB_GUI_ALLOWED_ORIGINS is honoured HERE as well as in _reject_cross_site_request.
 # Without it the refusal message told operators to set the variable, the request-side

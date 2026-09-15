@@ -99,15 +99,21 @@ def _one(rows: list, what: str, wanted: str | None) -> str | None:
     and about the wrong cluster. Better to print the choices and stop.
     """
     if wanted:
-        rows = [r for r in rows
-                if wanted in (str(r.get("id", "")), str(r.get("name", "")))
-                or wanted in str(r.get("connectionString", ""))]
+        rows = [
+            r
+            for r in rows
+            if wanted in (str(r.get("id", "")), str(r.get("name", "")))
+            or wanted in str(r.get("connectionString", ""))
+        ]
     if not rows:
         print(f"no {what} matched" + (f" {wanted!r}" if wanted else ""))
         return None
     if len(rows) > 1:
-        print(f"{len(rows)} {what}s match" + (f" {wanted!r}" if wanted else "")
-              + "; name one:")
+        print(
+            f"{len(rows)} {what}s match"
+            + (f" {wanted!r}" if wanted else "")
+            + "; name one:"
+        )
         for row in rows:
             print(f"   {row.get('name')!r}  {row.get('id')}")
         return None
@@ -272,8 +278,10 @@ async def run(args) -> int:
                 # NAME THE LIKELY REASON rather than leaving the reader to guess
                 # between a typo and the read-only filter.
                 if not args.write:
-                    print("It may be a write tool — re-run with --write to "
-                          "advertise writes under a forced dry run.")
+                    print(
+                        "It may be a write tool — re-run with --write to "
+                        "advertise writes under a forced dry run."
+                    )
                 near = [t.name for t in advertised if args.tool in t.name]
                 if near:
                     print("closest advertised: " + ", ".join(sorted(near)))
@@ -291,11 +299,15 @@ async def run(args) -> int:
                 annotations = getattr(match, "annotations", None)
                 if getattr(annotations, "destructiveHint", False):
                     if not args.allow_destructive:
-                        print(f"{match.name} is annotated DESTRUCTIVE. --perform "
-                              f"refuses it without --allow-destructive.")
-                        print("This is a debugging lens. If you mean to destroy "
-                              "something, say so in the command, or use the "
-                              "script built for that operation.")
+                        print(
+                            f"{match.name} is annotated DESTRUCTIVE. --perform "
+                            f"refuses it without --allow-destructive."
+                        )
+                        print(
+                            "This is a debugging lens. If you mean to destroy "
+                            "something, say so in the command, or use the "
+                            "script built for that operation."
+                        )
                         return 2
                     print(f"!! PERFORMING A DESTRUCTIVE OPERATION: {match.name}")
                 else:
@@ -337,8 +349,10 @@ async def run(args) -> int:
                     print(f"{path} is not valid JSON: {exc}")
                     return 2
                 if not isinstance(loaded, dict):
-                    print(f"{path} must hold a JSON OBJECT of arguments, not "
-                          f"{type(loaded).__name__}")
+                    print(
+                        f"{path} must hold a JSON OBJECT of arguments, not "
+                        f"{type(loaded).__name__}"
+                    )
                     return 2
                 arguments.update(loaded)
             arguments.update(_collect_args(args.arg))
@@ -349,25 +363,38 @@ async def run(args) -> int:
             # the right one.
             required = set(schema.get("required") or [])
             if "organization_id" in required and "organization_id" not in arguments:
-                orgs = _rows(_payload(
-                    await session.call_tool("capella_organizations_list", {})))
+                orgs = _rows(
+                    _payload(await session.call_tool("capella_organizations_list", {}))
+                )
                 picked = _one(orgs, "organization", args.org)
                 if picked is None:
                     return 2
                 arguments["organization_id"] = picked
             if "project_id" in required and "project_id" not in arguments:
-                projects = _rows(_payload(await session.call_tool(
-                    "capella_projects_list",
-                    {"organization_id": arguments["organization_id"]})))
+                projects = _rows(
+                    _payload(
+                        await session.call_tool(
+                            "capella_projects_list",
+                            {"organization_id": arguments["organization_id"]},
+                        )
+                    )
+                )
                 picked = _one(projects, "project", args.project)
                 if picked is None:
                     return 2
                 arguments["project_id"] = picked
             if "cluster_id" in required and "cluster_id" not in arguments:
-                clusters = _rows(_payload(await session.call_tool(
-                    "capella_clusters_list",
-                    {"organization_id": arguments["organization_id"],
-                     "project_id": arguments["project_id"]})))
+                clusters = _rows(
+                    _payload(
+                        await session.call_tool(
+                            "capella_clusters_list",
+                            {
+                                "organization_id": arguments["organization_id"],
+                                "project_id": arguments["project_id"],
+                            },
+                        )
+                    )
+                )
                 picked = _one(clusters, "cluster", args.cluster)
                 if picked is None:
                     return 2
@@ -383,8 +410,11 @@ async def run(args) -> int:
                 session.call_tool(args.tool, arguments), timeout=args.timeout
             )
             body = _payload(response)
-            print(json.dumps(body, indent=2, sort_keys=args.sort)
-                  if not isinstance(body, str) else body)
+            print(
+                json.dumps(body, indent=2, sort_keys=args.sort)
+                if not isinstance(body, str)
+                else body
+            )
 
             if args.keys and isinstance(body, dict):
                 # The question behind most uses of this script is "what is this
@@ -392,8 +422,7 @@ async def run(args) -> int:
                 print("\ntop-level keys: " + ", ".join(sorted(body)))
                 for name, value in body.items():
                     if isinstance(value, list) and value and isinstance(value[0], dict):
-                        print(f"keys of {name}[0]: "
-                              + ", ".join(sorted(value[0])))
+                        print(f"keys of {name}[0]: " + ", ".join(sorted(value[0])))
             return 0
 
 
@@ -402,38 +431,63 @@ def main() -> int:
         description="Call one MCP tool and print its entire response."
     )
     parser.add_argument("tool", nargs="?", help="tool name")
-    parser.add_argument("-a", "--arg", action="append", default=[],
-                        metavar="NAME=VALUE",
-                        help="argument; JSON values are parsed as JSON. "
-                             "Dotted names build objects (-a tags.version=1.1) "
-                             "and lists (-a backup_ids.0=x, or -a backup_ids[]=x "
-                             "repeated)")
-    parser.add_argument("--args-json", metavar="PATH",
-                        help="read arguments from a JSON file. USE THIS WHEN A "
-                             "KEY CONTAINS A DOT: the dotted -a syntax cannot "
-                             "express one, because it treats every dot as a "
-                             "level of nesting. Merged BEFORE -a, so a -a flag "
-                             "still wins")
-    parser.add_argument("--list", action="store_true",
-                        help="list advertised tools and exit")
-    parser.add_argument("--schema", action="store_true",
-                        help="print the tool's input schema and exit")
-    parser.add_argument("--write", action="store_true",
-                        help="advertise write tools, under a FORCED dry run")
-    parser.add_argument("--perform", action="store_true",
-                        help="actually perform the write (implies --write). The "
-                             "tool's own confirm:true is still required.")
-    parser.add_argument("--allow-destructive", action="store_true",
-                        help="permit --perform on a tool annotated destructive")
-    parser.add_argument("--keys", action="store_true", default=True,
-                        help="summarise top-level and row keys (default on)")
+    parser.add_argument(
+        "-a",
+        "--arg",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="argument; JSON values are parsed as JSON. "
+        "Dotted names build objects (-a tags.version=1.1) "
+        "and lists (-a backup_ids.0=x, or -a backup_ids[]=x "
+        "repeated)",
+    )
+    parser.add_argument(
+        "--args-json",
+        metavar="PATH",
+        help="read arguments from a JSON file. USE THIS WHEN A "
+        "KEY CONTAINS A DOT: the dotted -a syntax cannot "
+        "express one, because it treats every dot as a "
+        "level of nesting. Merged BEFORE -a, so a -a flag "
+        "still wins",
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="list advertised tools and exit"
+    )
+    parser.add_argument(
+        "--schema", action="store_true", help="print the tool's input schema and exit"
+    )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="advertise write tools, under a FORCED dry run",
+    )
+    parser.add_argument(
+        "--perform",
+        action="store_true",
+        help="actually perform the write (implies --write). The "
+        "tool's own confirm:true is still required.",
+    )
+    parser.add_argument(
+        "--allow-destructive",
+        action="store_true",
+        help="permit --perform on a tool annotated destructive",
+    )
+    parser.add_argument(
+        "--keys",
+        action="store_true",
+        default=True,
+        help="summarise top-level and row keys (default on)",
+    )
     parser.add_argument("--no-keys", dest="keys", action="store_false")
-    parser.add_argument("--sort", action="store_true",
-                        help="sort keys in the printed JSON")
+    parser.add_argument(
+        "--sort", action="store_true", help="sort keys in the printed JSON"
+    )
     parser.add_argument("--org", help="organization name or id, when several exist")
     parser.add_argument("--project", help="project name or id, when several exist")
-    parser.add_argument("--cluster",
-                        help="cluster name, id or connection host, when several exist")
+    parser.add_argument(
+        "--cluster", help="cluster name, id or connection host, when several exist"
+    )
     parser.add_argument("--timeout", type=float, default=60.0)
     args = parser.parse_args()
 

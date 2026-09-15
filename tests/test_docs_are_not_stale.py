@@ -90,8 +90,9 @@ def _docs() -> list[pathlib.Path]:
     found = sorted(_REPO.glob("*.md"))
     found += sorted((_REPO / "docs").glob("*.md"))
     found += sorted((_REPO / "deploy").glob("*.md"))
-    return [d for d in found if str(d.relative_to(_REPO)).replace("\\", "/")
-            not in _EXEMPT]
+    return [
+        d for d in found if str(d.relative_to(_REPO)).replace("\\", "/") not in _EXEMPT
+    ]
 
 
 def test_there_are_documents_to_check():

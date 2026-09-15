@@ -106,8 +106,7 @@ def test_the_module_list_matches_what_the_package_exposes():
             "tested by nothing here."
         )
         assert not hasattr(module, "handle"), (
-            f"handlers/{name}.py is excluded as a support module but exports "
-            "handle()"
+            f"handlers/{name}.py is excluded as a support module but exports handle()"
         )
     on_disk -= support
     on_disk.add("capella")  # a subpackage, so not caught by the glob

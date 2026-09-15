@@ -51,7 +51,9 @@ import os
 import urllib.error
 import urllib.request
 
-BASE = os.environ.get("CB_CAPELLA_API_URL", "https://cloudapi.cloud.couchbase.com").rstrip("/")
+BASE = os.environ.get(
+    "CB_CAPELLA_API_URL", "https://cloudapi.cloud.couchbase.com"
+).rstrip("/")
 TIMEOUT = 30
 
 
@@ -65,7 +67,10 @@ def call(path: str, method: str = "GET") -> tuple[int, object]:
     request = urllib.request.Request(
         f"{BASE}{path}",
         method=method,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
@@ -80,7 +85,7 @@ def call(path: str, method: str = "GET") -> tuple[int, object]:
             return exc.code, json.loads(raw)
         except json.JSONDecodeError:
             return exc.code, raw
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return 0, f"{type(exc).__name__}: {exc}"
 
 
@@ -112,7 +117,11 @@ def main() -> int:
     status, payload = call("/v4/organizations")
     if status != 200:
         print(f"GET /v4/organizations -> {status}")
-        print(json.dumps(payload, indent=2)[:800] if not isinstance(payload, str) else payload[:800])
+        print(
+            json.dumps(payload, indent=2)[:800]
+            if not isinstance(payload, str)
+            else payload[:800]
+        )
         return 1
 
     organizations = rows(payload)
@@ -135,8 +144,10 @@ def main() -> int:
                 f"/v4/organizations/{org_id}/projects/{project_id}/clusters?perPage=100"
             )
             clusters = rows(payload)
-            print(f"\n  -- project {project.get('name')} ({project_id}): "
-                  f"{len(clusters)} cluster(s)")
+            print(
+                f"\n  -- project {project.get('name')} ({project_id}): "
+                f"{len(clusters)} cluster(s)"
+            )
 
             for cluster in clusters:
                 cluster_id = cluster.get("id")
@@ -154,9 +165,10 @@ def main() -> int:
                 buckets = rows(payload)
                 for bucket in buckets:
                     name = bucket.get("name")
-                    bucket_id = bucket.get("id") or base64.b64encode(
-                        (name or "").encode()
-                    ).decode()
+                    bucket_id = (
+                        bucket.get("id")
+                        or base64.b64encode((name or "").encode()).decode()
+                    )
                     print(f"        bucket {name!r}  bucket_id={bucket_id}")
 
                 # Does a backup already exist? Restore cannot be tested without one.
@@ -174,7 +186,8 @@ def main() -> int:
                         "          backup {id}  bucket={bucket}  "
                         "state={state}  cycle={cycle}".format(
                             id=backup.get("id", "?"),
-                            bucket=backup.get("bucketName") or backup.get("bucket", "?"),
+                            bucket=backup.get("bucketName")
+                            or backup.get("bucket", "?"),
                             state=backup.get("status") or backup.get("state", "?"),
                             cycle=backup.get("cycleId", "?"),
                         )
@@ -211,9 +224,10 @@ def main() -> int:
                 # discriminator actually distinguishes, rather than assuming it.
                 if buckets:
                     first = buckets[0]
-                    bid = first.get("id") or base64.b64encode(
-                        (first.get("name") or "").encode()
-                    ).decode()
+                    bid = (
+                        first.get("id")
+                        or base64.b64encode((first.get("name") or "").encode()).decode()
+                    )
                     cluster_base = (
                         f"/v4/organizations/{org_id}/projects/{project_id}"
                         f"/clusters/{cluster_id}"
@@ -226,11 +240,15 @@ def main() -> int:
                     bogus = "00000000-0000-0000-0000-000000000000"
                     ctl_status, ctl_body = call(f"{cluster_base}/backups/{bogus}")
                     ctl_text = (
-                        json.dumps(ctl_body) if not isinstance(ctl_body, str) else ctl_body
+                        json.dumps(ctl_body)
+                        if not isinstance(ctl_body, str)
+                        else ctl_body
                     )
                     matched_shape = ctl_text.strip().startswith("{")
-                    print(f"          control  real route + bogus id -> {ctl_status}: "
-                          f"{ctl_text[:120]}")
+                    print(
+                        f"          control  real route + bogus id -> {ctl_status}: "
+                        f"{ctl_text[:120]}"
+                    )
                     if not matched_shape:
                         findings.append(
                             "the matched-route control did not return a JSON body, so "
@@ -244,21 +262,44 @@ def main() -> int:
                     # API surface worth knowing about, not a quiet win.
                     snapshot = f"{cluster_base}/cloudsnapshotbackups"
                     candidates = [
-                        ("buckets/{bid}/backupSchedule", f"{cluster_base}/buckets/{bid}/backupSchedule"),
-                        ("buckets/{bid}/backupschedule", f"{cluster_base}/buckets/{bid}/backupschedule"),
-                        ("buckets/{bid}/backup-schedule", f"{cluster_base}/buckets/{bid}/backup-schedule"),
-                        ("buckets/{bid}/backup/schedule", f"{cluster_base}/buckets/{bid}/backup/schedule"),
-                        ("buckets/{bid}/backups/schedule", f"{cluster_base}/buckets/{bid}/backups/schedule"),
-                        ("backupSchedule (cluster level)", f"{cluster_base}/backupSchedule"),
-                        ("backupschedule (cluster level)", f"{cluster_base}/backupschedule"),
-
+                        (
+                            "buckets/{bid}/backupSchedule",
+                            f"{cluster_base}/buckets/{bid}/backupSchedule",
+                        ),
+                        (
+                            "buckets/{bid}/backupschedule",
+                            f"{cluster_base}/buckets/{bid}/backupschedule",
+                        ),
+                        (
+                            "buckets/{bid}/backup-schedule",
+                            f"{cluster_base}/buckets/{bid}/backup-schedule",
+                        ),
+                        (
+                            "buckets/{bid}/backup/schedule",
+                            f"{cluster_base}/buckets/{bid}/backup/schedule",
+                        ),
+                        (
+                            "buckets/{bid}/backups/schedule",
+                            f"{cluster_base}/buckets/{bid}/backups/schedule",
+                        ),
+                        (
+                            "backupSchedule (cluster level)",
+                            f"{cluster_base}/backupSchedule",
+                        ),
+                        (
+                            "backupschedule (cluster level)",
+                            f"{cluster_base}/backupschedule",
+                        ),
                         # ── The cloud snapshot subsystem ─────────────────────
                         # Confirmed live: the list answers 200 and the schedule
                         # answers 204. The rest of the family is transcribed from
                         # the Terraform provider's client as listed in
                         # spec_pending.py, and has never been probed. This is the
                         # probe.
-                        ("cloudsnapshotbackupschedule", f"{cluster_base}/cloudsnapshotbackupschedule"),
+                        (
+                            "cloudsnapshotbackupschedule",
+                            f"{cluster_base}/cloudsnapshotbackupschedule",
+                        ),
                         ("cloudsnapshotbackups", snapshot),
                         ("cloudsnapshotbackups/regions", f"{snapshot}/regions"),
                         ("cloudsnapshotbackups/restores", f"{snapshot}/restores"),
@@ -266,7 +307,10 @@ def main() -> int:
                         # not-found shape rather than a mux 404. That tells the
                         # by-id route apart from an absent one.
                         ("cloudsnapshotbackups/{id}", f"{snapshot}/{bogus}"),
-                        ("cloudsnapshotbackups/{id}/restore", f"{snapshot}/{bogus}/restore"),
+                        (
+                            "cloudsnapshotbackups/{id}/restore",
+                            f"{snapshot}/{bogus}/restore",
+                        ),
                     ]
 
                     matched = []
@@ -288,13 +332,15 @@ def main() -> int:
                         snaps = rows(snap_body)
                         print(f"          cloud snapshots present: {len(snaps)}")
                         for snap in snaps[:10]:
-                            print("            snapshot {id}  state={state}  "
-                                  "created={created}".format(
-                                      id=snap.get("id", "?"),
-                                      state=snap.get("status") or snap.get("state", "?"),
-                                      created=snap.get("createdAt")
-                                      or snap.get("created", "?"),
-                                  ))
+                            print(
+                                "            snapshot {id}  state={state}  "
+                                "created={created}".format(
+                                    id=snap.get("id", "?"),
+                                    state=snap.get("status") or snap.get("state", "?"),
+                                    created=snap.get("createdAt")
+                                    or snap.get("created", "?"),
+                                )
+                            )
                         if not snaps:
                             findings.append(
                                 "the cloud snapshot subsystem is reachable but holds no "

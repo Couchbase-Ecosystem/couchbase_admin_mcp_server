@@ -176,13 +176,11 @@ PENDING_OPS: tuple[Op, ...] = (
         group="app_services",
         guarded=True,
     ),
-
     # ── P1 item 8: sample buckets ────────────────────────────────────────────
     #
     # We can LOAD a sample dataset and cannot list or unload one. That matters
     # for fixture teardown: a sample bucket loaded for a test run is 63,000
     # documents that nothing in this server can remove.
-
     # ── P1 item 6: bucket backup schedules and cycles ─────────────────────────
     #
     # PARKED WITH A WARNING ATTACHED. Four operations were once parked against
@@ -294,7 +292,6 @@ PENDING_OPS: tuple[Op, ...] = (
         read_only=True,
         idempotent=True,
     ),
-
     # ── P1 item 5: App Endpoint completeness ─────────────────────────────────
     #
     # Each of these is the missing HALF of something already shipped. The pattern

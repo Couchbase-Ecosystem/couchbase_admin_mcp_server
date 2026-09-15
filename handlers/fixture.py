@@ -183,13 +183,13 @@ TOOLS: list[Tool] = [
                 "fixture_id": {
                     "type": "string",
                     "description": "Stable identifier for this fixture, recorded "
-                                   "in the manifest.",
+                    "in the manifest.",
                 },
                 "fixture_path": {
                     "type": "string",
                     "description": "Directory to write the fixture into. Created "
-                                   "if absent. Must sit under "
-                                   "CB_ADMIN_FIXTURE_ROOT when that is set.",
+                    "if absent. Must sit under "
+                    "CB_ADMIN_FIXTURE_ROOT when that is set.",
                 },
                 "name": {"type": "string", "description": "Human-readable name."},
                 "tags": _TAGS_SCHEMA,
@@ -197,26 +197,26 @@ TOOLS: list[Tool] = [
                     "type": "boolean",
                     "default": True,
                     "description": "False writes a STRUCTURE-ONLY fixture: "
-                                   "buckets, scopes, collections, index "
-                                   "definitions and eventing functions, with no "
-                                   "documents. A complete artifact in its own "
-                                   "right — it just is not a dataset, and the "
-                                   "manifest's fidelity block says so.",
+                    "buckets, scopes, collections, index "
+                    "definitions and eventing functions, with no "
+                    "documents. A complete artifact in its own "
+                    "right — it just is not a dataset, and the "
+                    "manifest's fidelity block says so.",
                 },
                 "keyspaces": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Restrict to these bucket.scope.collection "
-                                   "keyspaces. A name that matches nothing is an "
-                                   "ERROR, not a silent empty export.",
+                    "keyspaces. A name that matches nothing is an "
+                    "ERROR, not a silent empty export.",
                 },
                 "user_xattrs": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "User xattrs to carry, BY NAME. META().xattrs "
-                                   "is not enumerable, so anything not listed "
-                                   "here is dropped silently by the server — the "
-                                   "manifest records what was asked for.",
+                    "is not enumerable, so anything not listed "
+                    "here is dropped silently by the server — the "
+                    "manifest records what was asked for.",
                 },
                 "page_size": {
                     "type": "integer",
@@ -259,18 +259,18 @@ TOOLS: list[Tool] = [
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                     "description": "Rewrite source keyspaces to targets, e.g. "
-                                   '{"travel-sample.inventory.airline": '
-                                   '"scratch.inventory.airline"}. Values must be '
-                                   "strings; a nested object is refused.",
+                    '{"travel-sample.inventory.airline": '
+                    '"scratch.inventory.airline"}. Values must be '
+                    "strings; a nested object is refused.",
                 },
                 "create_indexes": {
                     "type": "boolean",
                     "default": True,
                     "description": "Recreate the fixture's GSI definitions. Built "
-                                   "deferred, then BUILD INDEX per keyspace, then "
-                                   "polled to online — an index that exists but is "
-                                   "not online makes the cluster look slow in a "
-                                   "way that reads as a Couchbase problem.",
+                    "deferred, then BUILD INDEX per keyspace, then "
+                    "polled to online — an index that exists but is "
+                    "not online makes the cluster look slow in a "
+                    "way that reads as a Couchbase problem.",
                 },
                 "confirm": {
                     "type": "boolean",
@@ -296,14 +296,14 @@ TOOLS: list[Tool] = [
                 "root_path": {
                     "type": "string",
                     "description": "Directory to scan. Each immediate "
-                                   "subdirectory holding a manifest.json is one "
-                                   "fixture.",
+                    "subdirectory holding a manifest.json is one "
+                    "fixture.",
                 },
                 "tags": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                     "description": "Return only fixtures whose tags match ALL of "
-                                   "these exactly.",
+                    "these exactly.",
                 },
             },
             "required": ["root_path"],
@@ -331,14 +331,14 @@ TOOLS: list[Tool] = [
                     "type": "boolean",
                     "default": False,
                     "description": "Also count documents on the cluster per "
-                                   "keyspace and compare with the manifest.",
+                    "keyspace and compare with the manifest.",
                 },
                 "keyspace_map": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                     "description": "Apply the same rewrite an import used, so the "
-                                   "cluster check looks where the data actually "
-                                   "went.",
+                    "cluster check looks where the data actually "
+                    "went.",
                 },
             },
             "required": ["fixture_path"],
@@ -366,7 +366,9 @@ def _query(statement: str, parameters: dict | None = None) -> list[dict]:
     from couchbase.options import QueryOptions
 
     cluster, _bucket, _collection = get_sdk_connection()
-    options = QueryOptions(named_parameters=parameters) if parameters else QueryOptions()
+    options = (
+        QueryOptions(named_parameters=parameters) if parameters else QueryOptions()
+    )
     return list(cluster.query(statement, options))
 
 
@@ -451,13 +453,15 @@ def _structure(wanted_buckets: set[str]) -> tuple[list[dict], list[str]]:
             warnings.append(f"scopes for bucket {name} could not be read: {exc}")
             payload = {}
         for scope in (payload or {}).get("scopes") or []:
-            record["scopes"].append({
-                "name": scope.get("name"),
-                "collections": [
-                    {"name": c.get("name"), "maxTTL": c.get("maxTTL")}
-                    for c in (scope.get("collections") or [])
-                ],
-            })
+            record["scopes"].append(
+                {
+                    "name": scope.get("name"),
+                    "collections": [
+                        {"name": c.get("name"), "maxTTL": c.get("maxTTL")}
+                        for c in (scope.get("collections") or [])
+                    ],
+                }
+            )
         structure.append(record)
     return structure, warnings
 
@@ -550,13 +554,15 @@ def _index_definitions(keyspaces: set[str]) -> tuple[list[dict], list[str]]:
         if with_clause:
             statement += " WITH " + json.dumps(with_clause)
 
-        definitions.append({
-            "indexName": name,
-            "keyspace": keyspace,
-            "definition": statement,
-            "state": row.get("state"),
-            "using": row.get("using"),
-        })
+        definitions.append(
+            {
+                "indexName": name,
+                "keyspace": keyspace,
+                "definition": statement,
+                "state": row.get("state"),
+                "using": row.get("using"),
+            }
+        )
 
     if skipped:
         # Reported, not dropped in silence. An index the fixture does not carry
@@ -667,8 +673,11 @@ def _export(args: dict) -> list[TextContent]:
                         matched.add(keyspace)
 
                     statement = export_statement(
-                        bucket["name"], scope_name, collection["name"],
-                        page_size=page_size, user_xattrs=xattrs,
+                        bucket["name"],
+                        scope_name,
+                        collection["name"],
+                        page_size=page_size,
+                        user_xattrs=xattrs,
                     )
                     target = data_dir / f"{keyspace}.jsonl"
                     written, failure = _export_keyspace(
@@ -689,12 +698,14 @@ def _export(args: dict) -> list[TextContent]:
                         # which reads as a failed export.
                         target.unlink(missing_ok=True)
                         continue
-                    data_files.append({
-                        "path": f"data/{target.name}",
-                        "keyspace": keyspace,
-                        "sha256": sha256_file(target),
-                        "document_count": written,
-                    })
+                    data_files.append(
+                        {
+                            "path": f"data/{target.name}",
+                            "keyspace": keyspace,
+                            "sha256": sha256_file(target),
+                            "document_count": written,
+                        }
+                    )
                     document_total += written
 
         unmatched = sorted(wanted_keyspaces - matched)
@@ -723,9 +734,11 @@ def _export(args: dict) -> list[TextContent]:
             for bucket in structure
             for scope in bucket["scopes"]
             for collection in scope["collections"]
-            if not (wanted_keyspaces and
-                    f"{bucket['name']}.{scope['name']}.{collection['name']}"
-                    not in wanted_keyspaces)
+            if not (
+                wanted_keyspaces
+                and f"{bucket['name']}.{scope['name']}.{collection['name']}"
+                not in wanted_keyspaces
+            )
         }
     index_defs, index_warnings = _index_definitions(covered)
     warnings.extend(index_warnings)
@@ -748,7 +761,9 @@ def _export(args: dict) -> list[TextContent]:
         "document_count": document_total,
         "payload_sha256": hashlib.sha256(
             "".join(sorted(f["sha256"] for f in data_files)).encode()
-        ).hexdigest() if data_files else None,
+        ).hexdigest()
+        if data_files
+        else None,
         "user_xattrs": xattrs,
         # FIDELITY IS WHAT ACTUALLY HAPPENED, not what was asked for. This is the
         # single most important field in the manifest: it is what stops a
@@ -777,16 +792,18 @@ def _export(args: dict) -> list[TextContent]:
     except OSError as exc:
         return err(f"could not write the manifest: {exc}", tool=tool)
 
-    return ok({
-        "fixture_path": str(root),
-        "fixture_id": fixture_id,
-        "documents": document_total,
-        "keyspaces": [f["keyspace"] for f in data_files],
-        "gsi_definitions": len(index_defs),
-        "eventing_functions": len(eventing),
-        "fidelity": manifest["fidelity"],
-        "warnings": warnings,
-    })
+    return ok(
+        {
+            "fixture_path": str(root),
+            "fixture_id": fixture_id,
+            "documents": document_total,
+            "keyspaces": [f["keyspace"] for f in data_files],
+            "gsi_definitions": len(index_defs),
+            "eventing_functions": len(eventing),
+            "fidelity": manifest["fidelity"],
+            "warnings": warnings,
+        }
+    )
 
 
 def _fidelity_note(documents_ok: bool, total: int, include_data: bool) -> str:
@@ -812,8 +829,9 @@ def _fidelity_note(documents_ok: bool, total: int, include_data: bool) -> str:
     )
 
 
-def _export_keyspace(statement: str, target: pathlib.Path, keyspace: str,
-                     page_size: int) -> tuple[int, str]:
+def _export_keyspace(
+    statement: str, target: pathlib.Path, keyspace: str, page_size: int
+) -> tuple[int, str]:
     """(documents written, failure). Pages one collection into a JSON Lines file.
 
     An unindexed collection is a PRECONDITION FAILURE, not a bug, and it is the
@@ -833,7 +851,7 @@ def _export_keyspace(statement: str, target: pathlib.Path, keyspace: str,
                     expiry = row.pop(META_EXP_ALIAS, 0)
                     prefix = "__fixture_xattr_"
                     carried = {
-                        key[len(prefix):]: row.pop(key)
+                        key[len(prefix) :]: row.pop(key)
                         for key in list(row)
                         if key.startswith(prefix)
                     }
@@ -849,12 +867,17 @@ def _export_keyspace(statement: str, target: pathlib.Path, keyspace: str,
                             f"metadata alias, so its real key cannot be "
                             f"recovered. Nothing further was written."
                         )
-                    handle.write(json.dumps({
-                        "id": doc_id,
-                        "exp": expiry,
-                        "doc": row,
-                        "xattrs": carried,
-                    }) + "\n")
+                    handle.write(
+                        json.dumps(
+                            {
+                                "id": doc_id,
+                                "exp": expiry,
+                                "doc": row,
+                                "xattrs": carried,
+                            }
+                        )
+                        + "\n"
+                    )
                     written += 1
                     last_key = doc_id or last_key
                 if len(rows) < page_size:
@@ -915,21 +938,28 @@ def _import(args: dict) -> list[TextContent]:
 
     entry = read_manifest(directory)
     if not entry.get("readable"):
-        return err(entry.get("error", "manifest could not be read"),
-                   tool=tool, fixture_path=str(directory))
+        return err(
+            entry.get("error", "manifest could not be read"),
+            tool=tool,
+            fixture_path=str(directory),
+        )
     manifest = entry["manifest"]
 
     why = schema_problem(manifest.get("schema"))
     if why:
-        return err(why.replace("verifiable", "importable"),
-                   tool=tool, fixture_path=str(directory))
+        return err(
+            why.replace("verifiable", "importable"),
+            tool=tool,
+            fixture_path=str(directory),
+        )
 
     if manifest.get("mode") == "mobile":
         return err(
             "this is a MOBILE fixture and its sync metadata cannot be restored "
             "by this tool. Loading it would produce documents that look synced "
             "and are not, which is worse than not loading them.",
-            tool=tool, fixture_path=str(directory),
+            tool=tool,
+            fixture_path=str(directory),
         )
 
     checks, problems, _payload = fixture_integrity(directory, manifest)
@@ -938,9 +968,11 @@ def _import(args: dict) -> list[TextContent]:
             "the fixture does not verify, so NOTHING was imported:\n  - "
             + "\n  - ".join(problems)
             + "\nRun admin_fixture_verify for the full report. A fixture whose "
-              "bytes have changed since it was written is not a fixture, and "
-              "importing one would put unlabelled data on a cluster.",
-            tool=tool, fixture_path=str(directory), files_checked=checks,
+            "bytes have changed since it was written is not a fixture, and "
+            "importing one would put unlabelled data on a cluster.",
+            tool=tool,
+            fixture_path=str(directory),
+            files_checked=checks,
         )
 
     keyspace_map = args.get("keyspace_map") or {}
@@ -963,16 +995,18 @@ def _import(args: dict) -> list[TextContent]:
     else:
         steps["indexes"] = {"skipped": "create_indexes was false"}
 
-    return ok({
-        "fixture_path": str(directory),
-        "fixture_id": manifest.get("fixture_id"),
-        "steps": steps,
-        "note": (
-            "Counts here are what THIS TOOL believes it wrote. Confirm them "
-            "with admin_fixture_verify check_cluster=true, which recounts on "
-            "the cluster rather than trusting this report."
-        ),
-    })
+    return ok(
+        {
+            "fixture_path": str(directory),
+            "fixture_id": manifest.get("fixture_id"),
+            "steps": steps,
+            "note": (
+                "Counts here are what THIS TOOL believes it wrote. Confirm them "
+                "with admin_fixture_verify check_cluster=true, which recounts on "
+                "the cluster rather than trusting this report."
+            ),
+        }
+    )
 
 
 def _import_structure(manifest: dict, keyspace_map: dict) -> dict:
@@ -1011,12 +1045,15 @@ def _import_structure(manifest: dict, keyspace_map: dict) -> dict:
         if scope not in scopes:
             try:
                 admin_request(
-                    "POST", f"/pools/default/buckets/{bucket}/scopes",
+                    "POST",
+                    f"/pools/default/buckets/{bucket}/scopes",
                     data={"name": scope},
                 )
                 created_scopes.append(f"{bucket}.{scope}")
             except Exception as exc:
-                failures.append(f"{target}: scope {scope!r} could not be created: {exc}")
+                failures.append(
+                    f"{target}: scope {scope!r} could not be created: {exc}"
+                )
                 continue
             collections_present: set[str] = set()
         else:
@@ -1076,8 +1113,9 @@ def _recorded_max_ttl(manifest: dict, keyspace: str) -> int | None:
     return None
 
 
-def _import_documents(directory: pathlib.Path, manifest: dict,
-                      keyspace_map: dict) -> dict:
+def _import_documents(
+    directory: pathlib.Path, manifest: dict, keyspace_map: dict
+) -> dict:
     """Write every document over KV.
 
     KV, NOT SQL++. Two reasons, and the second is the load-bearing one:
@@ -1112,8 +1150,10 @@ def _import_documents(directory: pathlib.Path, manifest: dict,
         bucket_name, scope_name, collection_name = parts
 
         try:
-            handle = cluster.bucket(bucket_name).scope(scope_name).collection(
-                collection_name
+            handle = (
+                cluster.bucket(bucket_name)
+                .scope(scope_name)
+                .collection(collection_name)
             )
         except Exception as exc:
             entry.update(ok=False, error=f"collection could not be opened: {exc}")
@@ -1150,9 +1190,7 @@ def _import_documents(directory: pathlib.Path, manifest: dict,
                         # dead -- so a past expiry is dropped and reported.
                         remaining = expiry - int(datetime.now(timezone.utc).timestamp())
                         if remaining > 0:
-                            options = UpsertOptions(
-                                expiry=timedelta(seconds=remaining)
-                            )
+                            options = UpsertOptions(expiry=timedelta(seconds=remaining))
                         else:
                             failures.append(
                                 f"{key}: recorded expiry {expiry} is in the past, "
@@ -1308,13 +1346,15 @@ def _list(args: dict) -> list[TextContent]:
         entry.pop("manifest", None)
         fixtures.append(entry)
 
-    return ok({
-        "root_path": str(root),
-        "fixtures": fixtures,
-        "count": len(fixtures),
-        "unreadable": unreadable,
-        "filtered_by": wanted_tags or None,
-    })
+    return ok(
+        {
+            "root_path": str(root),
+            "fixtures": fixtures,
+            "count": len(fixtures),
+            "unreadable": unreadable,
+            "filtered_by": wanted_tags or None,
+        }
+    )
 
 
 def _verify(args: dict) -> list[TextContent]:
@@ -1331,8 +1371,11 @@ def _verify(args: dict) -> list[TextContent]:
 
     entry = read_manifest(directory)
     if not entry.get("readable"):
-        return err(entry.get("error", "manifest could not be read"),
-                   tool=tool, fixture_path=str(directory))
+        return err(
+            entry.get("error", "manifest could not be read"),
+            tool=tool,
+            fixture_path=str(directory),
+        )
     manifest = entry["manifest"]
 
     problems: list[str] = []

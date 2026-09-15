@@ -25,8 +25,13 @@ def _payload(*hashes: str) -> str:
     return hashlib.sha256("".join(sorted(hashes)).encode()).hexdigest()
 
 
-def _write_fixture(root: pathlib.Path, *, documents: str = '{"id": "a"}\n',
-                   mode: str = "server", schema: str | None = None) -> pathlib.Path:
+def _write_fixture(
+    root: pathlib.Path,
+    *,
+    documents: str = '{"id": "a"}\n',
+    mode: str = "server",
+    schema: str | None = None,
+) -> pathlib.Path:
     """A minimal fixture on disk whose manifest is internally consistent."""
     directory = root / "fx"
     (directory / "data").mkdir(parents=True, exist_ok=True)
@@ -42,9 +47,14 @@ def _write_fixture(root: pathlib.Path, *, documents: str = '{"id": "a"}\n',
         "structure": [],
         "gsi_definitions": [],
         "eventing_functions": [],
-        "files": [{"path": "data/b.s.c.jsonl", "keyspace": "b.s.c",
-                   "sha256": digest,
-                   "document_count": documents.count("\n")}],
+        "files": [
+            {
+                "path": "data/b.s.c.jsonl",
+                "keyspace": "b.s.c",
+                "sha256": digest,
+                "document_count": documents.count("\n"),
+            }
+        ],
         "document_count": documents.count("\n"),
         "payload_sha256": _payload(digest),
         "fidelity": {"documents": True},
@@ -72,8 +82,9 @@ def test_integrity_catches_a_file_edited_after_the_fixture_was_written(tmp_path)
     """The whole reason the manifest records hashes."""
     directory = _write_fixture(tmp_path)
     manifest = json.loads((directory / "manifest.json").read_text())
-    (directory / "data" / "b.s.c.jsonl").write_text('{"id": "TAMPERED"}\n',
-                                                    encoding="utf-8")
+    (directory / "data" / "b.s.c.jsonl").write_text(
+        '{"id": "TAMPERED"}\n', encoding="utf-8"
+    )
     _checks, problems, _payload_sha = fixture._fixture_integrity(directory, manifest)
     assert any("has changed since the fixture was written" in p for p in problems)
 
@@ -92,9 +103,14 @@ def test_integrity_catches_a_missing_data_file(tmp_path):
 def test_import_refuses_a_fixture_that_does_not_verify(tmp_path):
     directory = _write_fixture(tmp_path)
     (directory / "data" / "b.s.c.jsonl").write_text("{}\n{}\n", encoding="utf-8")
-    result = fixture._import({"fixture_path": str(directory),
-                              "cluster_id": "c", "organization_id": "o",
-                              "project_id": "p"})
+    result = fixture._import(
+        {
+            "fixture_path": str(directory),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+        }
+    )
     body = _text(result)
     assert "NOTHING was imported" in body
 
@@ -102,25 +118,36 @@ def test_import_refuses_a_fixture_that_does_not_verify(tmp_path):
 def test_import_refuses_a_mobile_fixture(tmp_path):
     """A mobile fixture loaded over the server path loses _sync silently."""
     directory = _write_fixture(tmp_path, mode="mobile")
-    result = fixture._import({"fixture_path": str(directory),
-                              "cluster_id": "c", "organization_id": "o",
-                              "project_id": "p"})
+    result = fixture._import(
+        {
+            "fixture_path": str(directory),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+        }
+    )
     body = _text(result)
     assert "mobile" in body and "cannot serve a single mobile client" in body
 
 
 def test_import_refuses_a_manifest_from_another_schema_version(tmp_path):
     directory = _write_fixture(tmp_path, schema="couchbase.capella.fixture/v99")
-    result = fixture._import({"fixture_path": str(directory),
-                              "cluster_id": "c", "organization_id": "o",
-                              "project_id": "p"})
+    result = fixture._import(
+        {
+            "fixture_path": str(directory),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+        }
+    )
     assert "not importable by this one" in _text(result)
 
 
 def test_import_requires_a_cluster_id(tmp_path):
     directory = _write_fixture(tmp_path)
-    result = fixture._import({"fixture_path": str(directory),
-                              "organization_id": "o", "project_id": "p"})
+    result = fixture._import(
+        {"fixture_path": str(directory), "organization_id": "o", "project_id": "p"}
+    )
     assert "cluster_id is required" in _text(result)
 
 
@@ -130,7 +157,7 @@ def test_import_requires_a_cluster_id(tmp_path):
 def test_source_cluster_node_placement_is_stripped_from_an_index_definition():
     """Replaying the source cluster's hostnames onto another cluster cannot work."""
     statement = (
-        'CREATE INDEX `sg_users_x1` ON `travel-sample`((meta().`id`)) '
+        "CREATE INDEX `sg_users_x1` ON `travel-sample`((meta().`id`)) "
         'WITH {  "defer_build":true, "nodes":[ "svc-qi-node-004.example:18091",'
         '"svc-qi-node-005.example:18091" ], "num_replica":1 }'
     )
@@ -156,7 +183,8 @@ def test_an_ambiguous_keyspace_map_refuses_rather_than_guessing_the_bucket():
     """Two targets for one source bucket means the index's home is undecidable."""
     statement = "CREATE INDEX `i` ON `src`(`x`)"
     _rewritten, why_not = fixture._rewrite_index_keyspace(
-        statement, {"src.s.c1": "one.s.c1", "src.s.c2": "two.s.c2"},
+        statement,
+        {"src.s.c1": "one.s.c1", "src.s.c2": "two.s.c2"},
     )
     assert "more than one target" in why_not
 
@@ -164,7 +192,8 @@ def test_an_ambiguous_keyspace_map_refuses_rather_than_guessing_the_bucket():
 def test_a_single_target_keyspace_map_rewrites_the_bucket():
     statement = "CREATE INDEX `i` ON `src`(`x`)"
     rewritten, why_not = fixture._rewrite_index_keyspace(
-        statement, {"src.s.c1": "dst.s.c1", "src.s.c2": "dst.s.c2"},
+        statement,
+        {"src.s.c1": "dst.s.c1", "src.s.c2": "dst.s.c2"},
     )
     assert why_not == ""
     assert "`dst`" in rewritten and "`src`" not in rewritten
@@ -246,10 +275,17 @@ def test_a_document_key_is_escaped_into_the_path(monkeypatch, key, expected):
         return _Response()
 
     import urllib.request
+
     monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
 
     reason = fixture._put_document(
-        "https://example.invalid", ("u", "p"), "b", "s", "c", key, {"x": 1},
+        "https://example.invalid",
+        ("u", "p"),
+        "b",
+        "s",
+        "c",
+        key,
+        {"x": 1},
     )
     assert reason == ""
     assert seen["url"].endswith(f"/documents/{expected}")
@@ -269,12 +305,18 @@ def test_a_keyspace_component_is_escaped_too(monkeypatch):
             return False
 
     import urllib.request
-    monkeypatch.setattr(urllib.request, "urlopen",
-                        lambda request, timeout=None: (
-                            seen.update(url=request.full_url) or _Response()))
 
-    fixture._put_document("https://example.invalid", ("u", "p"),
-                          "my bucket", "s", "c", "k", {})
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda request, timeout=None: (
+            seen.update(url=request.full_url) or _Response()
+        ),
+    )
+
+    fixture._put_document(
+        "https://example.invalid", ("u", "p"), "my bucket", "s", "c", "k", {}
+    )
     assert "/buckets/my%20bucket/" in seen["url"]
 
 
@@ -286,8 +328,9 @@ def test_a_document_write_reports_its_failure_rather_than_raising(monkeypatch):
         raise OSError("connection reset")
 
     monkeypatch.setattr(urllib.request, "urlopen", _boom)
-    reason = fixture._put_document("https://example.invalid", ("u", "p"),
-                                   "b", "s", "c", "k", {})
+    reason = fixture._put_document(
+        "https://example.invalid", ("u", "p"), "b", "s", "c", "k", {}
+    )
     assert "OSError" in reason and "connection reset" in reason
 
 
@@ -296,8 +339,7 @@ def test_a_document_write_reports_its_failure_rather_than_raising(monkeypatch):
 
 def _payload_file(tmp_path: pathlib.Path, rows: list[dict]) -> pathlib.Path:
     target = tmp_path / "p.jsonl"
-    target.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     return target
 
 
@@ -305,14 +347,16 @@ def test_the_loader_streams_every_row_and_counts_them(tmp_path, monkeypatch):
     rows = [{"id": f"k{n}", "doc": {"n": n}, "exp": 0} for n in range(25)]
     written: list[str] = []
 
-    def _record(base, credential, bucket, scope, collection, key, body,
-                timeout=30):
+    def _record(base, credential, bucket, scope, collection, key, body, timeout=30):
         written.append(key)
         return ""
 
     monkeypatch.setattr(fixture, "_put_document", _record)
     loaded, failures, dropped, fatal = fixture._load_documents(
-        _payload_file(tmp_path, rows), "https://x", ("u", "p"), ("b", "s", "c"),
+        _payload_file(tmp_path, rows),
+        "https://x",
+        ("u", "p"),
+        ("b", "s", "c"),
     )
     assert (loaded, failures, dropped, fatal) == (25, [], 0, "")
     assert len(written) == 25
@@ -320,11 +364,13 @@ def test_the_loader_streams_every_row_and_counts_them(tmp_path, monkeypatch):
 
 def test_an_expiry_that_cannot_be_sent_is_counted_not_ignored(tmp_path, monkeypatch):
     """A document that carried a TTL and arrives without one never expires."""
-    rows = [{"id": "a", "doc": {}, "exp": 1789000000},
-            {"id": "b", "doc": {}, "exp": 0}]
+    rows = [{"id": "a", "doc": {}, "exp": 1789000000}, {"id": "b", "doc": {}, "exp": 0}]
     monkeypatch.setattr(fixture, "_put_document", lambda *a, **k: "")
     loaded, _failures, dropped, fatal = fixture._load_documents(
-        _payload_file(tmp_path, rows), "https://x", ("u", "p"), ("b", "s", "c"),
+        _payload_file(tmp_path, rows),
+        "https://x",
+        ("u", "p"),
+        ("b", "s", "c"),
     )
     assert (loaded, dropped, fatal) == (2, 1, "")
 
@@ -334,19 +380,27 @@ def test_malformed_json_stops_the_keyspace_and_names_the_line(tmp_path, monkeypa
     target.write_text('{"id": "a", "doc": {}}\nNOT JSON\n', encoding="utf-8")
     monkeypatch.setattr(fixture, "_put_document", lambda *a, **k: "")
     _loaded, _failures, _dropped, fatal = fixture._load_documents(
-        target, "https://x", ("u", "p"), ("b", "s", "c"),
+        target,
+        "https://x",
+        ("u", "p"),
+        ("b", "s", "c"),
     )
     assert "line 2" in fatal
 
 
 def test_the_loader_gives_up_rather_than_repeating_one_error_forever(
-        tmp_path, monkeypatch):
+    tmp_path, monkeypatch
+):
     """A wrong credential should be diagnosable after twenty rows, not a million."""
     rows = [{"id": f"k{n}", "doc": {}} for n in range(500)]
-    monkeypatch.setattr(fixture, "_put_document",
-                        lambda *a, **k: "401: wrong credential")
+    monkeypatch.setattr(
+        fixture, "_put_document", lambda *a, **k: "401: wrong credential"
+    )
     loaded, failures, _dropped, fatal = fixture._load_documents(
-        _payload_file(tmp_path, rows), "https://x", ("u", "p"), ("b", "s", "c"),
+        _payload_file(tmp_path, rows),
+        "https://x",
+        ("u", "p"),
+        ("b", "s", "c"),
     )
     assert loaded == 0
     assert len(failures) < 500
@@ -356,7 +410,9 @@ def test_the_loader_gives_up_rather_than_repeating_one_error_forever(
 def test_a_row_without_an_id_is_a_failure_not_a_silent_skip(tmp_path, monkeypatch):
     monkeypatch.setattr(fixture, "_put_document", lambda *a, **k: "")
     loaded, failures, _dropped, _fatal = fixture._load_documents(
-        _payload_file(tmp_path, [{"doc": {}}]), "https://x", ("u", "p"),
+        _payload_file(tmp_path, [{"doc": {}}]),
+        "https://x",
+        ("u", "p"),
         ("b", "s", "c"),
     )
     assert loaded == 0
@@ -366,13 +422,18 @@ def test_a_row_without_an_id_is_a_failure_not_a_silent_skip(tmp_path, monkeypatc
 # ── cluster verification reports WHERE an index lives ────────────────────────
 
 
-def _cluster_report(monkeypatch, manifest: dict, index_rows: list[dict],
-                    count_rows: list[dict] | None = None) -> dict:
+def _cluster_report(
+    monkeypatch,
+    manifest: dict,
+    index_rows: list[dict],
+    count_rows: list[dict] | None = None,
+) -> dict:
     """Drive _cluster_checks with canned Data API answers."""
     monkeypatch.setattr(fixture, "_data_api_base", lambda ids: ("https://x", ""))
     monkeypatch.setattr(fixture, "_data_api_credential", lambda: (("u", "p"), ""))
 
     from handlers.capella import environment as env
+
     monkeypatch.setattr(env, "_resolve_context", lambda args: ("o", "p", None))
 
     def _query(base, credential, statement, parameters=None, timeout=None):
@@ -385,15 +446,22 @@ def _cluster_report(monkeypatch, manifest: dict, index_rows: list[dict],
 
 
 def test_a_deferred_index_is_reported_with_its_keyspace_and_a_build_statement(
-        monkeypatch):
+    monkeypatch,
+):
     """'mcptest_idx_meta is deferred' is not actionable without a keyspace: the
     operator's next move is BUILD INDEX, which names one."""
     report = _cluster_report(
         monkeypatch,
         {"files": [], "gsi_definitions": []},
-        [{"name": "mcptest_idx_meta", "state": "deferred",
-          "bucket_id": "travel-sample", "scope_id": "mcptest",
-          "keyspace_id": "meta"}],
+        [
+            {
+                "name": "mcptest_idx_meta",
+                "state": "deferred",
+                "bucket_id": "travel-sample",
+                "scope_id": "mcptest",
+                "keyspace_id": "meta",
+            }
+        ],
     )
     entry = report["indexes"]["not_online"][0]
     assert entry["keyspace"] == "travel-sample.mcptest.meta"
@@ -418,20 +486,35 @@ def test_an_online_index_is_not_reported_as_a_problem(monkeypatch):
     report = _cluster_report(
         monkeypatch,
         {"files": [], "gsi_definitions": [{"indexName": "i"}]},
-        [{"name": "i", "state": "online", "bucket_id": "b",
-          "scope_id": "s", "keyspace_id": "c"}],
+        [
+            {
+                "name": "i",
+                "state": "online",
+                "bucket_id": "b",
+                "scope_id": "s",
+                "keyspace_id": "c",
+            }
+        ],
     )
     assert report["problems"] == []
     assert report["indexes"]["not_online"] == []
 
 
 def test_a_recorded_index_that_is_deferred_names_its_keyspace_in_the_problem(
-        monkeypatch):
+    monkeypatch,
+):
     report = _cluster_report(
         monkeypatch,
         {"files": [], "gsi_definitions": [{"indexName": "i"}]},
-        [{"name": "i", "state": "deferred", "bucket_id": "b",
-          "scope_id": "s", "keyspace_id": "c"}],
+        [
+            {
+                "name": "i",
+                "state": "deferred",
+                "bucket_id": "b",
+                "scope_id": "s",
+                "keyspace_id": "c",
+            }
+        ],
     )
     assert any("on b.s.c is deferred" in problem for problem in report["problems"])
 
@@ -439,9 +522,13 @@ def test_a_recorded_index_that_is_deferred_names_its_keyspace_in_the_problem(
 # ── export fidelity must describe what happened ──────────────────────────────
 
 
-def _stub_export_cluster(monkeypatch, *, collections: list[str],
-                         rows_by_keyspace: dict[str, list[dict]],
-                         definitions: list[dict] | None = None):
+def _stub_export_cluster(
+    monkeypatch,
+    *,
+    collections: list[str],
+    rows_by_keyspace: dict[str, list[dict]],
+    definitions: list[dict] | None = None,
+):
     """Stand a cluster up in memory: one bucket, one scope, named collections."""
     from handlers.capella import environment as env
 
@@ -453,15 +540,19 @@ def _stub_export_cluster(monkeypatch, *, collections: list[str],
         if op_name == "capella_buckets_list":
             return {"data": [{"name": "b", "id": "Yg=="}]}
         if op_name == "capella_scopes_list":
-            return {"scopes": [{"name": "s", "collections": [
-                {"name": c} for c in collections]}]}
+            return {
+                "scopes": [
+                    {"name": "s", "collections": [{"name": c} for c in collections]}
+                ]
+            }
         if op_name == "capella_collections_list":
             return {"collections": [{"name": c} for c in collections]}
         return {"data": []}
 
     monkeypatch.setattr(env, "_invoke", _invoke)
-    monkeypatch.setattr(fixture, "capella_request",
-                        lambda *a, **k: {"definitions": definitions or []})
+    monkeypatch.setattr(
+        fixture, "capella_request", lambda *a, **k: {"definitions": definitions or []}
+    )
 
     def _query(base, credential, statement, parameters=None, timeout=None):
         for keyspace, rows in rows_by_keyspace.items():
@@ -476,11 +567,13 @@ def _stub_export_cluster(monkeypatch, *, collections: list[str],
                         shaped.append(dict(row))
                         continue
                     row = dict(row)
-                    shaped.append({
-                        fixture.META_ID_ALIAS: row.pop("id", None),
-                        fixture.META_EXP_ALIAS: row.pop("exp", 0),
-                        **row,
-                    })
+                    shaped.append(
+                        {
+                            fixture.META_ID_ALIAS: row.pop("id", None),
+                            fixture.META_EXP_ALIAS: row.pop("exp", 0),
+                            **row,
+                        }
+                    )
                 # One page, then empty, so the key-range loop terminates.
                 return {"results": [] if parameters.get("$last_key") else shaped}
         return {"results": []}
@@ -489,7 +582,8 @@ def _stub_export_cluster(monkeypatch, *, collections: list[str],
 
 
 def test_an_export_of_only_empty_collections_does_not_claim_document_fidelity(
-        tmp_path, monkeypatch):
+    tmp_path, monkeypatch
+):
     """MEASURED 2026-09-14 and it was wrong: exporting an existing but EMPTY
     collection produced documents:0, data_files:0 and fidelity.documents:TRUE,
     with a note reading 'Documents exported over the Data API'.
@@ -498,13 +592,20 @@ def test_an_export_of_only_empty_collections_does_not_claim_document_fidelity(
     available here, produced by this module. 'The document phase ran without
     failing' is not the same claim as 'this fixture contains documents'.
     """
-    _stub_export_cluster(monkeypatch, collections=["empty"],
-                         rows_by_keyspace={"b.s.empty": []})
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.empty"],
-    })
+    _stub_export_cluster(
+        monkeypatch, collections=["empty"], rows_by_keyspace={"b.s.empty": []}
+    )
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.empty"],
+        }
+    )
     payload = json.loads("".join(block.text for block in result))
     assert payload["documents"] == 0
     assert payload["fidelity"]["documents"] is False
@@ -514,17 +615,24 @@ def test_an_export_of_only_empty_collections_does_not_claim_document_fidelity(
     assert "NOT a dataset" in payload["fidelity"]["note"]
 
 
-def test_an_export_that_carries_documents_still_claims_fidelity(
-        tmp_path, monkeypatch):
+def test_an_export_that_carries_documents_still_claims_fidelity(tmp_path, monkeypatch):
     """The guard above must not be satisfiable by always answering false."""
     _stub_export_cluster(
-        monkeypatch, collections=["full"],
-        rows_by_keyspace={"b.s.full": [{"id": "k1", "x": 1}]})
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.full"],
-    })
+        monkeypatch,
+        collections=["full"],
+        rows_by_keyspace={"b.s.full": [{"id": "k1", "x": 1}]},
+    )
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.full"],
+        }
+    )
     payload = json.loads("".join(block.text for block in result))
     assert payload["documents"] == 1
     assert payload["fidelity"]["documents"] is True
@@ -535,13 +643,20 @@ def test_a_keyspace_filter_that_matches_nothing_is_refused(tmp_path, monkeypatch
     collection matched, nothing was written, and the manifest reported a clean
     export of zero documents. The caller named a keyspace and got a fixture
     without it, with nothing saying so."""
-    _stub_export_cluster(monkeypatch, collections=["real"],
-                         rows_by_keyspace={"b.s.real": [{"id": "k"}]})
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.typo"],
-    })
+    _stub_export_cluster(
+        monkeypatch, collections=["real"], rows_by_keyspace={"b.s.real": [{"id": "k"}]}
+    )
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.typo"],
+        }
+    )
     body = "".join(block.text for block in result)
     assert "do not exist on this cluster" in body
     assert "b.s.typo" in body
@@ -550,13 +665,20 @@ def test_a_keyspace_filter_that_matches_nothing_is_refused(tmp_path, monkeypatch
 
 
 def test_a_keyspace_filter_that_matches_is_not_refused(tmp_path, monkeypatch):
-    _stub_export_cluster(monkeypatch, collections=["real"],
-                         rows_by_keyspace={"b.s.real": [{"id": "k"}]})
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.real"],
-    })
+    _stub_export_cluster(
+        monkeypatch, collections=["real"], rows_by_keyspace={"b.s.real": [{"id": "k"}]}
+    )
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.real"],
+        }
+    )
     payload = json.loads("".join(block.text for block in result))
     assert payload["documents"] == 1
 
@@ -606,11 +728,15 @@ def test_the_import_rejects_a_nested_keyspace_map_rather_than_guessing(tmp_path)
     caller meant, on an operation that writes to somebody's cluster.
     """
     directory = _write_fixture(tmp_path)
-    result = fixture._import({
-        "fixture_path": str(directory),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "keyspace_map": {"travel-sample": {"inventory": {"airline": "x.y.z"}}},
-    })
+    result = fixture._import(
+        {
+            "fixture_path": str(directory),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "keyspace_map": {"travel-sample": {"inventory": {"airline": "x.y.z"}}},
+        }
+    )
     body = _text(result)
     assert "keyspace_map values must be keyspace STRINGS" in body
     assert "travel-sample" in body
@@ -699,24 +825,38 @@ def test_an_exported_row_keeps_a_document_field_named_id(tmp_path, monkeypatch):
     """The regression, end to end: a document whose body contains `id` must keep
     it, and must be keyed by its real document key."""
     _stub_export_cluster(
-        monkeypatch, collections=["airline"],
-        rows_by_keyspace={"b.s.airline": [{
-            fixture.META_ID_ALIAS: "airline_10",
-            fixture.META_EXP_ALIAS: 0,
-            "id": 10,
-            "name": "40-Mile Air",
-        }]},
+        monkeypatch,
+        collections=["airline"],
+        rows_by_keyspace={
+            "b.s.airline": [
+                {
+                    fixture.META_ID_ALIAS: "airline_10",
+                    fixture.META_EXP_ALIAS: 0,
+                    "id": 10,
+                    "name": "40-Mile Air",
+                }
+            ]
+        },
     )
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.airline"],
-    })
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.airline"],
+        }
+    )
     payload = json.loads("".join(block.text for block in result))
     assert payload["documents"] == 1
 
-    line = (tmp_path / "fx" / "data" / "b.s.airline.jsonl").read_text(
-        encoding="utf-8").strip()
+    line = (
+        (tmp_path / "fx" / "data" / "b.s.airline.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
     row = json.loads(line)
     # The KEY is the document key, not the body's id field.
     assert row["id"] == "airline_10"
@@ -741,6 +881,7 @@ def _import_against(monkeypatch, tmp_path, structure, keyspace_map=None):
 
     monkeypatch.setattr(env, "_resolve_context", lambda args: ("o", "p", None))
     from handlers.capella import guardrails
+
     monkeypatch.setattr(guardrails, "assert_project_allowed", lambda *a, **k: None)
     monkeypatch.setattr(guardrails, "assert_name_allowed", lambda *a, **k: None)
 
@@ -758,7 +899,7 @@ def _import_against(monkeypatch, tmp_path, structure, keyspace_map=None):
             if name.startswith(("_", "%")):
                 raise RuntimeError(
                     'HTTP 422 {"code": 11006, "message": "The scope name '
-                    'provided is not valid. A scope name can not start with an '
+                    "provided is not valid. A scope name can not start with an "
                     'underscore or percentage."}'
                 )
             return {}
@@ -774,8 +915,10 @@ def _import_against(monkeypatch, tmp_path, structure, keyspace_map=None):
     monkeypatch.setattr(env, "_invoke", _invoke)
     monkeypatch.setattr(fixture, "capella_request", lambda *a, **k: {"definitions": []})
     call_args = {
-        "fixture_path": str(directory), "cluster_id": "c",
-        "organization_id": "o", "project_id": "p",
+        "fixture_path": str(directory),
+        "cluster_id": "c",
+        "organization_id": "o",
+        "project_id": "p",
     }
     if keyspace_map is not None:
         call_args["keyspace_map"] = keyspace_map
@@ -794,12 +937,19 @@ def test_a_system_scope_is_skipped_rather_than_attempted(monkeypatch, tmp_path):
     that had otherwise loaded all 188 documents correctly. A tool that always
     reports a failure it cannot avoid trains its reader to ignore failures.
     """
-    payload, attempted = _import_against(monkeypatch, tmp_path, [
-        {"name": "b", "scopes": [
-            {"name": "_system", "collections": [{"name": "_mobile"}]},
-            {"name": "inventory", "collections": [{"name": "airline"}]},
-        ]},
-    ])
+    payload, attempted = _import_against(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "name": "b",
+                "scopes": [
+                    {"name": "_system", "collections": [{"name": "_mobile"}]},
+                    {"name": "inventory", "collections": [{"name": "airline"}]},
+                ],
+            },
+        ],
+    )
     assert "_system" not in attempted, "a system scope must never be sent"
     assert "inventory" in attempted, "an ordinary scope must still be created"
 
@@ -812,12 +962,17 @@ def test_a_system_scope_is_skipped_rather_than_attempted(monkeypatch, tmp_path):
 
 
 def test_a_percentage_prefixed_scope_is_skipped_for_the_same_reason(
-        monkeypatch, tmp_path):
+    monkeypatch, tmp_path
+):
     """Capella's rule names underscore AND percentage. _default was skipped one
     case at a time; this covers the family rather than the instance."""
-    payload, attempted = _import_against(monkeypatch, tmp_path, [
-        {"name": "b", "scopes": [{"name": "%odd", "collections": []}]},
-    ])
+    payload, attempted = _import_against(
+        monkeypatch,
+        tmp_path,
+        [
+            {"name": "b", "scopes": [{"name": "%odd", "collections": []}]},
+        ],
+    )
     assert "%odd" not in attempted
     structure = next(s for s in payload["steps"] if s["step"] == "structure")
     assert "b.%odd" in structure["system_scopes_skipped"]
@@ -846,10 +1001,16 @@ def test_a_keyspace_map_within_one_bucket_creates_the_target_scope(
     not.
     """
     payload, attempted = _import_against(
-        monkeypatch, tmp_path,
-        [{"name": "b", "scopes": [
-            {"name": "inventory", "collections": [{"name": "airline"}]},
-        ]}],
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "name": "b",
+                "scopes": [
+                    {"name": "inventory", "collections": [{"name": "airline"}]},
+                ],
+            }
+        ],
         keyspace_map={"b.inventory.airline": "b.roundtrip.airline"},
     )
 
@@ -877,11 +1038,17 @@ def test_an_unmapped_keyspace_still_uses_its_recorded_names(monkeypatch, tmp_pat
     above could quietly send every unmapped collection somewhere else.
     """
     payload, attempted = _import_against(
-        monkeypatch, tmp_path,
-        [{"name": "b", "scopes": [
-            {"name": "inventory", "collections": [{"name": "airline"}]},
-            {"name": "untouched", "collections": [{"name": "hotel"}]},
-        ]}],
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "name": "b",
+                "scopes": [
+                    {"name": "inventory", "collections": [{"name": "airline"}]},
+                    {"name": "untouched", "collections": [{"name": "hotel"}]},
+                ],
+            }
+        ],
         keyspace_map={"b.inventory.airline": "b.roundtrip.airline"},
     )
 
@@ -890,6 +1057,7 @@ def test_an_unmapped_keyspace_still_uses_its_recorded_names(monkeypatch, tmp_pat
     structure = next(s for s in payload["steps"] if s["step"] == "structure")
     assert "b.untouched.hotel" in structure["collections_created"]
     assert not payload["problems"]
+
 
 def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(
     tmp_path, monkeypatch
@@ -914,19 +1082,31 @@ def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(
         collections=["airline", "hotel"],
         rows_by_keyspace={"b.s.airline": [{"id": "airline_10", "x": 1}]},
         definitions=[
-            {"indexName": "ix_airline",
-             "definition": "CREATE INDEX `ix_airline` ON `b`.`s`.`airline`(`x`)"},
-            {"indexName": "sg_users_x1",
-             "definition": "CREATE INDEX `sg_users_x1` ON `b`.`s`.`hotel`(`y`)"},
-            {"indexName": "ix_bucket_default",
-             "definition": "CREATE PRIMARY INDEX `ix_bucket_default` ON `b`"},
+            {
+                "indexName": "ix_airline",
+                "definition": "CREATE INDEX `ix_airline` ON `b`.`s`.`airline`(`x`)",
+            },
+            {
+                "indexName": "sg_users_x1",
+                "definition": "CREATE INDEX `sg_users_x1` ON `b`.`s`.`hotel`(`y`)",
+            },
+            {
+                "indexName": "ix_bucket_default",
+                "definition": "CREATE PRIMARY INDEX `ix_bucket_default` ON `b`",
+            },
         ],
     )
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.airline"],
-    })
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.airline"],
+        }
+    )
     payload = json.loads("".join(block.text for block in result))
 
     assert payload["gsi_definitions"] == 1, (
@@ -962,11 +1142,17 @@ def test_a_definition_whose_target_cannot_be_read_is_kept_not_dropped(
             {"indexName": "ix_unparseable", "definition": "CREATE INDEX no_on_clause"},
         ],
     )
-    result = fixture._export({
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
-        "cluster_id": "c", "organization_id": "o", "project_id": "p",
-        "include_data": True, "keyspaces": ["b.s.airline"],
-    })
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.airline"],
+        }
+    )
     payload = json.loads("".join(block.text for block in result))
     assert payload["gsi_definitions"] == 1
     assert "gsi_definitions_skipped" not in payload

@@ -35,6 +35,7 @@ Regenerate with, from the repository root:
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -78,9 +79,14 @@ def _measured() -> dict[str, int]:
         capture_output=True,
         text=True,
         check=False,
+        # INHERIT and override -- see _per_mode_totals below for why a
+        # hand-built env was wrong here.
         env={
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "SYSTEMROOT": "C:\\Windows",
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith(("CB_", "CAPELLA_"))
+            },
             "PYTHONPATH": str(ROOT),
             # Pinned, not inferred. `both` is the only mode in which the WHOLE
             # registry loads, which is what a diagram of the whole system counts.
@@ -243,9 +249,22 @@ def _per_mode_totals() -> dict[str, int]:
             capture_output=True,
             text=True,
             check=False,
+            # INHERIT the environment and override, rather than building one.
+            # This used to hand the child a POSIX PATH -- /usr/bin:/bin -- beside a
+            # Windows SYSTEMROOT, on a Windows-only machine. It worked only because
+            # sys.executable is absolute, so nothing needed resolving through PATH;
+            # anything the child shelled out to would have found nothing. CLAUDE.md
+            # section 4 says not to hand this machine POSIX paths.
+            #
+            # CB_ and CAPELLA_ are stripped instead, which is the thing that actually
+            # needs controlling: the mode under test must not be whatever the
+            # developer's shell happens to hold. Section 2.2.
             env={
-                "PATH": "/usr/bin:/bin:/usr/local/bin",
-                "SYSTEMROOT": "C:\\Windows",
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if not key.startswith(("CB_", "CAPELLA_"))
+                },
                 "PYTHONPATH": str(ROOT),
                 "CB_DEPLOYMENT": mode,
                 "CB_ADMIN_PROFILE": "workstation",

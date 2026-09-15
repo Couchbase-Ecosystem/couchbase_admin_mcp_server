@@ -71,6 +71,36 @@ MUTATIONS = [
         """                _check_leaf(enclosing, item, child, force=False)""",
         T3,
     ),
+    # ── Scope extraction across IdP claim shapes ────────────────────────────
+    (
+        "scope gate: stop reading Keycloak's nested realm roles",
+        "auth/scope_gate.py",
+        """    realm_access = claims.get("realm_access")
+    if isinstance(realm_access, dict):
+        granted |= _flatten_grant(realm_access.get("roles"))""",
+        """    realm_access = None""",
+        "tests/test_scope_claim_shapes.py",
+    ),
+    (
+        "scope gate: stop reading Keycloak's nested client roles",
+        "auth/scope_gate.py",
+        """    resource_access = claims.get("resource_access")
+    if isinstance(resource_access, dict):
+        for per_client in resource_access.values():
+            if isinstance(per_client, dict):
+                granted |= _flatten_grant(per_client.get("roles"))""",
+        """    resource_access = None""",
+        "tests/test_scope_claim_shapes.py",
+    ),
+    (
+        "scope gate: scrape EVERY claim instead of the known grant claims",
+        "auth/scope_gate.py",
+        """    for claim in _SCOPE_CLAIMS:
+        granted |= _flatten_grant(claims.get(claim))""",
+        """    for claim in claims:
+        granted |= _flatten_grant(claims.get(claim))""",
+        "tests/test_scope_claim_shapes.py",
+    ),
     # ── Audit sink is fatal at startup ──────────────────────────────────────
     (
         "audit sink: server no longer refuses to start",

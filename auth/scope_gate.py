@@ -156,25 +156,56 @@ def session_has_automation_scope() -> bool:
 _SCOPE_CLAIMS: tuple[str, ...] = ("scope", "scp", "scopes", "roles", "permissions")
 
 
+def _flatten_grant(raw: Any) -> set[str]:
+    """A claim value in any of the shapes an IdP emits, as a set of grants."""
+    if isinstance(raw, str):
+        return {s for s in raw.split() if s}
+    if isinstance(raw, (list, tuple, set)):
+        return {str(s) for s in raw if str(s)}
+    return set()
+
+
 def _claims_scopes(claims: dict[str, Any]) -> set[str]:
     """Extract every granted scope/role from token claims.
 
     Handles the shapes real IdPs emit:
-      * RFC 8693 `scope` as a space-delimited string   (Auth0, Keycloak)
+      * RFC 8693 `scope` as a space-delimited string   (Auth0, Keycloak scopes)
       * `scp` as string or list                        (Entra delegated, Okta)
       * `roles` as a list                              (Entra app permissions —
                                                         client credentials)
       * `permissions` as a list                        (Auth0 RBAC)
+      * `realm_access.roles`                           (Keycloak REALM roles)
+      * `resource_access.<client>.roles`               (Keycloak CLIENT roles)
+
+    THE NESTED KEYCLOAK SHAPES ARE NOT OPTIONAL, and reading only the top level
+    was a gap. Keycloak emits SCOPES at the top level in `scope`, but ROLES are
+    nested one or two levels down, and an operator who grants the automation
+    permission as a role rather than a scope -- which Keycloak's own UI makes the
+    more natural choice -- produced a token this function read as carrying
+    nothing at all. The failure direction was safe: every unattended write fell
+    back to demanding a per-call confirmation, so a pipeline stopped rather than
+    over-reaching. But it stopped while reporting "needs confirmation", which
+    says nothing about the grant being in a claim nobody read.
+
+    `resource_access` is walked across every client rather than only the
+    configured audience, deliberately: the client a role is attached to is the
+    IdP administrator's choice, and refusing a grant because it arrived under a
+    neighbouring client id would reproduce the same silence one level down.
     """
     granted: set[str] = set()
     for claim in _SCOPE_CLAIMS:
-        raw: Any = claims.get(claim)
-        if raw is None:
-            continue
-        if isinstance(raw, str):
-            granted.update(s for s in raw.split() if s)
-        elif isinstance(raw, (list, tuple, set)):
-            granted.update(str(s) for s in raw if str(s))
+        granted |= _flatten_grant(claims.get(claim))
+
+    realm_access = claims.get("realm_access")
+    if isinstance(realm_access, dict):
+        granted |= _flatten_grant(realm_access.get("roles"))
+
+    resource_access = claims.get("resource_access")
+    if isinstance(resource_access, dict):
+        for per_client in resource_access.values():
+            if isinstance(per_client, dict):
+                granted |= _flatten_grant(per_client.get("roles"))
+
     return granted
 
 
@@ -282,7 +313,27 @@ def check_scope(tool: Any) -> str | None:
     if required in granted:
         return None
 
+    if not granted:
+        # "I FOUND NO GRANT" AND "THERE IS NO GRANT" ARE DIFFERENT CLAIMS, and a
+        # generic denial states the second while only the first was observed.
+        # CLAUDE.md section 1.7.
+        #
+        # A token that validated -- signature, issuer, audience and expiry all
+        # checked -- and carries nothing this function recognises is far more
+        # likely to be a claim-shape mismatch than a principal that was granted
+        # nothing. The operator needs to know WHICH claims were read, because the
+        # fix is in their IdP's mapper configuration and nowhere near this server.
+        return (
+            f"Access denied: tool '{getattr(tool, 'name', '?')}' requires scope "
+            f"'{required}'. The presented token VALIDATED but carried no "
+            f"recognised grant in any of: {', '.join(_SCOPE_CLAIMS)}, "
+            f"realm_access.roles, or resource_access.<client>.roles. That is "
+            f"usually an IdP mapper emitting the grant under a claim this server "
+            f"does not read, rather than a principal with no permissions."
+        )
+
     return (
         f"Access denied: tool '{getattr(tool, 'name', '?')}' requires scope "
-        f"'{required}', which the presented token does not hold."
+        f"'{required}', which the presented token does not hold. It holds: "
+        f"{', '.join(sorted(granted))}."
     )

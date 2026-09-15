@@ -100,7 +100,7 @@ Two mutation harnesses re-introduce specific bugs and assert the suite catches t
 
 ```bash
 uv run python scripts/mutation_rounds_1_3.py   # 25 mutations
-uv run python scripts/mutation_round_4.py      # 20 mutations
+uv run python scripts/mutation_round_4.py      # 23 mutations
 ```
 
 Both must report **all mutations caught**. They exist because a green suite proved nothing
@@ -357,7 +357,7 @@ couchbase-admin-mcp-server/
 ├── gui/                       # Flask console + vendored frontend runtime
 ├── scripts/
 │   ├── verify_capella_paths.py    # Probe v4 paths against a live organization
-│   └── mutation_*.py              # Mutation harnesses (45 mutations)
+│   └── mutation_*.py              # Mutation harnesses (48 mutations)
 └── tests/                     # 636 tests
 ```
 

@@ -203,6 +203,48 @@ admin_failover_hard,admin_failover_graceful,admin_rebalance_start,\
 admin_user_delete,admin_xdcr_replication_delete,admin_cluster_leave
 ```
 
+### Which claim your IdP must put the scopes in
+
+The automation model rests on one question — does this token carry the automation
+scope — and identity providers disagree about which claim a grant lands in. This
+server reads **all** of the shapes below, and a token needs to satisfy only one of
+them. Grants from several claims are **combined**, not shadowed, so a provider that
+issues delegated scopes and application roles at the same time works.
+
+| Claim | Shape | Emitted by |
+|---|---|---|
+| `scope` | space-delimited string | Keycloak scopes, Auth0, anything RFC-compliant |
+| `scp` | string or list | Entra delegated permissions, Okta |
+| `scopes` | string or list | assorted |
+| `roles` | list | **Entra application permissions — this is what a client-credentials token carries** |
+| `permissions` | list | Auth0 RBAC |
+| `realm_access.roles` | list, nested | **Keycloak realm roles** |
+| `resource_access.<client>.roles` | list, nested | **Keycloak client roles**, any client id |
+
+The three in bold are the ones that have actually caused trouble. An Entra
+client-credentials token puts app permissions in `roles` and nothing in `scp`, so a
+server reading only `scope`/`scp` sees an automation-scoped service principal as
+unprivileged. Keycloak puts *scopes* at the top level but *roles* one or two levels
+down, and granting the permission as a role is the more natural choice in its UI.
+
+**Both failures point the safe way** — the grant is not seen, so the write is gated
+and the pipeline stops rather than over-reaching. That is the correct direction and
+it is still a bad afternoon, because the symptom is "this write needs confirmation"
+and the cause is an IdP mapper three systems away. So when a token validates and
+carries no grant this server recognises, the denial says so explicitly and lists the
+claims it read, instead of reporting a generic missing scope.
+
+`tests/test_scope_claim_shapes.py` pins every row of that table, asserts the shapes
+combine, and asserts the reverse — that a value appearing in an unrelated claim
+(`aud`, `groups`, a custom entitlement) grants nothing. Three entries in
+`scripts/mutation_round_4.py` prove those tests fail when the extraction is removed.
+
+**What this does not establish.** Those are synthetic claim dictionaries in the
+layouts the providers document: they prove the extraction, not the integration. No
+signature, no JWKS, no clock, no live issuer. An installation with a custom mapper,
+or a provider that changes its layout, is outside what they can see. Driving a real
+IdP against a deployed container is a separate check and has not been done.
+
 ### Per-environment policy
 
 Because the ceiling is server configuration, the same binary enforces different

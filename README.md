@@ -264,6 +264,21 @@ accounts — not by the test suite. The realm is in `deploy/keycloak/`; the driv
 | write tool | `automation` | executed unattended, scope created |
 | cleanup delete | `automation` | executed, no residue |
 
+Every one of those decisions produced an audit record naming the principal. The
+three that reached dispatch:
+
+| Decision | `principal` | `client_id` | `automation` |
+|---|---|---|---|
+| `denied_scope` | service account sub | `cb-admin-mcp-reader` | `false` |
+| `denied_confirmation` | service account sub | `cb-admin-mcp-writer` | `false` |
+| `allowed` | service account sub | `cb-admin-mcp-automation` | `true` |
+
+Each also carries `issuer`, the full `scopes` list as extracted, the tool name,
+the arguments, the source address, and — on the allowed call — `duration_ms`.
+An unattended write is therefore attributable to the credential the IdP issued,
+which is the property the whole audit layer exists for and the one that had never
+been observed against a real token.
+
 Two of those are worth reading twice.
 
 **The Keycloak grant lives only in `realm_access.roles`.** The top-level `scope`

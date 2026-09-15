@@ -133,7 +133,7 @@ def test_the_refusal_is_wired_into_startup():
 
 import pathlib  # noqa: E402
 
-import yaml  # noqa: E402
+from tests._compose import load as _load_compose  # noqa: E402
 
 DEPLOY = pathlib.Path(__file__).resolve().parent.parent / "deploy"
 
@@ -141,7 +141,7 @@ DEPLOY = pathlib.Path(__file__).resolve().parent.parent / "deploy"
 def _compose(name: str) -> dict:
     path = DEPLOY / name
     assert path.is_file(), f"{name} is missing; the deployment artifacts moved"
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    return _load_compose(path)
 
 
 def _only_service(document: dict) -> dict:
@@ -215,7 +215,7 @@ def test_no_shipped_compose_file_configures_both():
     """
     offenders = []
     for path in DEPLOY.glob("docker-compose*.yml"):
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        document = _load_compose(path)
         for service_name, service in document.get("services", {}).items():
             environment = service.get("environment", {}) or {}
             for key in ("CB_DEPLOYMENT", "CB_ADMIN_REQUIRE_DEPLOYMENT"):
@@ -233,7 +233,7 @@ def test_every_shipped_compose_file_declares_its_surface():
     thing all of this exists to stop relying on."""
     undeclared = []
     for path in DEPLOY.glob("docker-compose*.yml"):
-        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        document = _load_compose(path)
         for service_name, service in document.get("services", {}).items():
             environment = service.get("environment", {}) or {}
             if not environment.get("CB_ADMIN_REQUIRE_DEPLOYMENT"):

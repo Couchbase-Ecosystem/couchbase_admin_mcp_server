@@ -1,0 +1,97 @@
+# A LAB OVERRIDE. Not a deployment shape — a way to exercise the HTTP transport
+# on a developer machine with no identity provider.
+#
+#   docker compose --env-file deploy/.env.ee `
+#       -f deploy/docker-compose.ee.yml `
+#       -f deploy/docker-compose.ee.lab.yml up -d
+#
+# WHY THIS EXISTS
+# ---------------
+# The HTTP transport had never been exercised. Everything — every verification
+# run, every fixture round trip, every tool call recorded in this repository —
+# went over stdio, while every cloud deployment shape in
+# docs/CONTAINER_DEPLOYMENT.md runs HTTP. The base file cannot start without an
+# IdP, correctly, so on a machine that has none the transport stayed untested.
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT
+# --------------------------------------
+# PROVES: the transport works in the shipped image — per-client sessions, a call
+# with no session id refused, /mcp and /mcp/ both answering, the tool list, and a
+# real tool dispatching against the cluster over the docker network.
+#
+# DOES NOT PROVE: anything about the authorization model. The workstation profile
+# uses no tokens, so the scope gate, automation mode, the hard ceiling and the
+# audit principal are all untouched here. Those are covered by
+# tests/test_http_transport_live.py, which mints its own tokens against a real
+# uvicorn — and they are NOT covered against this image. Do not read a green run
+# of this file as the enterprise shape being verified.
+#
+# THE TWO ACKNOWLEDGEMENTS ARE NOT CEREMONY
+# -----------------------------------------
+# `workstation` + http + a non-loopback bind is fatal twice over, and both
+# refusals are correct. What makes them acceptable HERE is stated rather than
+# assumed:
+#
+#   CONTAINER_BIND  — inside a container the process must bind 0.0.0.0. The
+#                     isolation comes from publishing the port narrowly, which
+#                     is why the port below is bound to 127.0.0.1 and not to
+#                     every interface on the host.
+#   TLS_TERMINATED  — this listener is cleartext. Acceptable only because it is
+#                     reachable from the host's loopback and nowhere else. It
+#                     would NOT be acceptable on a shared network, and the
+#                     workstation profile issues no bearer token worth capturing.
+
+services:
+  mcp-ee:
+    environment:
+      # The base file declares self_managed and this override does not touch it.
+      CB_ADMIN_REQUIRE_DEPLOYMENT: self_managed
+      CB_DEPLOYMENT: self_managed
+
+      CB_ADMIN_PROFILE: workstation
+      CB_ADMIN_TRANSPORT: http
+      CB_ADMIN_HOST: 0.0.0.0
+      CB_ADMIN_WORKSTATION_CONTAINER_BIND: "1"
+      CB_ADMIN_TLS_TERMINATED_EXTERNALLY: "1"
+
+      # NO BEARER TOKEN IS REQUIRED HERE, and that is the whole point of this
+      # file. The base file defaults CB_ADMIN_HTTP_REQUIRE_AUTH to true, which is
+      # right for the enterprise profile and wrong here: with it on and no IdP,
+      # every request is refused at the edge with
+      #
+      #   AUDIT {"decision": "denied_authentication", "reason": "missing bearer token"}
+      #   "GET /mcp HTTP/1.1" 401 Unauthorized
+      #
+      # which proves the socket answers and nothing else. MEASURED 2026-09-15.
+      #
+      # What makes this acceptable: the listener is published to 127.0.0.1 ONLY
+      # (see ports below), the workstation profile issues no token worth
+      # capturing, and the cluster credential is the same one already in your
+      # shell. It would NOT be acceptable on a shared network, and the base file
+      # -- the one an operator deploys -- still defaults it to true.
+      CB_ADMIN_HTTP_REQUIRE_AUTH: "false"
+
+      # Writes stay off by default. Flip it deliberately, per run, once the
+      # read surface has answered.
+      CB_ADMIN_READ_ONLY_MODE: ${CB_ADMIN_READ_ONLY_MODE:-true}
+
+    # LOOPBACK ONLY. The base file publishes 0.0.0.0:8000, which is the whole
+    # difference between "a cleartext listener on my laptop" and "a cleartext
+    # admin API on the office network".
+    #
+    # `!override` REPLACES the base file's list instead of extending it. Compose
+    # merges sequences by APPENDING, so without this the container asks to bind
+    # 8000 twice -- once on every interface, once on loopback -- and the second
+    # fails against the first:
+    #
+    #   failed to bind host port 127.0.0.1:8000/tcp: address already in use
+    #
+    # MEASURED 2026-09-15. It reads as "something else has the port", and nothing
+    # did: `netstat` and `docker ps --filter publish=8000` were both empty.
+    # Changing MCP_EE_PORT does not help either, because both entries read the
+    # same variable and would collide at any value.
+    #
+    # Needs Compose v2.24 or newer. On an older one, comment the base file's
+    # `ports:` out for the run rather than editing it -- that file is shipped.
+    ports: !override
+      - "127.0.0.1:${MCP_EE_PORT:-8000}:8000"

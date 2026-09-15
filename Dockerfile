@@ -199,6 +199,7 @@ COPY --chown=mcp:mcp logging_config.py /app/logging_config.py
 COPY --chown=mcp:mcp mcp_compat.py /app/mcp_compat.py
 COPY --chown=mcp:mcp profile_config.py /app/profile_config.py
 COPY --chown=mcp:mcp tls_config.py /app/tls_config.py
+COPY --chown=mcp:mcp healthcheck.py /app/healthcheck.py
 COPY --chown=mcp:mcp handlers /app/handlers
 COPY --chown=mcp:mcp auth /app/auth
 COPY --chown=mcp:mcp gui /app/gui
@@ -235,12 +236,11 @@ EXPOSE 8000
 # Healthcheck — only meaningful in HTTP transport mode. When CB_ADMIN_TRANSPORT
 # is anything other than 'http', the check exits 0 (skip), since stdio mode
 # has no HTTP listener to probe.
+# See healthcheck.py for why a 401 counts as healthy. The inline version of this
+# probe treated it as a failure, so the container could never report healthy in
+# the enterprise profile -- where CB_ADMIN_HTTP_REQUIRE_AUTH=true is mandatory.
+# MEASURED 2026-09-15, the first time the image was run over HTTP.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import os, sys; \
-        sys.exit(0) if os.environ.get('CB_ADMIN_TRANSPORT', 'stdio').lower() != 'http' else None; \
-        import urllib.request; \
-        host = os.environ.get('CB_ADMIN_HOST', '127.0.0.1'); \
-        port = os.environ.get('CB_ADMIN_PORT', '8000'); \
-        urllib.request.urlopen(f'http://{host}:{port}/mcp', timeout=5)" || exit 1
+    CMD ["python", "/app/healthcheck.py"]
 
 ENTRYPOINT ["python", "/app/server.py"]

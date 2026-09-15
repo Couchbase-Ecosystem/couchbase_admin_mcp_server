@@ -116,6 +116,29 @@ on several occasions during this project's security review:
 If you add a guard, add a mutation entry for it. If your test still passes with the guard
 deleted, it is not testing the guard.
 
+**Run them where symlinks work.** Several entries are covered only by tests marked
+`@requires_symlinks`, which prove their property by creating a symlink. On a plain
+Windows shell those tests skip, a skipped test cannot fail, and the harness scores
+the mutation as SURVIVED — a claim about the code, from an observation about the
+machine. Use Developer Mode, or a Linux container:
+
+```bash
+docker run --rm -v "/path/to/CB-Admin-MCP:/src:ro" python:3.12-slim bash -lc \
+  "set -e; cp -a /src /work; cd /work; rm -rf .venv .pytest_cache .ruff_cache; \
+   export UV_PROJECT_ENVIRONMENT=/venv; pip install -q uv; uv sync --extra dev; \
+   set +e; /venv/bin/python scripts/mutation_rounds_1_3.py; \
+   /venv/bin/python scripts/mutation_round_4.py"
+```
+
+Behind a TLS-intercepting corporate proxy this dies at `pip install uv` with
+`CERTIFICATE_VERIFY_FAILED`. The bundle is already in the tree — add
+`PIP_CERT=/work/deploy/ca/corp-roots.crt`,
+`SSL_CERT_FILE=/work/deploy/ca/corp-roots.crt` and
+`REQUESTS_CA_BUNDLE=/work/deploy/ca/corp-roots.crt` to that export line. Keep the
+venv outside the tree: the harness copies the working directory once per mutation.
+
+Last full run: **2026-09-15, 52 of 52 caught** (25 + 27), in the container.
+
 ---
 
 ## 🔒 The conventions that are load-bearing

@@ -72,19 +72,23 @@ def _writes_loaded():
 def call(name: str, arguments: dict) -> dict:
     """Invoke the dispatch the way the MCP client does, and parse the single text block.
 
-    The loop is created if the thread has none. Other modules in this suite close the
-    session's loop, and `asyncio.get_event_loop()` on Python 3.10 raises rather than
-    replacing it -- so a bare get_event_loop() here passes alone and fails in a combined
-    run, which says nothing about the dry-run policy.
+    A PRIVATE loop per call, closed afterwards, rather than the thread's ambient one.
+
+    This used to reach for `asyncio.get_event_loop()` and repair it when closed. That
+    idiom is BUG-12 in SECURITY_AND_BUG_SCAN_2026-08-17.md: it is deprecated, it emits
+    a DeprecationWarning on every run, and the neighbouring form -- asyncio.run -- SETS
+    THE MAIN-THREAD LOOP TO None on exit, which silently disabled five refusal-path
+    tests in full-suite runs. The scan records the fix landing in
+    tests/test_server_dispatch.py; this file kept the old shape until 2026-09-15.
+
+    Owning the loop removes the coupling in both directions: nothing here depends on
+    what another module left behind, and nothing here leaves anything behind.
     """
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError("closed")
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(server.call_tool(name, arguments))
+        result = loop.run_until_complete(server.call_tool(name, arguments))
+    finally:
+        loop.close()
     return json.loads(result[0].text)
 
 

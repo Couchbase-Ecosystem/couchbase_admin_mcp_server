@@ -168,7 +168,12 @@ unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 [tool.ruff.lint.per-file-ignores]
-"test_*.py" = ["PLR2004", "N802"]
+# "**/test_*.py", not "test_*.py". Ruff matches these patterns against the PATH, so
+# the bare form matches a file in the project root and misses tests/test_capella.py
+# entirely -- which meant the exemptions this suite believes it has were not
+# reaching a single test file. Found 2026-09-15 while reading the config for an
+# unrelated reason.
+"**/test_*.py" = ["PLR2004", "N802"]
 "**/config.py" = ["N802"]
 
 [tool.ruff.lint.isort]

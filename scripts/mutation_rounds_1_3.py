@@ -236,8 +236,12 @@ MUTATIONS = [
     (
         "list_tools: stop requiring a token",
         "server.py",
-        """    if _auth_required_for_listing():""",
-        """    if False:""",
+        # The guard was inverted into an early return when the listing gained
+        # per-principal filtering (2026-09-15). Same mutation, new shape: making
+        # the condition always true takes the unauthenticated path that returns
+        # the whole catalog.
+        """    if not _auth_required_for_listing():""",
+        """    if True:""",
         "tests/test_http_authorization.py",
     ),
 ]

@@ -242,8 +242,61 @@ combine, and asserts the reverse — that a value appearing in an unrelated clai
 **What this does not establish.** Those are synthetic claim dictionaries in the
 layouts the providers document: they prove the extraction, not the integration. No
 signature, no JWKS, no clock, no live issuer. An installation with a custom mapper,
-or a provider that changes its layout, is outside what they can see. Driving a real
-IdP against a deployed container is a separate check and has not been done.
+or a provider that changes its layout, is outside what they can see. For the
+integration, see the next section.
+
+### Verified against a real identity provider
+
+On **2026-09-15** the authorization model was driven end to end by a real Keycloak
+26.7.3, over the HTTP transport, with tokens minted by client-credentials service
+accounts — not by the test suite. The realm is in `deploy/keycloak/`; the driver is
+`scripts/idp_lab_assertions.py`; `deploy/keycloak/README.md` has the setup.
+
+| Case | Principal | Result |
+|---|---|---|
+| no token | — | 401 before routing, `denied_authentication` audited |
+| `aud` claim absent | `stranger` | 401, `MissingRequiredClaimError` |
+| `aud` present but for another app, **holding the write role** | `otherapp` | 401, `InvalidAudienceError` |
+| read tool | `reader` | executed |
+| write tool | `reader` | denied, naming the scopes the token holds |
+| tool listing | `reader` | 70 read tools (was 146, all of them) |
+| write tool | `writer` | confirmation required, nothing created |
+| write tool | `automation` | executed unattended, scope created |
+| cleanup delete | `automation` | executed, no residue |
+
+Two of those are worth reading twice.
+
+**The Keycloak grant lives only in `realm_access.roles`.** The top-level `scope`
+claim on that token is `profile email` — nothing else. A server reading only
+`scope`/`scp`/`scopes` would have resolved a fully-authorized automation principal
+to *zero grants*: every write denied, automation silently off. The bolded rows in
+the claim table above are not defensive coding; against Keycloak the nested path is
+the only path.
+
+**`otherapp` is the case that matters in a shared tenant.** Its token is correctly
+signed by the right issuer, unexpired, carries `sub`, and holds
+`couchbase-admin-mcp:write`. It is refused solely because it was minted for a
+different application. A missing-`aud` refusal proves the claim is *required*; only
+this one proves the value is *compared*, and every token an unrelated app in the
+same tenant issues will have an `aud`.
+
+**What this run found.** The tool listing was authenticated but not authorized: a
+validated reader token was offered all 146 loaded tools with their argument schemas,
+then refused at call time. Nothing escalated — the gate held — but the deployment's
+posture was readable by the weakest credential in the tenant. Fixed by routing the
+listing through `auth.scope_gate.denial_for()`, the same function the call path
+uses, so the two cannot drift; `tests/test_tool_listing_is_scoped.py` and four
+entries in `scripts/mutation_round_4.py` hold it in place.
+
+**What this still does not establish.** The server under test ran from the working
+tree on the host, not from the shipped container image, and the listener was
+cleartext on loopback. Container-plus-IdP over the docker network needs TLS on the
+IdP (`profile_config.py` refuses a non-loopback `http://` issuer, correctly) and is
+covered by `deploy/docker-compose.keycloak.yml` and
+`deploy/docker-compose.ee.idp-lab.yml`, which have **not** been run. Keycloak is
+also one provider: these results say nothing about where Entra, Okta or Auth0 put a
+grant in any particular tenant's configuration. The check for that is a decoded
+sample token from the tenant in question, not another synthetic realm.
 
 ### Per-environment policy
 

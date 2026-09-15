@@ -230,11 +230,27 @@ def test_no_shipped_compose_file_configures_both():
 
 def test_every_shipped_compose_file_declares_its_surface():
     """A file without the declaration falls back on inference, which is the
-    thing all of this exists to stop relying on."""
+    thing all of this exists to stop relying on.
+
+    THE ONE EXEMPTION, AND WHY IT IS ALSO A DECLARATION
+    ───────────────────────────────────────────────────
+    deploy/ gained a compose file that starts a lab IDENTITY PROVIDER rather than
+    this server (docker-compose.keycloak.yml, 2026-09-15). A Keycloak container
+    has no control plane to declare, so this test had nothing to ask it for.
+
+    The exemption is `x-not-an-mcp-surface: true` on the service, NOT an inference
+    from the image name or the absence of CB_ADMIN_* variables. Inference is the
+    failure mode this whole file exists to prevent, and it would let a genuine MCP
+    service escape the check by being misconfigured enough — the exact case that
+    most needs catching. An explicit key has to be typed by someone, shows up in a
+    diff, and cannot happen by accident.
+    """
     undeclared = []
     for path in DEPLOY.glob("docker-compose*.yml"):
         document = _load_compose(path)
         for service_name, service in document.get("services", {}).items():
+            if service.get("x-not-an-mcp-surface") is True:
+                continue
             environment = service.get("environment", {}) or {}
             if not environment.get("CB_ADMIN_REQUIRE_DEPLOYMENT"):
                 undeclared.append(f"{path.name}:{service_name}")

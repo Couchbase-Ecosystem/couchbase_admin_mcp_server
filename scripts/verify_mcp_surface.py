@@ -321,8 +321,7 @@ _DISCOVERY: tuple[tuple[str, str, str | tuple[str, ...]], ...] = (
 #: returns schema and annotations but not the path. Until it does, this is the
 #: honest approximation, and it errs toward skipping.
 _IDENTITY_FIELDS: frozenset[str] = frozenset(
-    field_name
-    for _tool_name, field_name, *_rest in _DISCOVERY
+    field_name for _tool_name, field_name, *_rest in _DISCOVERY
 )
 
 #: Discovery entries that must NOT be called during the discovery loop, only
@@ -504,9 +503,7 @@ _ENVELOPE_KEY: dict[str, str] = {
 _ROWS_READER: dict[str, Any] = {
     "admin_fts_index_list": lambda payload: [
         {"name": name}
-        for name in (
-            ((payload or {}).get("indexDefs") or {}).get("indexDefs") or {}
-        )
+        for name in (((payload or {}).get("indexDefs") or {}).get("indexDefs") or {})
     ],
     "admin_eventing_list": lambda payload: [
         {"appname": item} if isinstance(item, str) else item
@@ -1343,8 +1340,10 @@ class Run:
             envelope = _ENVELOPE_KEY.get(tool)
             if reader is not None and isinstance(payload, dict):
                 raw_rows = reader(payload)
-            elif envelope and isinstance(payload, dict) and isinstance(
-                payload.get(envelope), list
+            elif (
+                envelope
+                and isinstance(payload, dict)
+                and isinstance(payload.get(envelope), list)
             ):
                 raw_rows = payload[envelope]
             else:
@@ -1409,23 +1408,30 @@ class Run:
             ]
             for other in others:
                 payload, result = await self.call(
-                    session, "capella_replications_list",
-                    {"organization_id": capella_ctx["organization_id"],
-                     "project_id": capella_ctx["project_id"],
-                     "cluster_id": other},
+                    session,
+                    "capella_replications_list",
+                    {
+                        "organization_id": capella_ctx["organization_id"],
+                        "project_id": capella_ctx["project_id"],
+                        "cluster_id": other,
+                    },
                     phase="discovery",
                 )
                 if result.outcome not in _SUCCESSFUL:
                     continue
                 rows = [_unwrap(r) for r in _items(payload)]
                 found = next(
-                    (str(r.get("id")) for r in rows
-                     if isinstance(r, dict) and r.get("id")), "")
+                    (
+                        str(r.get("id"))
+                        for r in rows
+                        if isinstance(r, dict) and r.get("id")
+                    ),
+                    "",
+                )
                 if found:
                     capella_ctx["replication_id"] = found
                     capella_ctx["_replication_cluster_id"] = other
-                    self.say(f"  {'replication_id (on another cluster)':<46} "
-                             f"{found}")
+                    self.say(f"  {'replication_id (on another cluster)':<46} {found}")
                     self.say(f"  {'  its source cluster':<46} {other}")
                     break
 
@@ -1489,9 +1495,10 @@ class Run:
         # matchers -- a different shape entirely despite the similar argument
         # name. kv_curr_items is exported by every Data node.
         cluster.setdefault("metric_name", "kv_curr_items")
-        cluster.setdefault("metrics", [
-            {"metric": [{"label": "name", "value": "kv_curr_items"}], "step": 60}
-        ])
+        cluster.setdefault(
+            "metrics",
+            [{"metric": [{"label": "name", "value": "kv_curr_items"}], "step": 60}],
+        )
 
         # cb_mcp_get_tool_info describes a tool, and this script is holding the
         # list of every advertised tool. Prefer one that is always present.
@@ -1553,13 +1560,19 @@ class Run:
             capella.setdefault("app_endpoint_keyspace", keyspace)
 
         seeded = {
-            "statement", "statements", "metric_name", "metrics", "tool_name",
+            "statement",
+            "statements",
+            "metric_name",
+            "metrics",
+            "tool_name",
             "root_path",
         }
         if capella.get("app_endpoint_keyspace"):
             seeded.add("app_endpoint_keyspace")
-        self.say(f"  seeded (literals, not discovered)             "
-                 f"{', '.join(sorted(seeded))}")
+        self.say(
+            f"  seeded (literals, not discovered)             "
+            f"{', '.join(sorted(seeded))}"
+        )
 
     def _choose(self, tool: str, rows: list, item_field: str) -> str | None:
         """Pick one row.
@@ -1593,9 +1606,12 @@ class Run:
             if wanted:
                 needle = wanted.lower()
                 named = [
-                    r for r in candidates
-                    if any(needle in str(r.get(f, "")).lower()
-                           for f in ("id", "name", "connectionString"))
+                    r
+                    for r in candidates
+                    if any(
+                        needle in str(r.get(f, "")).lower()
+                        for f in ("id", "name", "connectionString")
+                    )
                 ]
                 if len(named) == 1:
                     return value_of(named[0])
@@ -1974,9 +1990,7 @@ class Run:
                         Result(
                             tool.name,
                             SKIPPED,
-                            "no "
-                            + ", ".join(identities)
-                            + " exists on this cluster",
+                            "no " + ", ".join(identities) + " exists on this cluster",
                             phase="write",
                         )
                     )
@@ -2011,8 +2025,11 @@ class Run:
                 for name in list(missing):
                     spec = (schema.get("properties") or {}).get(name) or {}
                     value, invented = _value_for(
-                        name, spec, self.context_for(tool.name),
-                        self.args.name_prefix, 0,
+                        name,
+                        spec,
+                        self.context_for(tool.name),
+                        self.args.name_prefix,
+                        0,
                     )
                     arguments[name] = value
                     if invented:

@@ -535,9 +535,16 @@ _IMPORT_CONCURRENCY = 8
 _IMPORT_FAILURE_LIMIT = 20
 
 
-def _put_document(base: str, credential: tuple[str, str], bucket: str, scope: str,
-                  collection: str, key: str, body: Any,
-                  timeout: int = 30) -> str:
+def _put_document(
+    base: str,
+    credential: tuple[str, str],
+    bucket: str,
+    scope: str,
+    collection: str,
+    key: str,
+    body: Any,
+    timeout: int = 30,
+) -> str:
     """PUT one document. Returns "" on success, else the reason.
 
     PUT rather than POST, because the importer is explicitly re-runnable: POST is
@@ -579,9 +586,13 @@ def _put_document(base: str, credential: tuple[str, str], bucket: str, scope: st
         return f"{type(exc).__name__}: {exc}"
 
 
-def _sql_query(base: str, credential: tuple[str, str], statement: str,
-               parameters: dict | None = None,
-               timeout: int = _QUERY_TIMEOUT_SECONDS) -> dict:
+def _sql_query(
+    base: str,
+    credential: tuple[str, str],
+    statement: str,
+    parameters: dict | None = None,
+    timeout: int = _QUERY_TIMEOUT_SECONDS,
+) -> dict:
     """One SQL++ statement over the Data API. Raises RuntimeError with the body.
 
     Errors are returned with their FULL text. A query service refusal names the
@@ -704,7 +715,8 @@ def _export(args: dict) -> list[TextContent]:
 
     try:
         root = _resolve_under_root(
-            args.get("fixture_path"), field="fixture_path",
+            args.get("fixture_path"),
+            field="fixture_path",
             tool="capella_fixture_export",
         )
     except ValueError as exc:
@@ -717,7 +729,9 @@ def _export(args: dict) -> list[TextContent]:
 
     try:
         buckets = _env._items(
-            _env._invoke("capella_buckets_list", ids, composite="capella_fixture_export")
+            _env._invoke(
+                "capella_buckets_list", ids, composite="capella_fixture_export"
+            )
         )
     except Exception as exc:
         return err(f"could not list buckets: {exc}", tool="capella_fixture_export")
@@ -733,9 +747,15 @@ def _export(args: dict) -> list[TextContent]:
             "settings": {
                 key: bucket.get(key)
                 for key in (
-                    "type", "storageBackend", "memoryAllocationInMb", "replicas",
-                    "bucketConflictResolution", "durabilityLevel", "flush",
-                    "timeToLiveInSeconds", "evictionPolicy",
+                    "type",
+                    "storageBackend",
+                    "memoryAllocationInMb",
+                    "replicas",
+                    "bucketConflictResolution",
+                    "durabilityLevel",
+                    "flush",
+                    "timeToLiveInSeconds",
+                    "evictionPolicy",
                 )
                 if bucket.get(key) is not None
             },
@@ -744,20 +764,25 @@ def _export(args: dict) -> list[TextContent]:
         try:
             scope_args = dict(ids, bucket_id=bucket.get("id"))
             scopes = _env._items(
-                _env._invoke("capella_scopes_list", scope_args,
-                             composite="capella_fixture_export")
+                _env._invoke(
+                    "capella_scopes_list",
+                    scope_args,
+                    composite="capella_fixture_export",
+                )
             )
         except Exception as exc:
             warnings.append(f"scopes for bucket {name} could not be read: {exc}")
             scopes = []
         for scope in scopes:
-            record["scopes"].append({
-                "name": scope.get("name"),
-                "collections": [
-                    {"name": c.get("name"), "maxTTL": c.get("maxTTL")}
-                    for c in (scope.get("collections") or [])
-                ],
-            })
+            record["scopes"].append(
+                {
+                    "name": scope.get("name"),
+                    "collections": [
+                        {"name": c.get("name"), "maxTTL": c.get("maxTTL")}
+                        for c in (scope.get("collections") or [])
+                    ],
+                }
+            )
         structure.append(record)
 
     indexes: list[dict] = []
@@ -793,8 +818,11 @@ def _export(args: dict) -> list[TextContent]:
 
     try:
         eventing = _env._items(
-            _env._invoke("capella_eventing_functions_list", ids,
-                         composite="capella_fixture_export")
+            _env._invoke(
+                "capella_eventing_functions_list",
+                ids,
+                composite="capella_fixture_export",
+            )
         )
     except Exception as exc:
         warnings.append(f"eventing functions could not be read: {exc}")
@@ -837,14 +865,14 @@ def _export(args: dict) -> list[TextContent]:
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            return err(f"could not create {data_dir}: {exc}",
-                       tool="capella_fixture_export")
+            return err(
+                f"could not create {data_dir}: {exc}", tool="capella_fixture_export"
+            )
 
         for bucket in structure:
             for scope in bucket.get("scopes") or []:
                 for collection in scope.get("collections") or []:
-                    keyspace = (f"{bucket['name']}.{scope['name']}."
-                                f"{collection['name']}")
+                    keyspace = f"{bucket['name']}.{scope['name']}.{collection['name']}"
                     if wanted_keyspaces and keyspace in wanted_keyspaces:
                         matched_keyspaces.add(keyspace)
                     if wanted_keyspaces and keyspace not in wanted_keyspaces:
@@ -854,8 +882,11 @@ def _export(args: dict) -> list[TextContent]:
                     # they write is not the same row format, and a fixture stops
                     # being portable between them.
                     statement = export_statement(
-                        bucket["name"], scope["name"], collection["name"],
-                        page_size=page_size, user_xattrs=xattrs,
+                        bucket["name"],
+                        scope["name"],
+                        collection["name"],
+                        page_size=page_size,
+                        user_xattrs=xattrs,
                     )
                     target = data_dir / f"{keyspace}.jsonl"
                     last_key = ""
@@ -864,7 +895,9 @@ def _export(args: dict) -> list[TextContent]:
                         with target.open("w", encoding="utf-8") as handle:
                             while True:
                                 result = _sql_query(
-                                    base, credential, statement,
+                                    base,
+                                    credential,
+                                    statement,
                                     {"$last_key": last_key},
                                 )
                                 rows = result.get("results") or []
@@ -875,7 +908,7 @@ def _export(args: dict) -> list[TextContent]:
                                     expiry = row.pop(META_EXP_ALIAS, 0)
                                     prefix = "__fixture_xattr_"
                                     carried = {
-                                        key[len(prefix):]: row.pop(key)
+                                        key[len(prefix) :]: row.pop(key)
                                         for key in list(row)
                                         if key.startswith(prefix)
                                     }
@@ -894,12 +927,17 @@ def _export(args: dict) -> list[TextContent]:
                                             f"key cannot be recovered. Nothing "
                                             f"was written for this keyspace."
                                         )
-                                    handle.write(json.dumps({
-                                        "id": doc_id,
-                                        "exp": expiry,
-                                        "doc": row,
-                                        "xattrs": carried,
-                                    }) + "\n")
+                                    handle.write(
+                                        json.dumps(
+                                            {
+                                                "id": doc_id,
+                                                "exp": expiry,
+                                                "doc": row,
+                                                "xattrs": carried,
+                                            }
+                                        )
+                                        + "\n"
+                                    )
                                     written += 1
                                     last_key = doc_id or last_key
                                 if len(rows) < page_size:
@@ -944,12 +982,14 @@ def _export(args: dict) -> list[TextContent]:
                         # nothing, which reads as a failed export.
                         target.unlink(missing_ok=True)
                         continue
-                    data_files.append({
-                        "path": f"data/{target.name}",
-                        "keyspace": keyspace,
-                        "sha256": _sha256_file(target),
-                        "document_count": written,
-                    })
+                    data_files.append(
+                        {
+                            "path": f"data/{target.name}",
+                            "keyspace": keyspace,
+                            "sha256": _sha256_file(target),
+                            "document_count": written,
+                        }
+                    )
                     document_total += written
         unmatched = sorted(wanted_keyspaces - matched_keyspaces)
         if unmatched:
@@ -1010,8 +1050,11 @@ def _export(args: dict) -> list[TextContent]:
                 # is the more expensive mistake of the two.
                 kept.append(definition)
                 continue
-            name = str((definition or {}).get("indexName")
-                       or (definition or {}).get("name") or "?")
+            name = str(
+                (definition or {}).get("indexName")
+                or (definition or {}).get("name")
+                or "?"
+            )
             definitions_skipped.append(f"{name} on {target}")
         indexes = kept
 
@@ -1024,8 +1067,11 @@ def _export(args: dict) -> list[TextContent]:
         "created_at": finished.isoformat().replace("+00:00", "Z"),
         "export_started_at": started.isoformat().replace("+00:00", "Z"),
         "export_finished_at": finished.isoformat().replace("+00:00", "Z"),
-        "source": {"organization_id": org, "project_id": project,
-                   "cluster_id": cluster_id},
+        "source": {
+            "organization_id": org,
+            "project_id": project,
+            "cluster_id": cluster_id,
+        },
         "tags": args.get("tags") or {},
         "structure": structure,
         "gsi_definitions": indexes,
@@ -1034,7 +1080,9 @@ def _export(args: dict) -> list[TextContent]:
         "document_count": document_total,
         "payload_sha256": hashlib.sha256(
             "".join(sorted(f["sha256"] for f in data_files)).encode()
-        ).hexdigest() if data_files else None,
+        ).hexdigest()
+        if data_files
+        else None,
         "user_xattrs": [str(x) for x in (args.get("user_xattrs") or [])],
         # FIDELITY IS WHAT ACTUALLY HAPPENED, not what was asked for. A consumer
         # reading this cannot mistake a shape fixture for a dataset, and that is
@@ -1068,16 +1116,16 @@ def _export(args: dict) -> list[TextContent]:
                     "thing to have and is NOT a dataset: fidelity.documents is "
                     "false for that reason, not because anything failed."
                 )
-                if documents_ok and document_total == 0 else
-                (
+                if documents_ok and document_total == 0
+                else (
                     "Documents exported over the Data API. Search index "
                     "definitions are still NOT present. CAS is not preserved by "
                     "any documented Capella API, and in server mode system "
                     "xattrs (including _sync) are not readable, so a "
                     "mobile-synced dataset needs mode=mobile."
                 )
-                if documents_ok else
-                "Structure-only export. Documents, Search index definitions and "
+                if documents_ok
+                else "Structure-only export. Documents, Search index definitions and "
                 "xattrs are NOT present: they require the Data API and a cluster "
                 "access credential. This fixture describes a shape, not a dataset."
             ),
@@ -1092,16 +1140,22 @@ def _export(args: dict) -> list[TextContent]:
             json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
         )
     except OSError as exc:
-        return err(f"could not write the fixture: {exc}",
-                   tool="capella_fixture_export", fixture_path=str(root))
+        return err(
+            f"could not write the fixture: {exc}",
+            tool="capella_fixture_export",
+            fixture_path=str(root),
+        )
 
     result = {
         "fixture_path": str(root),
         "fixture_id": fixture_id,
         "manifest": str(root / "manifest.json"),
         "buckets": len(structure),
-        "collections": sum(len(sc.get("collections") or [])
-                           for b in structure for sc in b.get("scopes") or []),
+        "collections": sum(
+            len(sc.get("collections") or [])
+            for b in structure
+            for sc in b.get("scopes") or []
+        ),
         "gsi_definitions": len(indexes),
         "eventing_functions": len(eventing),
         "documents": document_total,
@@ -1139,8 +1193,13 @@ _IMPORT_MODE_SUPPORTED = "server"
 #: statement limit on a fixture of thin ones.
 _IMPORT_BATCH_ROWS = 100
 
-def _load_documents(source: pathlib.Path, base: str, credential: tuple[str, str],
-                    parts: tuple[str, str, str]) -> tuple[int, list[str], int, str]:
+
+def _load_documents(
+    source: pathlib.Path,
+    base: str,
+    credential: tuple[str, str],
+    parts: tuple[str, str, str],
+) -> tuple[int, list[str], int, str]:
     """Load one JSON Lines payload into one keyspace.
 
     Returns (loaded, per-document failures, expiries dropped, fatal reason).
@@ -1172,8 +1231,9 @@ def _load_documents(source: pathlib.Path, base: str, credential: tuple[str, str]
         # or set the wrong expiry, and a document that expires at the wrong time
         # is worse than one that does not expire. The caller is told the count.
         dropped = 1 if isinstance(row.get("exp"), int) and row["exp"] > 0 else 0
-        reason = _put_document(base, credential, bucket, scope, collection,
-                               key, row.get("doc"))
+        reason = _put_document(
+            base, credential, bucket, scope, collection, key, row.get("doc")
+        )
         return reason, dropped
 
     try:
@@ -1187,8 +1247,11 @@ def _load_documents(source: pathlib.Path, base: str, credential: tuple[str, str]
                     try:
                         batch.append(json.loads(line))
                     except ValueError as exc:
-                        return loaded, failures, expiries_dropped, (
-                            f"line {number} of {source.name} is not JSON: {exc}"
+                        return (
+                            loaded,
+                            failures,
+                            expiries_dropped,
+                            (f"line {number} of {source.name} is not JSON: {exc}"),
                         )
                     if len(batch) >= _IMPORT_CONCURRENCY:
                         for reason, dropped in pool.map(write, batch):
@@ -1199,9 +1262,14 @@ def _load_documents(source: pathlib.Path, base: str, credential: tuple[str, str]
                                 loaded += 1
                         batch = []
                         if len(failures) >= _IMPORT_FAILURE_LIMIT:
-                            return loaded, failures, expiries_dropped, (
-                                f"stopped after {len(failures)} failures -- the "
-                                f"first was: {failures[0]}"
+                            return (
+                                loaded,
+                                failures,
+                                expiries_dropped,
+                                (
+                                    f"stopped after {len(failures)} failures -- the "
+                                    f"first was: {failures[0]}"
+                                ),
                             )
                 if batch:
                     for reason, dropped in pool.map(write, batch):
@@ -1228,8 +1296,9 @@ def _remap_bucket(source_bucket: str, keyspace_map: dict) -> str:
     return source_bucket
 
 
-def _remap_triple(bucket: str, scope: str, collection: str,
-                  keyspace_map: dict) -> tuple[str, str, str]:
+def _remap_triple(
+    bucket: str, scope: str, collection: str, keyspace_map: dict
+) -> tuple[str, str, str]:
     """Map a recorded (bucket, scope, collection) onto its import target.
 
     THE WHOLE KEYSPACE, NOT JUST THE BUCKET. The structure step used to take
@@ -1306,7 +1375,8 @@ def _import(args: dict) -> list[TextContent]:
 
     try:
         directory = _resolve_under_root(
-            args.get("fixture_path"), field="fixture_path",
+            args.get("fixture_path"),
+            field="fixture_path",
             tool="capella_fixture_import",
         )
     except ValueError as exc:
@@ -1316,15 +1386,19 @@ def _import(args: dict) -> list[TextContent]:
 
     entry = _read_manifest(directory)
     if not entry.get("readable"):
-        return err(entry.get("error", "manifest could not be read"),
-                   tool="capella_fixture_import", fixture_path=str(directory))
+        return err(
+            entry.get("error", "manifest could not be read"),
+            tool="capella_fixture_import",
+            fixture_path=str(directory),
+        )
     manifest = entry["manifest"]
 
     _schema_why = _schema_problem(manifest.get("schema"))
     if _schema_why:
         return err(
             _schema_why.replace("verifiable", "importable"),
-            tool="capella_fixture_import", fixture_path=str(directory),
+            tool="capella_fixture_import",
+            fixture_path=str(directory),
         )
 
     # ── 1. integrity, before touching the cluster ────────────────────────
@@ -1334,9 +1408,10 @@ def _import(args: dict) -> list[TextContent]:
             "the fixture does not verify, so NOTHING was imported:\n  - "
             + "\n  - ".join(problems)
             + "\nRun capella_fixture_verify for the full report. A fixture whose "
-              "bytes have changed since it was written is not a fixture, and "
-              "importing one would put unlabelled data on a cluster.",
-            tool="capella_fixture_import", fixture_path=str(directory),
+            "bytes have changed since it was written is not a fixture, and "
+            "importing one would put unlabelled data on a cluster.",
+            tool="capella_fixture_import",
+            fixture_path=str(directory),
             files_checked=checks,
         )
 
@@ -1349,7 +1424,8 @@ def _import(args: dict) -> list[TextContent]:
             f"the App Services bulk API can replay; loading it over SQL++ would "
             f"write the documents and drop the sync metadata, producing a cluster "
             f"that looks populated and cannot serve a single mobile client.",
-            tool="capella_fixture_import", fixture_path=str(directory),
+            tool="capella_fixture_import",
+            fixture_path=str(directory),
         )
 
     # ── 3. context and guardrails ────────────────────────────────────────
@@ -1364,9 +1440,11 @@ def _import(args: dict) -> list[TextContent]:
 
     keyspace_map = args.get("keyspace_map") or {}
     if not isinstance(keyspace_map, dict):
-        return err("keyspace_map must be an object of "
-                   "bucket.scope.collection -> bucket.scope.collection",
-                   tool="capella_fixture_import")
+        return err(
+            "keyspace_map must be an object of "
+            "bucket.scope.collection -> bucket.scope.collection",
+            tool="capella_fixture_import",
+        )
     # VALUES MUST ALREADY BE STRINGS. str(v) on anything else produces a
     # plausible-looking target keyspace out of a Python repr -- "{'inventory':
     # {...}}" -- and this operation writes to somebody's cluster, so a garbage
@@ -1408,12 +1486,15 @@ def _import(args: dict) -> list[TextContent]:
     # rule governs what this server brings into existence, not what it finds.
     try:
         existing_buckets = _env._items(
-            _env._invoke("capella_buckets_list", ids,
-                         composite="capella_fixture_import")
+            _env._invoke(
+                "capella_buckets_list", ids, composite="capella_fixture_import"
+            )
         )
     except Exception as exc:
-        return err(f"could not list buckets on the target: {exc}",
-                   tool="capella_fixture_import")
+        return err(
+            f"could not list buckets on the target: {exc}",
+            tool="capella_fixture_import",
+        )
     existing_by_name = {str(b.get("name") or ""): b for b in existing_buckets}
 
     planned_buckets: list[str] = []
@@ -1456,20 +1537,29 @@ def _import(args: dict) -> list[TextContent]:
 
         found = existing_by_name.get(target_name)
         if found is None:
-            body = {"name": target_name,
-                    "type": bucket.get("type") or "couchbase",
-                    "storageBackend": bucket.get("storageBackend") or "couchstore",
-                    "memoryAllocationInMb": bucket.get("memoryAllocationInMb") or 100}
+            body = {
+                "name": target_name,
+                "type": bucket.get("type") or "couchbase",
+                "storageBackend": bucket.get("storageBackend") or "couchstore",
+                "memoryAllocationInMb": bucket.get("memoryAllocationInMb") or 100,
+            }
             try:
-                created = _env._invoke("capella_bucket_create", ids, body=body,
-                                       composite="capella_fixture_import")
+                created = _env._invoke(
+                    "capella_bucket_create",
+                    ids,
+                    body=body,
+                    composite="capella_fixture_import",
+                )
             except Exception as exc:
-                step_problems.append(f"bucket {target_name} could not be created: {exc}")
+                step_problems.append(
+                    f"bucket {target_name} could not be created: {exc}"
+                )
                 continue
             created_buckets.append(target_name)
-            bucket_ids[target_name] = str(
-                (created or {}).get("id") if isinstance(created, dict) else ""
-            ) or target_name
+            bucket_ids[target_name] = (
+                str((created or {}).get("id") if isinstance(created, dict) else "")
+                or target_name
+            )
         else:
             bucket_ids[target_name] = str(found.get("id") or target_name)
 
@@ -1509,30 +1599,33 @@ def _import(args: dict) -> list[TextContent]:
             # rewritten bucket. See _remap_triple for the failure this fixes.
             plan: list[dict[str, Any]] = []
             recorded = [
-                c for c in (scope.get("collections") or [])
-                if str(c.get("name") or "")
+                c for c in (scope.get("collections") or []) if str(c.get("name") or "")
             ]
             if not recorded:
                 # A scope with no collections still has to exist.
-                plan.append({
-                    "source": f"{source_name}.{scope_name}",
-                    "bucket": target_name,
-                    "scope": scope_name,
-                    "collection": None,
-                    "record": {},
-                })
+                plan.append(
+                    {
+                        "source": f"{source_name}.{scope_name}",
+                        "bucket": target_name,
+                        "scope": scope_name,
+                        "collection": None,
+                        "record": {},
+                    }
+                )
             for collection in recorded:
                 collection_name = str(collection.get("name") or "")
                 mapped_bucket, mapped_scope, mapped_collection = _remap_triple(
                     source_name, scope_name, collection_name, keyspace_map
                 )
-                plan.append({
-                    "source": f"{source_name}.{scope_name}.{collection_name}",
-                    "bucket": mapped_bucket,
-                    "scope": mapped_scope,
-                    "collection": mapped_collection,
-                    "record": collection,
-                })
+                plan.append(
+                    {
+                        "source": f"{source_name}.{scope_name}.{collection_name}",
+                        "bucket": mapped_bucket,
+                        "scope": mapped_scope,
+                        "collection": mapped_collection,
+                        "record": collection,
+                    }
+                )
 
             scopes_attempted: set[str] = set()
             for entry in plan:
@@ -1552,9 +1645,12 @@ def _import(args: dict) -> list[TextContent]:
                 if target_scope != "_default" and target_scope not in scopes_attempted:
                     scopes_attempted.add(target_scope)
                     try:
-                        _env._invoke("capella_scope_create", bucket_ref,
-                                     body={"name": target_scope},
-                                     composite="capella_fixture_import")
+                        _env._invoke(
+                            "capella_scope_create",
+                            bucket_ref,
+                            body={"name": target_scope},
+                            composite="capella_fixture_import",
+                        )
                         created_scopes.append(f"{target_name}.{target_scope}")
                     except Exception as exc:
                         # An existing scope is not a failure -- this tool is
@@ -1574,8 +1670,12 @@ def _import(args: dict) -> list[TextContent]:
                 if entry["record"].get("maxTTL"):
                     body["maxTTL"] = entry["record"]["maxTTL"]
                 try:
-                    _env._invoke("capella_collection_create", scope_ref, body=body,
-                                 composite="capella_fixture_import")
+                    _env._invoke(
+                        "capella_collection_create",
+                        scope_ref,
+                        body=body,
+                        composite="capella_fixture_import",
+                    )
                     created_collections.append(
                         f"{target_name}.{target_scope}.{target_collection}"
                     )
@@ -1677,17 +1777,17 @@ def _import(args: dict) -> list[TextContent]:
                 step_problems.append(
                     f"{target_keyspace}: {len(failures)} document(s) failed to load"
                 )
-            elif isinstance(record.get("document_count"), int) and \
-                    loaded != record["document_count"]:
+            elif (
+                isinstance(record.get("document_count"), int)
+                and loaded != record["document_count"]
+            ):
                 report["error"] = (
                     f"loaded {loaded} of {record['document_count']} documents"
                 )
                 step_problems.append(f"{target_keyspace}: {report['error']}")
             document_report.append(report)
 
-    dropped_total = sum(
-        r.get("expiries_not_restored") or 0 for r in document_report
-    )
+    dropped_total = sum(r.get("expiries_not_restored") or 0 for r in document_report)
     document_step: dict[str, Any] = {
         "step": "documents",
         "keyspaces": document_report,
@@ -1730,24 +1830,30 @@ def _import(args: dict) -> list[TextContent]:
             continue
         statement = str(definition.get("definition") or "")
         if not statement:
-            index_report.append({"name": raw_name, "created": False,
-                                 "error": "no definition statement recorded"})
+            index_report.append(
+                {
+                    "name": raw_name,
+                    "created": False,
+                    "error": "no definition statement recorded",
+                }
+            )
             step_problems.append(f"index {raw_name} has no recorded definition")
             continue
 
         statement, stripped = _strip_index_nodes(statement)
         statement, why_not = _rewrite_index_keyspace(statement, keyspace_map)
         if why_not:
-            index_report.append({"name": raw_name, "created": False,
-                                 "error": why_not})
+            index_report.append({"name": raw_name, "created": False, "error": why_not})
             step_problems.append(f"index {raw_name}: {why_not}")
             continue
         if statement in seen_statements:
             continue
         seen_statements.add(statement)
 
-        record: dict[str, Any] = {"name": _base_index_name(raw_name),
-                                  "placement_stripped": stripped}
+        record: dict[str, Any] = {
+            "name": _base_index_name(raw_name),
+            "placement_stripped": stripped,
+        }
         try:
             _sql_query(base, credential, statement)
             record["created"] = True
@@ -1782,17 +1888,16 @@ def _import(args: dict) -> list[TextContent]:
         names = ", ".join(f"`{n}`" for n in created_names)
         for bucket_name in build_buckets:
             try:
-                _sql_query(base, credential,
-                           f"BUILD INDEX ON `{bucket_name}` ({names})")
+                _sql_query(
+                    base, credential, f"BUILD INDEX ON `{bucket_name}` ({names})"
+                )
                 built.append(bucket_name)
             except RuntimeError as exc:
                 # An index that belongs to a different bucket is not an error
                 # for THIS bucket's build; a real failure is.
                 if "not found" in str(exc).lower():
                     continue
-                step_problems.append(
-                    f"BUILD INDEX on {bucket_name} failed: {exc}"
-                )
+                step_problems.append(f"BUILD INDEX on {bucket_name} failed: {exc}")
 
     index_step: dict[str, Any] = {
         "step": "indexes",
@@ -1889,8 +1994,10 @@ def _list(args: dict) -> list[TextContent]:
     created_after = _parse_timestamp(args.get("created_after"))
     created_before = _parse_timestamp(args.get("created_before"))
 
-    for label, raw in (("created_after", args.get("created_after")),
-                       ("created_before", args.get("created_before"))):
+    for label, raw in (
+        ("created_after", args.get("created_after")),
+        ("created_before", args.get("created_before")),
+    ):
         if raw and _parse_timestamp(raw) is None:
             return err(
                 f"{label}={raw!r} is not an ISO-8601 timestamp. A filter that "
@@ -1907,8 +2014,18 @@ def _list(args: dict) -> list[TextContent]:
     # Bounded at four levels and skipping the directories that make a recursive
     # walk expensive and pointless: a fixture is not inside .git or a virtualenv,
     # and scanning them turns a listing into a disk crawl.
-    _SKIP = {".git", ".venv", "venv", "node_modules", "__pycache__", ".tox",
-             ".mypy_cache", ".pytest_cache", ".idea", ".vscode"}
+    _SKIP = {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".idea",
+        ".vscode",
+    }
     candidates: list[pathlib.Path] = []
     if (root / "manifest.json").is_file():
         candidates.append(root)
@@ -1917,8 +2034,9 @@ def _list(args: dict) -> list[TextContent]:
         if depth >= 4:
             dirnames[:] = []
             continue
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP
-                             and not d.startswith("."))
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in _SKIP and not d.startswith(".")
+        )
         if "manifest.json" in filenames and pathlib.Path(current) != root:
             candidates.append(pathlib.Path(current))
 
@@ -1956,8 +2074,10 @@ def _list(args: dict) -> list[TextContent]:
 
     matched = [e for e in entries if _keep(e)]
     matched.sort(
-        key=lambda e: (_parse_timestamp(e.get("created_at"))
-                       or datetime.min.replace(tzinfo=timezone.utc)),
+        key=lambda e: (
+            _parse_timestamp(e.get("created_at"))
+            or datetime.min.replace(tzinfo=timezone.utc)
+        ),
         reverse=True,
     )
     if args.get("latest_only") and matched:
@@ -2068,15 +2188,14 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
             continue
         parts = _split_keyspace(keyspace)
         if parts is None:
-            problems.append(
-                f"{keyspace!r} is not a bucket.scope.collection keyspace"
-            )
+            problems.append(f"{keyspace!r} is not a bucket.scope.collection keyspace")
             continue
         bucket, scope, collection = parts
         check: dict[str, Any] = {"keyspace": keyspace, "expected": expected}
         try:
             result = _sql_query(
-                base, credential,
+                base,
+                credential,
                 f"SELECT COUNT(*) AS n FROM `{bucket}`.`{scope}`.`{collection}`",
             )
         except RuntimeError as exc:
@@ -2124,9 +2243,14 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
     # a replica column instead of assuming one exists. A SELECT naming a column
     # the server does not have fails the entire query.
     try:
-        index_rows = (_sql_query(
-            base, credential, "SELECT idx.* FROM system:indexes AS idx",
-        ).get("results") or [])
+        index_rows = (
+            _sql_query(
+                base,
+                credential,
+                "SELECT idx.* FROM system:indexes AS idx",
+            ).get("results")
+            or []
+        )
     except RuntimeError as exc:
         report["indexes"] = {"read": False, "error": str(exc)}
         problems.append(
@@ -2163,8 +2287,7 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                 # on which shape arrived.
                 bucket, collection = collection, "_default"
             on_cluster.setdefault(name, []).append(str(row.get("state") or ""))
-            keyspace_of.setdefault(
-                name, f"{bucket}.{scope}.{collection or '_default'}")
+            keyspace_of.setdefault(name, f"{bucket}.{scope}.{collection or '_default'}")
             if not replica_field:
                 for candidate in ("replica_id", "replicaId"):
                     if candidate in row:
@@ -2172,14 +2295,18 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                         break
 
         not_online = [
-            {"name": name, "state": state,
-             "keyspace": keyspace_of.get(name, "unknown"),
-             "build_with": (
-                 f"BUILD INDEX ON `{keyspace_of[name].split('.', 2)[0]}`"
-                 f".`{keyspace_of[name].split('.', 2)[1]}`"
-                 f".`{keyspace_of[name].split('.', 2)[2]}` (`{name}`)"
-                 if keyspace_of.get(name, "").count(".") == 2 else ""
-             )}
+            {
+                "name": name,
+                "state": state,
+                "keyspace": keyspace_of.get(name, "unknown"),
+                "build_with": (
+                    f"BUILD INDEX ON `{keyspace_of[name].split('.', 2)[0]}`"
+                    f".`{keyspace_of[name].split('.', 2)[1]}`"
+                    f".`{keyspace_of[name].split('.', 2)[2]}` (`{name}`)"
+                    if keyspace_of.get(name, "").count(".") == 2
+                    else ""
+                ),
+            }
             for name, states in sorted(on_cluster.items())
             for state in states
             if state.lower() != "online"
@@ -2221,8 +2348,11 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
         # false green this tool exists to prevent.
         if replica_field:
             mismatched = [
-                {"name": name, "expected_copies": copies,
-                 "copies_on_cluster": len(on_cluster.get(name) or [])}
+                {
+                    "name": name,
+                    "expected_copies": copies,
+                    "copies_on_cluster": len(on_cluster.get(name) or []),
+                }
                 for name, copies in sorted(recorded.items())
                 if on_cluster.get(name) and len(on_cluster[name]) != copies
             ]
@@ -2284,17 +2414,23 @@ def _verify(args: dict) -> list[TextContent]:
     """
     try:
         fixture_path = _resolve_under_root(
-            args.get("fixture_path"), field="fixture_path",
+            args.get("fixture_path"),
+            field="fixture_path",
             tool="capella_fixture_verify",
         )
     except ValueError as exc:
         return err(str(exc), tool="capella_fixture_verify")
 
-    directory = fixture_path.parent if fixture_path.name == "manifest.json" else fixture_path
+    directory = (
+        fixture_path.parent if fixture_path.name == "manifest.json" else fixture_path
+    )
     entry = _read_manifest(directory)
     if not entry.get("readable"):
-        return err(entry.get("error", "manifest could not be read"),
-                   tool="capella_fixture_verify", fixture_path=str(directory))
+        return err(
+            entry.get("error", "manifest could not be read"),
+            tool="capella_fixture_verify",
+            fixture_path=str(directory),
+        )
 
     manifest = entry["manifest"]
     problems: list[str] = []

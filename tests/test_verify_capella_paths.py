@@ -2438,7 +2438,7 @@ def test_an_empty_list_leaves_the_identifier_absent(script, capsys):
 
 
 def test_absence_says_which_kind_of_nothing_it_found():
-    """"I could not find one" and "there is not one" are different claims, and this
+    """ "I could not find one" and "there is not one" are different claims, and this
     script reported the first AS the second three times running.
 
     A nested data-inside-data response read as an empty list. app_endpoint_name was
@@ -2455,8 +2455,10 @@ def test_absence_says_which_kind_of_nothing_it_found():
     import pathlib as _pathlib
 
     spec = importlib.util.spec_from_file_location(
-        "_vcp", _pathlib.Path(__file__).resolve().parent.parent
-        / "scripts" / "verify_capella_paths.py"
+        "_vcp",
+        _pathlib.Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "verify_capella_paths.py",
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

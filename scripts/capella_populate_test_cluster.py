@@ -96,9 +96,7 @@ SAFE_CIDR = "192.0.2.1/32"
 #: reject a write the rest of the fixture depends on. Sent as a BARE STRING --
 #: see the comment in _access_control_function for why that matters.
 _DEFAULT_ACCESS_CONTROL_FUNCTION = (
-    "function (doc, oldDoc, meta) {\n"
-    "  channel('" + PREFIX + "');\n"
-    "}"
+    "function (doc, oldDoc, meta) {\n  channel('" + PREFIX + "');\n}"
 )
 
 
@@ -157,8 +155,17 @@ def _schema_refusal(body: dict) -> str:
 def _rows(body: dict) -> list:
     if "_list" in body:
         return body["_list"]
-    for key in ("data", "items", "backups", "buckets", "clusters", "projects",
-                "scopes", "collections", "replications"):
+    for key in (
+        "data",
+        "items",
+        "backups",
+        "buckets",
+        "clusters",
+        "projects",
+        "scopes",
+        "collections",
+        "replications",
+    ):
         value = body.get(key)
         if isinstance(value, list):
             return value
@@ -171,8 +178,10 @@ def _matches(cluster: dict, needle: str) -> bool:
     needle = needle.strip().lower()
     if not needle:
         return False
-    return any(needle in str(cluster.get(k, "")).lower()
-               for k in ("id", "name", "connectionString"))
+    return any(
+        needle in str(cluster.get(k, "")).lower()
+        for k in ("id", "name", "connectionString")
+    )
 
 
 def _is_already_exists(result: dict) -> bool:
@@ -262,8 +271,10 @@ class Populate:
         refusal = _schema_refusal(unconfirmed)
         if refusal:
             self.check(False, f"{tool} arguments do not match its schema", refusal)
-            self.say(f"   NOT ATTEMPTED: {label}. The gate was never exercised, "
-                     f"so this run says nothing about it either way.")
+            self.say(
+                f"   NOT ATTEMPTED: {label}. The gate was never exercised, "
+                f"so this run says nothing about it either way."
+            )
             return unconfirmed
         self.check(
             unconfirmed.get("requires_confirmation") is True
@@ -298,8 +309,10 @@ class Populate:
             # are distinguished by the message, not by the status, so match the
             # message and let every other 409 fail.
             if _is_already_exists(result):
-                self.say(f"   {label} is already present (the create was refused "
-                     f"as a duplicate)")
+                self.say(
+                    f"   {label} is already present (the create was refused "
+                    f"as a duplicate)"
+                )
                 self.present.append(label)
                 return result
             # The message is the finding. A 422 that names a field is the schema
@@ -317,7 +330,9 @@ class Populate:
     async def run(self, session) -> None:
         self.say("=" * 70)
         self.say("populate a Capella test cluster, through the tools themselves")
-        self.say(f"mode   {'PERFORM (real writes)' if self.performed else 'DRY RUN (preview)'}")
+        self.say(
+            f"mode   {'PERFORM (real writes)' if self.performed else 'DRY RUN (preview)'}"
+        )
         self.say("=" * 70)
 
         scope_ids = await self.scope(session)
@@ -328,21 +343,29 @@ class Populate:
         b = {**ids, "bucket_id": bucket_id}
 
         # 1. scope, then two collections under it.
-        existing = {s.get("name") for s in _rows(
-            await self.call(session, "capella_scopes_list", dict(b))) if isinstance(s, dict)}
+        existing = {
+            s.get("name")
+            for s in _rows(await self.call(session, "capella_scopes_list", dict(b)))
+            if isinstance(s, dict)
+        }
         if PREFIX in existing:
             self.say(f"   scope {PREFIX!r} is already present")
             self.present.append(f"scope {PREFIX}")
         else:
-            await self.create(session, "capella_scope_create",
-                              {**b, "body": {"name": PREFIX}}, f"scope {PREFIX}")
+            await self.create(
+                session,
+                "capella_scope_create",
+                {**b, "body": {"name": PREFIX}},
+                f"scope {PREFIX}",
+            )
 
         # Re-read the scopes so the collection check sees the scope just made.
         present_collections: set[str] = set()
         for row in _rows(await self.call(session, "capella_scopes_list", dict(b))):
             if isinstance(row, dict) and row.get("name") == PREFIX:
                 present_collections = {
-                    c.get("name") for c in (row.get("collections") or [])
+                    c.get("name")
+                    for c in (row.get("collections") or [])
                     if isinstance(c, dict)
                 }
         for collection in ("events", "meta"):
@@ -351,7 +374,8 @@ class Populate:
                 self.present.append(f"collection {PREFIX}.{collection}")
                 continue
             await self.create(
-                session, "capella_collection_create",
+                session,
+                "capella_collection_create",
                 {**b, "scope_name": PREFIX, "body": {"name": collection}},
                 f"collection {PREFIX}.{collection}",
             )
@@ -359,28 +383,48 @@ class Populate:
         # 2. A database credential. No password field: Capella generates one and
         #    returns it once, so nothing secret has to be invented here or end up
         #    in this transcript.
-        if await self._already(session, "capella_database_credentials_list",
-                               dict(ids), "name", f"{PREFIX}-cred",
-                               f"credential {PREFIX}-cred"):
+        if await self._already(
+            session,
+            "capella_database_credentials_list",
+            dict(ids),
+            "name",
+            f"{PREFIX}-cred",
+            f"credential {PREFIX}-cred",
+        ):
             pass
         else:
             await self.create(
-                session, "capella_database_credential_create",
-                {**ids, "body": {
-                    "name": f"{PREFIX}-cred",
-                    "access": [{"privileges": ["data_reader"]}],
-                }},
+                session,
+                "capella_database_credential_create",
+                {
+                    **ids,
+                    "body": {
+                        "name": f"{PREFIX}-cred",
+                        "access": [{"privileges": ["data_reader"]}],
+                    },
+                },
                 f"credential {PREFIX}-cred",
             )
 
         # 3. The allowlist entry that lets nobody in.
-        if not await self._already(session, "capella_allowed_cidrs_list",
-                                   dict(ids), "cidr", SAFE_CIDR,
-                                   f"allowed CIDR {SAFE_CIDR}"):
+        if not await self._already(
+            session,
+            "capella_allowed_cidrs_list",
+            dict(ids),
+            "cidr",
+            SAFE_CIDR,
+            f"allowed CIDR {SAFE_CIDR}",
+        ):
             await self.create(
-                session, "capella_allowed_cidr_create",
-                {**ids, "body": {"cidr": SAFE_CIDR,
-                                 "comment": f"{PREFIX} — RFC 5737, grants no access"}},
+                session,
+                "capella_allowed_cidr_create",
+                {
+                    **ids,
+                    "body": {
+                        "cidr": SAFE_CIDR,
+                        "comment": f"{PREFIX} — RFC 5737, grants no access",
+                    },
+                },
                 f"allowed CIDR {SAFE_CIDR}",
             )
 
@@ -389,8 +433,9 @@ class Populate:
         # NOT idempotent, deliberately. A backup is additive and a second one is
         # a second restore point, not a duplicate object — so there is nothing to
         # skip and skipping would be the surprising behaviour.
-        await self.create(session, "capella_backup_create", dict(b),
-                          f"backup of {self.args.bucket}")
+        await self.create(
+            session, "capella_backup_create", dict(b), f"backup of {self.args.bucket}"
+        )
 
         # 5. XDCR INTO the test cluster, never out of it.
         #
@@ -415,32 +460,47 @@ class Populate:
             self.say("\n   no second cluster — skipping capella_replication_create")
         else:
             await self.create(
-                session, "capella_replication_create",
-                {**ids,
-                 "cluster_id": str(other.get("id")),
-                 "body": {
-                     "sourceBucket": bucket_id,
-                     "target": {"bucket": bucket_id,
-                                "cluster": ids["cluster_id"],
-                                "type": "capella"},
-                     "direction": "oneWay",
-                     "priority": "low",
-                 }},
+                session,
+                "capella_replication_create",
+                {
+                    **ids,
+                    "cluster_id": str(other.get("id")),
+                    "body": {
+                        "sourceBucket": bucket_id,
+                        "target": {
+                            "bucket": bucket_id,
+                            "cluster": ids["cluster_id"],
+                            "type": "capella",
+                        },
+                        "direction": "oneWay",
+                        "priority": "low",
+                    },
+                },
                 f"replication from {other.get('name')} into this cluster",
             )
 
         # 6. Eventing. Source and metadata MUST be different keyspaces.
         await self.create(
-            session, "capella_eventing_function_create",
-            {**ids, "body": {
-                "name": f"{PREFIX}-fn",
-                "eventSource": {"bucket": self.args.bucket,
-                                "scope": PREFIX, "collection": "events"},
-                "eventMetadataStorage": {"bucket": self.args.bucket,
-                                         "scope": PREFIX, "collection": "meta"},
-                "code": "function OnUpdate(doc, meta) { log('mcptest', meta.id); }",
-                "description": f"{PREFIX} fixture",
-            }},
+            session,
+            "capella_eventing_function_create",
+            {
+                **ids,
+                "body": {
+                    "name": f"{PREFIX}-fn",
+                    "eventSource": {
+                        "bucket": self.args.bucket,
+                        "scope": PREFIX,
+                        "collection": "events",
+                    },
+                    "eventMetadataStorage": {
+                        "bucket": self.args.bucket,
+                        "scope": PREFIX,
+                        "collection": "meta",
+                    },
+                    "code": "function OnUpdate(doc, meta) { log('mcptest', meta.id); }",
+                    "description": f"{PREFIX} fixture",
+                },
+            },
             f"eventing function {PREFIX}-fn",
         )
 
@@ -467,14 +527,18 @@ class Populate:
             index_name = f"{PREFIX}_idx_{collection}"
             index_names.append(index_name)
             await self.create(
-                session, "capella_query_index_manage",
-                {**ids, "body": {
-                    "definition": (
-                        f"CREATE INDEX `{index_name}` ON "
-                        f"`{self.args.bucket}`.`{PREFIX}`.`{collection}`(`id`) "
-                        "WITH {\"defer_build\": true}"
-                    ),
-                }},
+                session,
+                "capella_query_index_manage",
+                {
+                    **ids,
+                    "body": {
+                        "definition": (
+                            f"CREATE INDEX `{index_name}` ON "
+                            f"`{self.args.bucket}`.`{PREFIX}`.`{collection}`(`id`) "
+                            'WITH {"defer_build": true}'
+                        ),
+                    },
+                },
                 f"query index {index_name}",
             )
 
@@ -488,39 +552,53 @@ class Populate:
         end = datetime.now(timezone.utc).replace(microsecond=0)
         start = end - timedelta(hours=1)
         await self.create(
-            session, "capella_cluster_audit_log_export_create",
-            {**ids, "body": {
-                "start": start.isoformat().replace("+00:00", "Z"),
-                "end": end.isoformat().replace("+00:00", "Z"),
-            }},
+            session,
+            "capella_cluster_audit_log_export_create",
+            {
+                **ids,
+                "body": {
+                    "start": start.isoformat().replace("+00:00", "Z"),
+                    "end": end.isoformat().replace("+00:00", "Z"),
+                },
+            },
             "audit log export",
         )
 
         # 9. Alert integration, only with a real endpoint. See the module docstring.
         if self.args.webhook_url:
             await self.create(
-                session, "capella_alert_integration_create",
-                {**ids, "body": {
-                    "name": f"{PREFIX}-alerts",
-                    "kind": "webhook",
-                    "config": {"webhook": {
-                        "url": self.args.webhook_url,
-                        # REQUIRED, and omitting it cost a run. _ALERT_WEBHOOK in
-                        # handlers/capella/spec.py declares required ["url",
-                        # "method"]; this body sent only the url and the SDK
-                        # refused the call before dispatch with
-                        #   Input validation error: 'method' is a required property
-                        # The schema was right. The caller was wrong.
-                        "method": "POST",
-                        "token": self.args.webhook_token or "mcptest",
-                    }},
-                }},
+                session,
+                "capella_alert_integration_create",
+                {
+                    **ids,
+                    "body": {
+                        "name": f"{PREFIX}-alerts",
+                        "kind": "webhook",
+                        "config": {
+                            "webhook": {
+                                "url": self.args.webhook_url,
+                                # REQUIRED, and omitting it cost a run. _ALERT_WEBHOOK in
+                                # handlers/capella/spec.py declares required ["url",
+                                # "method"]; this body sent only the url and the SDK
+                                # refused the call before dispatch with
+                                #   Input validation error: 'method' is a required property
+                                # The schema was right. The caller was wrong.
+                                "method": "POST",
+                                "token": self.args.webhook_token or "mcptest",
+                            }
+                        },
+                    },
+                },
                 f"alert integration {PREFIX}-alerts",
             )
         else:
-            self.say("\n   no --webhook-url — skipping capella_alert_integration_create.")
+            self.say(
+                "\n   no --webhook-url — skipping capella_alert_integration_create."
+            )
             self.say("   Capella sends a REAL request on create and fails the create")
-            self.say("   unless it answers 2xx over https, so there is no safe default.")
+            self.say(
+                "   unless it answers 2xx over https, so there is no safe default."
+            )
 
         # 10. An on/off schedule, so capella_cluster_onoff_schedule_get has
         #     something to return instead of 404 code 11040.
@@ -555,33 +633,55 @@ class Populate:
         # "nothing ever turns off", and the default now favours the cluster
         # staying up. Pass --with-onoff-schedule when the point of the run IS to
         # exercise the schedule tools.
-        _WEEK = ("monday", "tuesday", "wednesday", "thursday",
-                 "friday", "saturday", "sunday")
+        _WEEK = (
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        )
 
         # WHICH VERB DEPENDS ON WHETHER ONE IS ALREADY THERE. POST creates and
         # refuses a duplicate with 422 code 11050; PUT updates and refuses a
         # missing one with 404 code 11040. Reading the schedule first turns a
         # guess into a lookup, and costs one GET.
         if not getattr(self.args, "with_onoff_schedule", False):
-            self.say("\n   skipping the on/off schedule: it powers the cluster "
-                     "down for 30 minutes a night, which refuses every write "
-                     "with 422 'Turning On' while it cycles. Pass "
-                     "--with-onoff-schedule to create one.")
+            self.say(
+                "\n   skipping the on/off schedule: it powers the cluster "
+                "down for 30 minutes a night, which refuses every write "
+                "with 422 'Turning On' while it cycles. Pass "
+                "--with-onoff-schedule to create one."
+            )
             return
 
         existing = await self.call(
-            session, "capella_cluster_onoff_schedule_get", dict(ids))
-        tool = ("capella_cluster_onoff_schedule_update"
-                if not existing.get(ERROR_MARKER) else
-                "capella_cluster_onoff_schedule_set")
+            session, "capella_cluster_onoff_schedule_get", dict(ids)
+        )
+        tool = (
+            "capella_cluster_onoff_schedule_update"
+            if not existing.get(ERROR_MARKER)
+            else "capella_cluster_onoff_schedule_set"
+        )
         await self.create(
-            session, tool,
-            {**ids, "body": {
-                "timezone": "America/New_York",
-                "days": [{"day": day, "state": "custom",
-                          "from": {"hour": 0, "minute": 0},
-                          "to": {"hour": 23, "minute": 30}} for day in _WEEK],
-            }},
+            session,
+            tool,
+            {
+                **ids,
+                "body": {
+                    "timezone": "America/New_York",
+                    "days": [
+                        {
+                            "day": day,
+                            "state": "custom",
+                            "from": {"hour": 0, "minute": 0},
+                            "to": {"hour": 23, "minute": 30},
+                        }
+                        for day in _WEEK
+                    ],
+                },
+            },
             "on/off schedule (custom days, 00:00-23:30)",
         )
 
@@ -593,8 +693,9 @@ class Populate:
         #     nothing further. Deliberately NOT a permissive one: a fixture that
         #     grants blanket write access is a bad thing to leave behind in a
         #     cluster somebody later reuses for something real.
-        app_services = _rows(await self.call(
-            session, "capella_app_services_list", dict(ids)))
+        app_services = _rows(
+            await self.call(session, "capella_app_services_list", dict(ids))
+        )
         if app_services:
             # 12. An App Service admin user, so capella_app_service_admin_user_delete
             #     and capella_app_service_admin_users_list have a real subject.
@@ -606,41 +707,63 @@ class Populate:
             #     is a bad thing to leave behind.
             asid = str(app_services[0].get("id"))
             if not await self._already(
-                session, "capella_app_service_admin_users_list",
+                session,
+                "capella_app_service_admin_users_list",
                 {**ids, "app_service_id": asid},
-                "name", f"{PREFIX}-admin", f"app service admin user {PREFIX}-admin",
+                "name",
+                f"{PREFIX}-admin",
+                f"app service admin user {PREFIX}-admin",
             ):
-                endpoint_rows = _rows(await self.call(
-                    session, "capella_app_endpoints_list",
-                    {**ids, "app_service_id": asid}))
+                endpoint_rows = _rows(
+                    await self.call(
+                        session,
+                        "capella_app_endpoints_list",
+                        {**ids, "app_service_id": asid},
+                    )
+                )
                 endpoint_names = [
-                    str(r.get("name")) for r in endpoint_rows
+                    str(r.get("name"))
+                    for r in endpoint_rows
                     if isinstance(r, dict) and r.get("name")
                 ]
                 await self.create(
-                    session, "capella_app_service_admin_user_create",
-                    {**ids, "app_service_id": asid, "body": {
-                        "name": f"{PREFIX}-admin",
-                        "password": "mcptest-Passw0rd!",
-                        "access": (
-                            {"endpoints": endpoint_names} if endpoint_names
-                            else {"accessAllEndpoints": True}
-                        ),
-                    }},
+                    session,
+                    "capella_app_service_admin_user_create",
+                    {
+                        **ids,
+                        "app_service_id": asid,
+                        "body": {
+                            "name": f"{PREFIX}-admin",
+                            "password": "mcptest-Passw0rd!",
+                            "access": (
+                                {"endpoints": endpoint_names}
+                                if endpoint_names
+                                else {"accessAllEndpoints": True}
+                            ),
+                        },
+                    },
                     f"app service admin user {PREFIX}-admin",
                 )
 
         if not app_services:
-            self.say("\n   no App Service on this cluster — skipping the access "
-                     "control function.")
+            self.say(
+                "\n   no App Service on this cluster — skipping the access "
+                "control function."
+            )
             return
         app_service_id = str(app_services[0].get("id"))
-        endpoints = _rows(await self.call(
-            session, "capella_app_endpoints_list",
-            {**ids, "app_service_id": app_service_id}))
+        endpoints = _rows(
+            await self.call(
+                session,
+                "capella_app_endpoints_list",
+                {**ids, "app_service_id": app_service_id},
+            )
+        )
         if not endpoints:
-            self.say("\n   the App Service has no App Endpoint — skipping the "
-                     "access control function.")
+            self.say(
+                "\n   the App Service has no App Endpoint — skipping the "
+                "access control function."
+            )
             return
         # KEYSPACE = <endpoint>.<scope>.<collection>. The endpoint NAME alone
         # earns 404 "App Endpoint keyspace <name> not found", measured
@@ -655,8 +778,7 @@ class Populate:
                 collections = (scope or {}).get("collections")
                 if isinstance(collections, dict) and collections:
                     collection_name, collection = next(iter(collections.items()))
-                    keyspace = (f"{endpoint.get('name')}.{scope_name}."
-                                f"{collection_name}")
+                    keyspace = f"{endpoint.get('name')}.{scope_name}.{collection_name}"
                     # THE FUNCTION LIVES IN THE ENDPOINT DOCUMENT, not in the
                     # response of its own getter.
                     #
@@ -668,12 +790,15 @@ class Populate:
                     # has it; a 200 with nothing in it is not a source of truth.
                     if isinstance(collection, dict):
                         existing_function = str(
-                            collection.get("accessControlFunction") or "")
+                            collection.get("accessControlFunction") or ""
+                        )
                     break
         if not keyspace:
-            self.say("\n   the App Endpoint names no scope/collection — skipping "
-                     "the access control function. A two-part keyspace is not a "
-                     "keyspace and the 404 it earns teaches nothing.")
+            self.say(
+                "\n   the App Endpoint names no scope/collection — skipping "
+                "the access control function. A two-part keyspace is not a "
+                "keyspace and the 404 it earns teaches nothing."
+            )
             return
         # THE BODY IS A BARE STRING, AND THAT WAS THE WHOLE BUG.
         #
@@ -697,18 +822,22 @@ class Populate:
         # nothing to read back do we write a minimal channel-assignment
         # function of our own.
         source = existing_function or _DEFAULT_ACCESS_CONTROL_FUNCTION
-        label = ("round-tripped" if existing_function else "seeded")
+        label = "round-tripped" if existing_function else "seeded"
         await self.create(
-            session, "capella_app_endpoint_access_control_function_set",
-            {**ids,
-             "app_service_id": app_service_id,
-             "app_endpoint_keyspace": keyspace,
-             "body": source},
+            session,
+            "capella_app_endpoint_access_control_function_set",
+            {
+                **ids,
+                "app_service_id": app_service_id,
+                "app_endpoint_keyspace": keyspace,
+                "body": source,
+            },
             f"access control function {label} on {keyspace}",
         )
 
-    async def _already(self, session, list_tool: str, args: dict,
-                       field: str, value: str, label: str) -> bool:
+    async def _already(
+        self, session, list_tool: str, args: dict, field: str, value: str, label: str
+    ) -> bool:
         """Is `value` already present, by `field`, in `list_tool`'s rows?
 
         THE DOCSTRING PROMISED THIS AND THE CODE DID NOT DO IT. Only the scope
@@ -736,10 +865,16 @@ class Populate:
         Asked of the LIVE bucket list, same as the startup check. A cluster is
         not a throwaway because of its name.
         """
-        buckets = _rows(await self.call(
-            session, "capella_buckets_list",
-            {**{k: ids[k] for k in ("organization_id", "project_id")},
-             "cluster_id": cluster.get("id")}))
+        buckets = _rows(
+            await self.call(
+                session,
+                "capella_buckets_list",
+                {
+                    **{k: ids[k] for k in ("organization_id", "project_id")},
+                    "cluster_id": cluster.get("id"),
+                },
+            )
+        )
         names = {b.get("name") for b in buckets if isinstance(b, dict)}
         return bool(REAL_WORK & names)
 
@@ -750,46 +885,64 @@ class Populate:
             return None
         org = self.args.org or orgs[0].get("id")
 
-        body = await self.call(session, "capella_projects_list",
-                               {"organization_id": org})
+        body = await self.call(
+            session, "capella_projects_list", {"organization_id": org}
+        )
         projects = _rows(body)
         if not self.check(bool(projects), "a project is visible"):
             return None
         project = self.args.project or projects[0].get("id")
 
         scope = {"organization_id": org, "project_id": project}
-        rows = [c for c in _rows(await self.call(
-            session, "capella_clusters_list", dict(scope))) if isinstance(c, dict)]
+        rows = [
+            c
+            for c in _rows(
+                await self.call(session, "capella_clusters_list", dict(scope))
+            )
+            if isinstance(c, dict)
+        ]
 
         picked = [c for c in rows if _matches(c, self.args.cluster)]
-        if not self.check(len(picked) == 1,
-                          f"--cluster {self.args.cluster!r} names exactly one cluster",
-                          f"matched {len(picked)} of {len(rows)}"):
+        if not self.check(
+            len(picked) == 1,
+            f"--cluster {self.args.cluster!r} names exactly one cluster",
+            f"matched {len(picked)} of {len(rows)}",
+        ):
             return None
         cluster = picked[0]
         others = [c for c in rows if c.get("id") != cluster.get("id")]
         ids = {**scope, "cluster_id": cluster.get("id")}
 
-        buckets = [b for b in _rows(await self.call(
-            session, "capella_buckets_list", dict(ids))) if isinstance(b, dict)]
+        buckets = [
+            b
+            for b in _rows(await self.call(session, "capella_buckets_list", dict(ids)))
+            if isinstance(b, dict)
+        ]
         names = {b.get("name"): b.get("id") for b in buckets}
 
         # The safety check, made against the LIVE bucket list. A cluster is a
         # throwaway because of what is on it, not because of what it is called.
         found_real = REAL_WORK & set(names)
         if found_real and not self.args.override:
-            self.check(False,
-                       f"{cluster.get('name')!r} is a throwaway cluster",
-                       f"it holds {', '.join(sorted(found_real))}, which is real "
-                       "work. This script CREATES objects; pass "
-                       "--i-know-what-im-doing only if that is genuinely intended.")
+            self.check(
+                False,
+                f"{cluster.get('name')!r} is a throwaway cluster",
+                f"it holds {', '.join(sorted(found_real))}, which is real "
+                "work. This script CREATES objects; pass "
+                "--i-know-what-im-doing only if that is genuinely intended.",
+            )
             return None
-        self.check(True, f"{cluster.get('name')!r} holds no real work",
-                   f"buckets: {sorted(names)}")
+        self.check(
+            True,
+            f"{cluster.get('name')!r} holds no real work",
+            f"buckets: {sorted(names)}",
+        )
 
-        if not self.check(self.args.bucket in names,
-                          f"bucket {self.args.bucket!r} exists",
-                          f"available: {sorted(names)}"):
+        if not self.check(
+            self.args.bucket in names,
+            f"bucket {self.args.bucket!r} exists",
+            f"available: {sorted(names)}",
+        ):
             return None
         return ids, names[self.args.bucket], (others[0] if len(others) == 1 else None)
 
@@ -836,26 +989,37 @@ async def main_async(args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cluster", required=True,
-                        help="the cluster to populate, by id, name, or a fragment "
-                             "of its connection string. WRITTEN TO.")
+    parser.add_argument(
+        "--cluster",
+        required=True,
+        help="the cluster to populate, by id, name, or a fragment "
+        "of its connection string. WRITTEN TO.",
+    )
     parser.add_argument("--bucket", default="travel-sample")
-    parser.add_argument("--webhook-url", default="",
-                        help="https endpoint for an alert integration. Capella "
-                             "calls it on create and fails unless it answers 2xx.")
+    parser.add_argument(
+        "--webhook-url",
+        default="",
+        help="https endpoint for an alert integration. Capella "
+        "calls it on create and fails unless it answers 2xx.",
+    )
     parser.add_argument("--webhook-token", default="")
-    parser.add_argument("--with-onoff-schedule", action="store_true",
-                        help="create an on/off schedule. OFF by default: the "
-                             "widest legal window still powers the cluster down "
-                             "for 30 minutes a night, and every write during the "
-                             "cycle is refused with a 422 about cluster state.")
-    parser.add_argument("--perform", dest="dry_run", action="store_false",
-                        default=True)
+    parser.add_argument(
+        "--with-onoff-schedule",
+        action="store_true",
+        help="create an on/off schedule. OFF by default: the "
+        "widest legal window still powers the cluster down "
+        "for 30 minutes a night, and every write during the "
+        "cycle is refused with a 422 about cluster state.",
+    )
+    parser.add_argument("--perform", dest="dry_run", action="store_false", default=True)
     parser.add_argument("--org", default=None)
     parser.add_argument("--project", default=None)
-    parser.add_argument("--i-know-what-im-doing", dest="override",
-                        action="store_true",
-                        help="permit a cluster that holds real work")
+    parser.add_argument(
+        "--i-know-what-im-doing",
+        dest="override",
+        action="store_true",
+        help="permit a cluster that holds real work",
+    )
     parser.add_argument("--timeout", type=float, default=180.0)
     return asyncio.run(main_async(parser.parse_args()))
 

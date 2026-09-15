@@ -1287,8 +1287,10 @@ def discover(token: str, args) -> dict:
             else:
                 # A two-part keyspace is not a keyspace, and a 404 earned by
                 # sending one teaches nothing. Skip honestly instead.
-                print("  ep keyspace  : endpoint names no scope/collection "
-                      "(keyspace paths SKIPPED)")
+                print(
+                    "  ep keyspace  : endpoint names no scope/collection "
+                    "(keyspace paths SKIPPED)"
+                )
         else:
             print("  app endpoint : none (App Endpoint paths SKIPPED)")
     elif not app_services_unreadable:

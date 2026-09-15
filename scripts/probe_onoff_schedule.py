@@ -67,28 +67,39 @@ import sys
 # access-key-id-instead-of-secret mix-up, and the organization-wide App Services
 # listing -- and a second copy would not inherit those fixes.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from probe_access_control_function import (  # noqa: E402
-    call,
-    resolve_credentials,
+from probe_access_control_function import (
     _message,
     _rows,
+    call,
+    resolve_credentials,
 )
 
 DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
 
 #: All seven days, always. A shorter list is refused with domain code 11042, which
 #: was measured -- so any candidate that omitted a day would fail for a reason we
 #: already understand and would teach nothing.
 def _all_on_no_window() -> dict:
-    return {"timezone": "America/New_York",
-            "days": [{"day": d, "state": "on"} for d in DAYS]}
+    return {
+        "timezone": "America/New_York",
+        "days": [{"day": d, "state": "on"} for d in DAYS],
+    }
 
 
 def _all_on_windowed() -> dict:
-    return {"timezone": "America/New_York",
-            "days": [{"day": d, "state": "on",
-                      "from": {"hour": 0, "minute": 0},
-                      "to": {"hour": 23, "minute": 59}} for d in DAYS]}
+    return {
+        "timezone": "America/New_York",
+        "days": [
+            {
+                "day": d,
+                "state": "on",
+                "from": {"hour": 0, "minute": 0},
+                "to": {"hour": 23, "minute": 59},
+            }
+            for d in DAYS
+        ],
+    }
 
 
 def _all_on_windowed_flat() -> dict:
@@ -98,17 +109,28 @@ def _all_on_windowed_flat() -> dict:
     "days.from"'. The field is an object, not a string. Kept so the transcript
     carries its own proof of that rather than a citation.
     """
-    return {"timezone": "America/New_York",
-            "days": [{"day": d, "state": "on", "from": "00:00", "to": "23:59"}
-                     for d in DAYS]}
+    return {
+        "timezone": "America/New_York",
+        "days": [
+            {"day": d, "state": "on", "from": "00:00", "to": "23:59"} for d in DAYS
+        ],
+    }
 
 
 def _all_on_utc() -> dict:
     """Windowed, but UTC. Isolates the timezone from the window."""
-    return {"timezone": "UTC",
-            "days": [{"day": d, "state": "on",
-                      "from": {"hour": 0, "minute": 0},
-                      "to": {"hour": 23, "minute": 59}} for d in DAYS]}
+    return {
+        "timezone": "UTC",
+        "days": [
+            {
+                "day": d,
+                "state": "on",
+                "from": {"hour": 0, "minute": 0},
+                "to": {"hour": 23, "minute": 59},
+            }
+            for d in DAYS
+        ],
+    }
 
 
 #: ROUND 2. The 422 from round 1 named the rule outright:
@@ -124,10 +146,18 @@ def _all_on_utc() -> dict:
 #: These candidates use "custom" days, which is the only combination the stated
 #: rules permit to carry a window.
 def _all_custom(to_hour: int, to_minute: int) -> dict:
-    return {"timezone": "America/New_York",
-            "days": [{"day": d, "state": "custom",
-                      "from": {"hour": 0, "minute": 0},
-                      "to": {"hour": to_hour, "minute": to_minute}} for d in DAYS]}
+    return {
+        "timezone": "America/New_York",
+        "days": [
+            {
+                "day": d,
+                "state": "custom",
+                "from": {"hour": 0, "minute": 0},
+                "to": {"hour": to_hour, "minute": to_minute},
+            }
+            for d in DAYS
+        ],
+    }
 
 
 #: ROUND 3. Round 2 answered the schema completely, one 422 at a time:
@@ -159,9 +189,14 @@ def _mixed_on_and_custom() -> dict:
     Isolates "whole-day on is rejected" from "an all-on schedule is rejected".
     """
     days = [{"day": d, "state": "on"} for d in DAYS[:-1]]
-    days.append({"day": DAYS[-1], "state": "custom",
-                 "from": {"hour": 0, "minute": 0},
-                 "to": {"hour": 23, "minute": 30}})
+    days.append(
+        {
+            "day": DAYS[-1],
+            "state": "custom",
+            "from": {"hour": 0, "minute": 0},
+            "to": {"hour": 23, "minute": 30},
+        }
+    )
     return {"timezone": "America/New_York", "days": days}
 
 
@@ -172,20 +207,29 @@ def _all_custom_no_window() -> dict:
     be refused too, and by a message that names the same rule from the other
     side. A 500 here instead would say the validation is one-directional.
     """
-    return {"timezone": "America/New_York",
-            "days": [{"day": d, "state": "custom"} for d in DAYS]}
+    return {
+        "timezone": "America/New_York",
+        "days": [{"day": d, "state": "custom"} for d in DAYS],
+    }
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cluster", required=True,
-                    help="cluster id, or a unique prefix of its connection string")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--cluster",
+        required=True,
+        help="cluster id, or a unique prefix of its connection string",
+    )
     ap.add_argument("--project", default="")
     ap.add_argument("--env-file", default=None)
-    ap.add_argument("--perform", action="store_true",
-                    help="actually send the candidate bodies (no candidate ever "
-                         "sets a day to 'off', so none can power the cluster down)")
+    ap.add_argument(
+        "--perform",
+        action="store_true",
+        help="actually send the candidate bodies (no candidate ever "
+        "sets a day to 'off', so none can power the cluster down)",
+    )
     args = ap.parse_args()
 
     token, org, src = resolve_credentials(args.env_file)
@@ -208,21 +252,30 @@ def main() -> int:
         status, text = call("GET", f"/v4/organizations/{org}/projects", token)
         rows = _rows(text)
         if status != 200 or len(rows) != 1:
-            print(f"could not resolve exactly one project (status {status}); pass --project")
+            print(
+                f"could not resolve exactly one project (status {status}); pass --project"
+            )
             return 2
         project = rows[0]["id"]
     print(f"[ids] project {project}")
 
-    status, text = call("GET", f"/v4/organizations/{org}/projects/{project}/clusters", token)
+    status, text = call(
+        "GET", f"/v4/organizations/{org}/projects/{project}/clusters", token
+    )
     rows = _rows(text)
     if status != 200:
         print(f"clusters list failed: {status} {_message(text)}")
         return 2
-    matched = [c for c in rows
-               if c.get("id") == args.cluster
-               or args.cluster in str(c.get("connectionString", ""))]
+    matched = [
+        c
+        for c in rows
+        if c.get("id") == args.cluster
+        or args.cluster in str(c.get("connectionString", ""))
+    ]
     if len(matched) != 1:
-        print(f"--cluster '{args.cluster}' matched {len(matched)} of {len(rows)} clusters")
+        print(
+            f"--cluster '{args.cluster}' matched {len(matched)} of {len(rows)} clusters"
+        )
         for c in rows:
             print(f"    {c.get('id')}  {c.get('name')}  {c.get('connectionString')}")
         return 2
@@ -230,8 +283,9 @@ def main() -> int:
     print(f"[ids] cluster {cluster}  ({matched[0].get('name')})")
     print(f"[ids] currentState {matched[0].get('currentState')}")
 
-    path = (f"/v4/organizations/{org}/projects/{project}"
-            f"/clusters/{cluster}/onOffSchedule")
+    path = (
+        f"/v4/organizations/{org}/projects/{project}/clusters/{cluster}/onOffSchedule"
+    )
 
     # THE READ FIRST. If a schedule already exists, its own document is the best
     # candidate there is -- a round-trip cannot be refused for a shape reason,
@@ -251,31 +305,55 @@ def main() -> int:
     if existing:
         # Strip the read-only envelope fields a GET adds; sending audit metadata
         # back is its own source of 400s.
-        replay = {k: v for k, v in existing.items()
-                  if k in ("timezone", "days")}
+        replay = {k: v for k, v in existing.items() if k in ("timezone", "days")}
         cands.append(("round-trip of the cluster's own schedule", "POST", replay))
     cands += [
         # Round 3 first: these are the only two bodies that break no measured
         # rule, so if neither is accepted nothing is.
-        ("all days CUSTOM, window 00:00-23:30 (widest the rules allow)",
-         "POST", _widest_legal_custom()),
-        ("six days ON + one CUSTOM (isolates the all-on 500)",
-         "POST", _mixed_on_and_custom()),
+        (
+            "all days CUSTOM, window 00:00-23:30 (widest the rules allow)",
+            "POST",
+            _widest_legal_custom(),
+        ),
+        (
+            "six days ON + one CUSTOM (isolates the all-on 500)",
+            "POST",
+            _mixed_on_and_custom(),
+        ),
         # Round 2, each already answered; kept so one transcript carries the
         # whole schema derivation rather than a citation of an earlier run.
-        ("all days CUSTOM, window 00:00-23:59 (422: minute must be 0 or 30)",
-         "POST", _all_custom(23, 59)),
-        ("all days CUSTOM, window 00:00-24:00 (422: hour must be 0-23)",
-         "POST", _all_custom(24, 0)),
-        ("all days CUSTOM, no window (422: custom day needs a 'from')",
-         "POST", _all_custom_no_window()),
+        (
+            "all days CUSTOM, window 00:00-23:59 (422: minute must be 0 or 30)",
+            "POST",
+            _all_custom(23, 59),
+        ),
+        (
+            "all days CUSTOM, window 00:00-24:00 (422: hour must be 0-23)",
+            "POST",
+            _all_custom(24, 0),
+        ),
+        (
+            "all days CUSTOM, no window (422: custom day needs a 'from')",
+            "POST",
+            _all_custom_no_window(),
+        ),
         # Round 1, kept so one transcript carries the whole argument.
-        ("all days on, NO time window (control -- this is what 500s)",
-         "POST", _all_on_no_window()),
-        ("all days on, window 00:00-23:59 as {hour, minute} (422: non-custom day "
-         "with a boundary)", "POST", _all_on_windowed()),
-        ("all days on, window as 'HH:MM' strings (400: days.from is an object)",
-         "POST", _all_on_windowed_flat()),
+        (
+            "all days on, NO time window (control -- this is what 500s)",
+            "POST",
+            _all_on_no_window(),
+        ),
+        (
+            "all days on, window 00:00-23:59 as {hour, minute} (422: non-custom day "
+            "with a boundary)",
+            "POST",
+            _all_on_windowed(),
+        ),
+        (
+            "all days on, window as 'HH:MM' strings (400: days.from is an object)",
+            "POST",
+            _all_on_windowed_flat(),
+        ),
         ("all days on, windowed, timezone UTC", "POST", _all_on_utc()),
         # PUT answered 404 "Failed to get On/Off schedule" when none existed,
         # which is itself a finding: PUT updates an existing schedule, POST
@@ -314,7 +392,7 @@ def main() -> int:
     print(f"\n  REGISTER EVIDENCE (update): invalid body -> {reg_status}")
     print(f"    {_message(reg_text)[:240]}")
     if str(reg_status) in {"400", "405", "422"}:
-        print(f'    Move "capella_cluster_onoff_schedule_update" out of')
+        print('    Move "capella_cluster_onoff_schedule_update" out of')
         print(f'    SHIPPED_UNVERIFIED and into LIVE_VERIFIED as "{reg_status}".')
     else:
         print("    Not a usable register value; it stays in SHIPPED_UNVERIFIED.")
@@ -336,11 +414,15 @@ def main() -> int:
         if existing is None:
             status, text = call("DELETE", path, token)
             if 200 <= status < 300 or status == 404:
-                print("\nThe cluster had no schedule before this run and has none now "
-                      f"(DELETE answered {status}).")
+                print(
+                    "\nThe cluster had no schedule before this run and has none now "
+                    f"(DELETE answered {status})."
+                )
             else:
-                print(f"\n*** COULD NOT REMOVE THE SCHEDULE THIS SCRIPT CREATED: "
-                      f"{status} {_message(text)[:200]}")
+                print(
+                    f"\n*** COULD NOT REMOVE THE SCHEDULE THIS SCRIPT CREATED: "
+                    f"{status} {_message(text)[:200]}"
+                )
                 print("*** The cluster now carries a schedule it did not have before.")
                 print("*** Remove it with capella_cluster_onoff_schedule_delete.")
         return 0

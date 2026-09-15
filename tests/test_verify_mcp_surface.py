@@ -900,9 +900,7 @@ def test_a_failed_registry_crosscheck_is_reported_rather_than_swallowed(monkeypa
     # TOOLS` then raises ImportError, which is the real shape of this failure --
     # a renamed or half-installed registry -- rather than a synthetic exception
     # the production path would never see.
-    monkeypatch.setitem(
-        sys.modules, "handlers.capella", ModuleType("handlers.capella")
-    )
+    monkeypatch.setitem(sys.modules, "handlers.capella", ModuleType("handlers.capella"))
 
     asyncio.run(run.phase_protocol(session))
     assert any("cross-check UNAVAILABLE" in note for note in run.notes)
@@ -2431,6 +2429,7 @@ def test_a_missing_object_and_a_missing_body_get_different_reasons():
 # Every test above asserts inside a `for` over one of these collections, so an
 # empty one is a green tick rather than a failure. `test_no_vacuous_coverage.py`
 # enforces that this guard exists; the floors below are what it cannot know.
+
 
 def test_there_is_something_to_discover():
     """`_DISCOVERY` is the object graph the read phase walks.

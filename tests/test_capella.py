@@ -299,15 +299,17 @@ def test_capella_list_follows_the_cursor_to_the_last_page(monkeypatch):
         },
     }
 
-# THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
-#
-# capella_request grew a content_type parameter on 2026-09-14, when the App
-# Endpoint access control function turned out to want raw JavaScript rather than
-# JSON. Every stub of it here is a test double of that signature, so each one
-# grew the same keyword with the same default. Five tests in this file failed
-# with "request() got an unexpected keyword argument 'content_type'" until they
-# did -- a signature mismatch in a double, not a defect in the code under test.
-    def fake_request(method, path, *, params=None, body=None, content_type="application/json"):
+    # THE DOUBLES TAKE content_type BECAUSE THE REAL FUNCTION DOES.
+    #
+    # capella_request grew a content_type parameter on 2026-09-14, when the App
+    # Endpoint access control function turned out to want raw JavaScript rather than
+    # JSON. Every stub of it here is a test double of that signature, so each one
+    # grew the same keyword with the same default. Five tests in this file failed
+    # with "request() got an unexpected keyword argument 'content_type'" until they
+    # did -- a signature mismatch in a double, not a defect in the code under test.
+    def fake_request(
+        method, path, *, params=None, body=None, content_type="application/json"
+    ):
         return pages[params["page"]]
 
     monkeypatch.setattr(client, "capella_request", fake_request)
@@ -320,7 +322,9 @@ def test_capella_list_follows_the_cursor_to_the_last_page(monkeypatch):
 
 
 def test_capella_list_reports_truncation_rather_than_silently_shortening(monkeypatch):
-    def fake_request(method, path, *, params=None, body=None, content_type="application/json"):
+    def fake_request(
+        method, path, *, params=None, body=None, content_type="application/json"
+    ):
         page = params["page"]
         return {
             "data": [{"id": f"{page}-{i}"} for i in range(100)],
@@ -1415,6 +1419,7 @@ def test_every_mutation_anchor_still_matches_its_target():
 # empty one is a green tick rather than a failure. `test_no_vacuous_coverage.py`
 # enforces that this guard exists; the floors below are what it cannot know.
 
+
 def test_there_is_something_to_test():
     """Non-emptiness, and the relationship between the two registries.
 
@@ -1460,8 +1465,10 @@ def test_listing_organizations_does_not_require_an_organization_id():
     from handlers import capella
 
     source = inspect.getsource(capella._handle_primitive)
-    assert "{organization_id}\" in op.path" in source or \
-           "'{organization_id}' in op.path" in source, (
+    assert (
+        '{organization_id}" in op.path' in source
+        or "'{organization_id}' in op.path" in source
+    ), (
         "_handle_primitive resolves the organization unconditionally again, so "
         "capella_organizations_list is refused for want of an id it never uses"
     )

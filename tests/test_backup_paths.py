@@ -153,9 +153,11 @@ def test_listing_backups_asks_for_repository_info():
         "the Backup service has no /backups endpoint; backups are carried in "
         f"the repository /info response. Offending path(s): {offenders}"
     )
-    assert any("/info" in text for text in built) or 'suffix="/info"' in inspect.getsource(
-        backup.handle
-    ), "nothing asks for the repository /info document, so admin_backup_list returns no backups"
+    assert any(
+        "/info" in text for text in built
+    ) or 'suffix="/info"' in inspect.getsource(backup.handle), (
+        "nothing asks for the repository /info document, so admin_backup_list returns no backups"
+    )
 
 
 #: Tools that name a repository but are NOT state-addressed, and why.
@@ -185,7 +187,10 @@ def test_every_repository_addressed_tool_declares_the_state_argument():
         if tool.name in _STATE_NOT_APPLICABLE:
             continue
         properties = (tool.inputSchema or {}).get("properties", {})
-        if "repository_id" not in properties and tool.name != "admin_backup_repository_list":
+        if (
+            "repository_id" not in properties
+            and tool.name != "admin_backup_repository_list"
+        ):
             continue  # addresses no repository; the state means nothing here
         if "state" not in properties:
             missing.append(tool.name)
@@ -275,8 +280,8 @@ def test_the_archive_destination_is_egress_guarded():
     import inspect
 
     source = inspect.getsource(backup.handle)
-    create = source[source.index('admin_backup_repository_create'):]
-    create = create[:create.index('admin_backup_repository_get')]
+    create = source[source.index("admin_backup_repository_create") :]
+    create = create[: create.index("admin_backup_repository_get")]
     assert "guard_nested_host_fields" in create, (
         "repository_create forwards `archive` to the Backup service with no "
         "egress guard"
@@ -307,8 +312,14 @@ def test_the_restore_schema_describes_the_shape_the_service_accepts():
     restore = next(t for t in backup.TOOLS if t.name == "admin_backup_restore_run")
     description = (restore.inputSchema or {})["properties"]["target"]["description"]
 
-    for field in ("target", "user", "password", "auto_create_buckets",
-                  "force_updates", "map_data"):
+    for field in (
+        "target",
+        "user",
+        "password",
+        "auto_create_buckets",
+        "force_updates",
+        "map_data",
+    ):
         assert field in description, f"the observed field {field!r} is undocumented"
 
     assert "mappings" not in description, (

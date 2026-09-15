@@ -42,14 +42,19 @@ def _fixture(root: pathlib.Path, name: str, rows: list[dict]) -> pathlib.Path:
 
 def _airline(key: str, identifier: int, name: str) -> dict:
     """One travel-sample airline row in the fixture's JSON Lines shape."""
-    return {"id": key, "exp": 0,
-            "doc": {"id": identifier, "name": name, "type": "airline"},
-            "xattrs": {}}
+    return {
+        "id": key,
+        "exp": 0,
+        "doc": {"id": identifier, "name": name, "type": "airline"},
+        "xattrs": {},
+    }
 
 
 def test_a_clean_round_trip_is_reported_as_identical(tmp_path):
-    rows = [_airline("airline_10", 10, "40-Mile Air"),
-            _airline("airline_11", 11, "Texas Wings")]
+    rows = [
+        _airline("airline_10", 10, "40-Mile Air"),
+        _airline("airline_11", 11, "Texas Wings"),
+    ]
     first = _fixture(tmp_path, "first", rows)
     second = _fixture(tmp_path, "second", rows)
 
@@ -72,14 +77,22 @@ def test_the_key_corruption_bug_is_caught_and_diagnosed(tmp_path):
     Hashes matched. Line counts matched. COUNT(*) matched. Only this comparison
     sees it.
     """
-    first = _fixture(tmp_path, "first", [
-        _airline("airline_10", 10, "40-Mile Air"),
-        _airline("airline_11", 11, "Texas Wings"),
-    ])
-    second = _fixture(tmp_path, "second", [
-        _airline("10", 10, "40-Mile Air"),
-        _airline("11", 11, "Texas Wings"),
-    ])
+    first = _fixture(
+        tmp_path,
+        "first",
+        [
+            _airline("airline_10", 10, "40-Mile Air"),
+            _airline("airline_11", 11, "Texas Wings"),
+        ],
+    )
+    second = _fixture(
+        tmp_path,
+        "second",
+        [
+            _airline("10", 10, "40-Mile Air"),
+            _airline("11", 11, "Texas Wings"),
+        ],
+    )
 
     report = rt.compare(first, second)
     assert report["identical"] is False
@@ -98,10 +111,14 @@ def test_the_key_corruption_bug_is_caught_and_diagnosed(tmp_path):
 
 def test_a_document_lost_in_the_round_trip_is_reported(tmp_path):
     """The other failure an import can produce: it wrote some and not all."""
-    first = _fixture(tmp_path, "first", [
-        _airline("airline_10", 10, "40-Mile Air"),
-        _airline("airline_11", 11, "Texas Wings"),
-    ])
+    first = _fixture(
+        tmp_path,
+        "first",
+        [
+            _airline("airline_10", 10, "40-Mile Air"),
+            _airline("airline_11", 11, "Texas Wings"),
+        ],
+    )
     second = _fixture(tmp_path, "second", [_airline("airline_10", 10, "40-Mile Air")])
 
     report = rt.compare(first, second)
@@ -143,10 +160,14 @@ def test_a_changed_expiry_is_reported(tmp_path):
 def test_a_duplicate_key_in_one_export_is_a_finding_not_an_overwrite(tmp_path):
     """Two rows with the same key means the exporter paged over the same rows
     twice. Collapsing them silently would hide exactly that."""
-    first = _fixture(tmp_path, "first", [
-        _airline("airline_10", 10, "40-Mile Air"),
-        _airline("airline_10", 10, "40-Mile Air"),
-    ])
+    first = _fixture(
+        tmp_path,
+        "first",
+        [
+            _airline("airline_10", 10, "40-Mile Air"),
+            _airline("airline_10", 10, "40-Mile Air"),
+        ],
+    )
     second = _fixture(tmp_path, "second", [_airline("airline_10", 10, "40-Mile Air")])
 
     with pytest.raises(SystemExit, match="duplicate document keys"):
@@ -171,10 +192,21 @@ def test_the_script_refuses_to_import_back_over_its_own_source():
     import subprocess
 
     result = subprocess.run(
-        [sys.executable, str(_SCRIPTS / "fixture_round_trip.py"),
-         "--plane", "ee", "--keyspace", "b.s.c", "--scratch", "b.s.c",
-         "--work", "/tmp/x"],
-        capture_output=True, text=True, check=False,
+        [
+            sys.executable,
+            str(_SCRIPTS / "fixture_round_trip.py"),
+            "--plane",
+            "ee",
+            "--keyspace",
+            "b.s.c",
+            "--scratch",
+            "b.s.c",
+            "--work",
+            "/tmp/x",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode != 0
     assert "must differ from" in (result.stdout + result.stderr)

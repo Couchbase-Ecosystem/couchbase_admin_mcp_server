@@ -43,27 +43,34 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from probe_access_control_function import (  # noqa: E402
+from probe_access_control_function import (
+    _message,
+    _rows,
     call,
     call_retrying,
     resolve_credentials,
-    _message,
-    _rows,
 )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--cluster", required=True)
     ap.add_argument("--project", default="")
     ap.add_argument("--env-file", default=None)
-    ap.add_argument("--enable", action="store_true",
-                    help="actually enable the Data API (billable, asynchronous)")
-    ap.add_argument("--disable", action="store_true",
-                    help="turn it back off")
-    ap.add_argument("--timeout", type=int, default=600,
-                    help="seconds to wait for the state to settle")
+    ap.add_argument(
+        "--enable",
+        action="store_true",
+        help="actually enable the Data API (billable, asynchronous)",
+    )
+    ap.add_argument("--disable", action="store_true", help="turn it back off")
+    ap.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="seconds to wait for the state to settle",
+    )
     args = ap.parse_args()
 
     token, org, src = resolve_credentials(args.env_file)
@@ -92,9 +99,12 @@ def main() -> int:
     base = f"/v4/organizations/{org}/projects/{project}/clusters"
     status, text = call("GET", base, token)
     rows = _rows(text)
-    matched = [c for c in rows
-               if c.get("id") == args.cluster
-               or args.cluster in str(c.get("connectionString", ""))]
+    matched = [
+        c
+        for c in rows
+        if c.get("id") == args.cluster
+        or args.cluster in str(c.get("connectionString", ""))
+    ]
     if len(matched) != 1:
         print(f"--cluster {args.cluster!r} matched {len(matched)} of {len(rows)}")
         return 2
@@ -111,9 +121,11 @@ def main() -> int:
             current = json.loads(text)
         except Exception:
             pass
-    print(f'\n  Record "capella_data_api_get": "{status}" in LIVE_VERIFIED.'
-          if str(status) in {"200", "400", "404", "405", "422"} else
-          f"\n  {status} is not a usable register value.")
+    print(
+        f'\n  Record "capella_data_api_get": "{status}" in LIVE_VERIFIED.'
+        if str(status) in {"200", "400", "404", "405", "422"}
+        else f"\n  {status} is not a usable register value."
+    )
 
     # WHICH SPELLING? THE DOCS AND THE PROVIDER DISAGREE.
     #
@@ -132,7 +144,8 @@ def main() -> int:
     # is the one the server knows about.
     for spelling in ("enableDataApi", "enableDataAPI"):
         probe_status, probe_text = call_retrying(
-            "PUT", path, token, {spelling: "not-a-boolean"})
+            "PUT", path, token, {spelling: "not-a-boolean"}
+        )
         print(f"\n  spelling {spelling!r} -> {probe_status}")
         print(f"    {_message(probe_text)[:240]}")
 
@@ -140,19 +153,24 @@ def main() -> int:
     # A body whose enableDataApi is a string cannot be honoured by a field typed
     # bool, so the refusal is on contents -- route and method proven, nothing
     # changed.
-    reg_status, reg_text = call_retrying("PUT", path, token,
-                                         {"enableDataApi": "not-a-boolean"})
+    reg_status, reg_text = call_retrying(
+        "PUT", path, token, {"enableDataApi": "not-a-boolean"}
+    )
     print(f"\nPUT with an invalid body -> {reg_status}")
     print(f"  {_message(reg_text)[:260]}")
     if str(reg_status) in {"400", "405", "422"}:
         print(f'  Record "capella_data_api_set": "{reg_status}" in LIVE_VERIFIED.')
     else:
-        print("  NOT a usable register value; the op stays in SHIPPED_UNVERIFIED "
-              "with this transcript as its reason.")
+        print(
+            "  NOT a usable register value; the op stays in SHIPPED_UNVERIFIED "
+            "with this transcript as its reason."
+        )
 
     if not (args.enable or args.disable):
-        print("\nStatus only. --enable turns the Data API ON (billable, "
-              "asynchronous); --disable turns it off.")
+        print(
+            "\nStatus only. --enable turns the Data API ON (billable, "
+            "asynchronous); --disable turns it off."
+        )
         return 0
 
     want = bool(args.enable)
@@ -178,8 +196,10 @@ def main() -> int:
             continue
         doc = json.loads(text)
         state = doc.get("state")
-        print(f"  state={state!r} enabled={doc.get('enabled')} "
-              f"connectionString={doc.get('connectionString')!r}")
+        print(
+            f"  state={state!r} enabled={doc.get('enabled')} "
+            f"connectionString={doc.get('connectionString')!r}"
+        )
         # SETTLED MEANS THE THING WE NEED IS THERE, not that `state` matches a
         # list of words. The first version enumerated healthy/ready/on/off/
         # disabled and the real terminal value is 'enabled', so a successful
@@ -192,20 +212,25 @@ def main() -> int:
         # transitional.
         settled = (
             (doc.get("enabled") is True and bool(doc.get("connectionString")))
-            if want else
-            (doc.get("enabled") is False
-             and not str(state).lower().endswith("ing"))
+            if want
+            else (
+                doc.get("enabled") is False and not str(state).lower().endswith("ing")
+            )
         )
         if settled:
             print("\nSETTLED.")
             if want and doc.get("connectionString"):
                 print(f"\n  DATA API BASE: {doc['connectionString']}")
-                print("  That is the value fixture export/import must use. It is "
-                      "NOT derivable from the cluster id, whatever the old "
-                      "fixture docstring said.")
+                print(
+                    "  That is the value fixture export/import must use. It is "
+                    "NOT derivable from the cluster id, whatever the old "
+                    "fixture docstring said."
+                )
             return 0
-    print("\ntimed out waiting for the state to settle; re-run without --enable "
-          "to see where it got to.")
+    print(
+        "\ntimed out waiting for the state to settle; re-run without --enable "
+        "to see where it got to."
+    )
     return 1
 
 

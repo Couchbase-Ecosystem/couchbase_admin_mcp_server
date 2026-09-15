@@ -218,8 +218,8 @@ def _office_text(path: pathlib.Path, member_prefix: str) -> str:
 def test_the_generated_document_shows_the_real_tool_total():
     """docs/CB_Admin_MCP_Architecture.docx is rebuilt with:
 
-        python docs/generate_tools_json.py > docs/tools.json
-        node docs/build_architecture.js
+    python docs/generate_tools_json.py > docs/tools.json
+    node docs/build_architecture.js
     """
     text = _office_text(DOCX, "word/")
     total = REGISTRY["tools_total"]
@@ -278,7 +278,9 @@ def test_the_slide_deck_carries_no_superseded_total():
         MEASURED.get("loaded_capella"),
     }
     stale = {
-        n for n in re.findall(r"(?<![\w.])(\d{2,4}) tools\b", text) if int(n) not in allowed
+        n
+        for n in re.findall(r"(?<![\w.])(\d{2,4}) tools\b", text)
+        if int(n) not in allowed
     }
     assert not stale, (
         f"the slide deck states tool counts that match nothing the code "

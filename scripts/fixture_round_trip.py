@@ -251,9 +251,7 @@ def compare(first: pathlib.Path, second: pathlib.Path) -> dict:
         "bodies_differing": body_differences[:20],
         "bodies_differing_total": len(body_differences),
         "expiries_differing_total": len(expiry_differences),
-        "identical": (
-            not only_first and not only_second and not body_differences
-        ),
+        "identical": (not only_first and not only_second and not body_differences),
         "signature": signature,
     }
 
@@ -271,9 +269,28 @@ async def run(args) -> int:
 
     base: dict[str, Any] = _capella_ids() if args.plane == "capella" else {}
 
-    export_first = dict(base, fixture_id="roundtrip-first", fixture_path=str(first), keyspaces=[args.keyspace], include_data=True, tags={"purpose": "round trip", "stage": "first"})
-    import_args = dict(base, fixture_path=str(first), keyspace_map={args.keyspace: args.scratch}, confirm=True)
-    export_second = dict(base, fixture_id="roundtrip-second", fixture_path=str(second), keyspaces=[args.scratch], include_data=True, tags={"purpose": "round trip", "stage": "second"})
+    export_first = dict(
+        base,
+        fixture_id="roundtrip-first",
+        fixture_path=str(first),
+        keyspaces=[args.keyspace],
+        include_data=True,
+        tags={"purpose": "round trip", "stage": "first"},
+    )
+    import_args = dict(
+        base,
+        fixture_path=str(first),
+        keyspace_map={args.keyspace: args.scratch},
+        confirm=True,
+    )
+    export_second = dict(
+        base,
+        fixture_id="roundtrip-second",
+        fixture_path=str(second),
+        keyspaces=[args.scratch],
+        include_data=True,
+        tags={"purpose": "round trip", "stage": "second"},
+    )
 
     plan = [
         (tools["export"], export_first),
@@ -321,8 +338,10 @@ async def run(args) -> int:
                 payload = _payload(response)
                 print(json.dumps(payload, indent=1)[: args.print_limit])
                 if getattr(response, "isError", False):
-                    print(f"\n{name} FAILED. Stopping here: the comparison below "
-                          f"would be between a fixture and nothing.")
+                    print(
+                        f"\n{name} FAILED. Stopping here: the comparison below "
+                        f"would be between a fixture and nothing."
+                    )
                     return 1
 
     print("\n=== comparison")
@@ -359,20 +378,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export, import elsewhere, export back, compare.",
     )
-    parser.add_argument("--plane", choices=sorted(_TOOLS), required=True,
-                        help="capella uses capella_fixture_*; ee uses "
-                             "admin_fixture_*")
-    parser.add_argument("--keyspace", required=True,
-                        help="source bucket.scope.collection, with documents in it")
-    parser.add_argument("--scratch", required=True,
-                        help="bucket.scope.collection to import INTO. Must not "
-                             "be the source, and should not be anything you "
-                             "mind being overwritten.")
-    parser.add_argument("--work", required=True,
-                        help="directory for the two exports")
-    parser.add_argument("--perform", action="store_true",
-                        help="actually run it. Without this the plan is printed "
-                             "and nothing is called.")
+    parser.add_argument(
+        "--plane",
+        choices=sorted(_TOOLS),
+        required=True,
+        help="capella uses capella_fixture_*; ee uses admin_fixture_*",
+    )
+    parser.add_argument(
+        "--keyspace",
+        required=True,
+        help="source bucket.scope.collection, with documents in it",
+    )
+    parser.add_argument(
+        "--scratch",
+        required=True,
+        help="bucket.scope.collection to import INTO. Must not "
+        "be the source, and should not be anything you "
+        "mind being overwritten.",
+    )
+    parser.add_argument("--work", required=True, help="directory for the two exports")
+    parser.add_argument(
+        "--perform",
+        action="store_true",
+        help="actually run it. Without this the plan is printed and nothing is called.",
+    )
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--print-limit", type=int, default=4000)
     args = parser.parse_args()
@@ -386,7 +415,9 @@ def main() -> int:
     for field in ("keyspace", "scratch"):
         value = getattr(args, field)
         if len(value.rsplit(".", 2)) != 3:
-            raise SystemExit(f"--{field} must be bucket.scope.collection, got {value!r}")
+            raise SystemExit(
+                f"--{field} must be bucket.scope.collection, got {value!r}"
+            )
 
     return asyncio.run(run(args))
 

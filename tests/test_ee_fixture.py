@@ -36,9 +36,14 @@ def _payload(*hashes: str) -> str:
     return hashlib.sha256("".join(sorted(hashes)).encode()).hexdigest()
 
 
-def _write_fixture(root: pathlib.Path, *, documents: str = '{"id": "a", "doc": {}}\n',
-                   mode: str = "server", schema: str | None = None,
-                   keyspace: str = "b.s.c") -> pathlib.Path:
+def _write_fixture(
+    root: pathlib.Path,
+    *,
+    documents: str = '{"id": "a", "doc": {}}\n',
+    mode: str = "server",
+    schema: str | None = None,
+    keyspace: str = "b.s.c",
+) -> pathlib.Path:
     """A minimal fixture on disk whose manifest is internally consistent."""
     directory = root / "fx"
     (directory / "data").mkdir(parents=True, exist_ok=True)
@@ -55,9 +60,14 @@ def _write_fixture(root: pathlib.Path, *, documents: str = '{"id": "a", "doc": {
         "structure": [],
         "gsi_definitions": [],
         "eventing_functions": [],
-        "files": [{"path": f"data/{keyspace}.jsonl", "keyspace": keyspace,
-                   "sha256": digest,
-                   "document_count": documents.count("\n")}],
+        "files": [
+            {
+                "path": f"data/{keyspace}.jsonl",
+                "keyspace": keyspace,
+                "sha256": digest,
+                "document_count": documents.count("\n"),
+            }
+        ],
         "document_count": documents.count("\n"),
         "payload_sha256": _payload(digest),
         "fidelity": {"documents": True},
@@ -133,9 +143,13 @@ def test_export_refuses_a_path_outside_the_fixture_root(tmp_path, monkeypatch):
     """CB_ADMIN_FIXTURE_ROOT is the only bound on where this writes, and a
     container is exactly the deployment where the caller is not the operator."""
     monkeypatch.setenv("CB_ADMIN_FIXTURE_ROOT", str(tmp_path / "allowed"))
-    result = fixture.handle("admin_fixture_export", {
-        "fixture_id": "x", "fixture_path": str(tmp_path / "elsewhere"),
-    })
+    result = fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "x",
+            "fixture_path": str(tmp_path / "elsewhere"),
+        },
+    )
     assert "outside CB_ADMIN_FIXTURE_ROOT" in _text(result)
 
 
@@ -147,9 +161,13 @@ def test_import_refuses_a_fixture_whose_bytes_have_changed(tmp_path):
     (directory / "data" / "b.s.c.jsonl").write_text(
         '{"id": "tampered", "doc": {}}\n', encoding="utf-8"
     )
-    result = fixture.handle("admin_fixture_import", {
-        "fixture_path": str(directory), "confirm": True,
-    })
+    result = fixture.handle(
+        "admin_fixture_import",
+        {
+            "fixture_path": str(directory),
+            "confirm": True,
+        },
+    )
     text = _text(result)
     assert "does not verify" in text
     assert "NOTHING was imported" in text
@@ -159,17 +177,25 @@ def test_import_refuses_a_mobile_fixture(tmp_path):
     """Its sync metadata cannot be restored, and documents that look synced and
     are not are worse than documents that were never loaded."""
     directory = _write_fixture(tmp_path, mode="mobile")
-    result = fixture.handle("admin_fixture_import", {
-        "fixture_path": str(directory), "confirm": True,
-    })
+    result = fixture.handle(
+        "admin_fixture_import",
+        {
+            "fixture_path": str(directory),
+            "confirm": True,
+        },
+    )
     assert "MOBILE fixture" in _text(result)
 
 
 def test_import_refuses_an_unknown_manifest_schema(tmp_path):
     directory = _write_fixture(tmp_path, schema="couchbase.fixture/v99")
-    result = fixture.handle("admin_fixture_import", {
-        "fixture_path": str(directory), "confirm": True,
-    })
+    result = fixture.handle(
+        "admin_fixture_import",
+        {
+            "fixture_path": str(directory),
+            "confirm": True,
+        },
+    )
     assert "schema is" in _text(result)
 
 
@@ -180,9 +206,13 @@ def test_import_accepts_a_fixture_written_before_the_schema_was_renamed(tmp_path
 
     legacy = sorted(fixture_core.LEGACY_MANIFEST_SCHEMAS)[0]
     directory = _write_fixture(tmp_path, schema=legacy)
-    result = fixture.handle("admin_fixture_import", {
-        "fixture_path": str(directory), "confirm": True,
-    })
+    result = fixture.handle(
+        "admin_fixture_import",
+        {
+            "fixture_path": str(directory),
+            "confirm": True,
+        },
+    )
     # It gets PAST the schema gate. What it does next needs a cluster, which is
     # not the property under test here.
     assert "schema is" not in _text(result)
@@ -192,10 +222,14 @@ def test_import_refuses_a_nested_keyspace_map(tmp_path):
     """A dotted argument name produces a nested object by accident, and a map
     whose values are objects would silently rewrite nothing."""
     directory = _write_fixture(tmp_path)
-    result = fixture.handle("admin_fixture_import", {
-        "fixture_path": str(directory), "confirm": True,
-        "keyspace_map": {"b": {"s": "x"}},
-    })
+    result = fixture.handle(
+        "admin_fixture_import",
+        {
+            "fixture_path": str(directory),
+            "confirm": True,
+            "keyspace_map": {"b": {"s": "x"}},
+        },
+    )
     assert "must be strings" in _text(result)
 
 
@@ -207,18 +241,21 @@ class _Stub:
 
     def __init__(self, rows_by_keyspace=None, buckets=None):
         self.rows_by_keyspace = rows_by_keyspace or {}
-        self.buckets = buckets or [{"name": "b", "bucketType": "membase",
-                                    "quota": {"rawRAM": 104857600}}]
+        self.buckets = buckets or [
+            {"name": "b", "bucketType": "membase", "quota": {"rawRAM": 104857600}}
+        ]
         self.statements: list[str] = []
 
     def admin_request(self, method, path, *args, **kwargs):
         if path == "/pools/default/buckets":
             return self.buckets
         if path.endswith("/scopes"):
-            return {"scopes": [
-                {"name": "s", "collections": [{"name": "c"}]},
-                {"name": "_system", "collections": [{"name": "internal"}]},
-            ]}
+            return {
+                "scopes": [
+                    {"name": "s", "collections": [{"name": "c"}]},
+                    {"name": "_system", "collections": [{"name": "internal"}]},
+                ]
+            }
         if path == "/pools":
             return {"uuid": "abc", "implementationVersion": "7.6.0"}
         if path == "/pools/default":
@@ -252,13 +289,19 @@ def stub(monkeypatch):
 def test_export_writes_a_manifest_and_one_file_per_non_empty_keyspace(
     tmp_path, stub, monkeypatch
 ):
-    stub.rows_by_keyspace = {"b.s.c": [
-        {fixture.META_ID_ALIAS: "k1", fixture.META_EXP_ALIAS: 0, "field": 1},
-    ]}
-    result = fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-        "tags": {"scenario": "one"},
-    })
+    stub.rows_by_keyspace = {
+        "b.s.c": [
+            {fixture.META_ID_ALIAS: "k1", fixture.META_EXP_ALIAS: 0, "field": 1},
+        ]
+    }
+    result = fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+            "tags": {"scenario": "one"},
+        },
+    )
     text = _text(result)
     assert "error" not in text.lower() or "errors" in text.lower()
 
@@ -270,19 +313,29 @@ def test_export_writes_a_manifest_and_one_file_per_non_empty_keyspace(
     assert [f["keyspace"] for f in manifest["files"]] == ["b.s.c"]
 
     rows = (tmp_path / "out" / "data" / "b.s.c.jsonl").read_text().strip().splitlines()
-    assert json.loads(rows[0]) == {"id": "k1", "exp": 0, "doc": {"field": 1},
-                                   "xattrs": {}}
+    assert json.loads(rows[0]) == {
+        "id": "k1",
+        "exp": 0,
+        "doc": {"field": 1},
+        "xattrs": {},
+    }
 
 
 def test_export_skips_reserved_scopes(tmp_path, stub):
     """`_system` is Couchbase's own, it is not the customer data a fixture is
     for, and the query service refuses some of it outright."""
-    stub.rows_by_keyspace = {"b.s.c": [
-        {fixture.META_ID_ALIAS: "k1", fixture.META_EXP_ALIAS: 0},
-    ]}
-    fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-    })
+    stub.rows_by_keyspace = {
+        "b.s.c": [
+            {fixture.META_ID_ALIAS: "k1", fixture.META_EXP_ALIAS: 0},
+        ]
+    }
+    fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+        },
+    )
     assert not any("_system" in s for s in stub.statements), stub.statements
 
 
@@ -290,10 +343,14 @@ def test_export_refuses_a_keyspace_filter_that_matches_nothing(tmp_path, stub):
     """A single typo would otherwise produce a SILENT SUCCESS: no collection
     matches, nothing is written, and the manifest reports a clean export of zero
     documents. The caller asked for a keyspace and got a fixture without it."""
-    result = fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-        "keyspaces": ["b.s.typo"],
-    })
+    result = fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+            "keyspaces": ["b.s.typo"],
+        },
+    )
     text = _text(result)
     assert "do not exist on this cluster" in text
     assert not (tmp_path / "out" / "manifest.json").exists(), (
@@ -309,9 +366,13 @@ def test_export_refuses_a_row_whose_key_alias_was_overwritten(tmp_path, stub):
     what shipped on the other plane; here it refuses.
     """
     stub.rows_by_keyspace = {"b.s.c": [{"field": 1}]}  # no META_ID_ALIAS at all
-    result = fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-    })
+    result = fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+        },
+    )
     text = _text(result)
     assert fixture.META_ID_ALIAS in text
     assert "real key cannot be recovered" in text
@@ -325,19 +386,27 @@ def test_an_export_of_only_empty_collections_does_not_claim_to_hold_documents(
     document phase ran". An export of empty collections satisfies the second and
     a consumer reads the first."""
     stub.rows_by_keyspace = {}
-    fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-    })
+    fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+        },
+    )
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
     assert manifest["fidelity"]["documents"] is False
     assert "no documents" in manifest["fidelity"]["note"]
 
 
 def test_a_structure_only_export_says_it_is_not_a_dataset(tmp_path, stub):
-    fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-        "include_data": False,
-    })
+    fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+            "include_data": False,
+        },
+    )
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
     assert manifest["fidelity"]["documents"] is False
     assert "SHAPE, not a dataset" in manifest["fidelity"]["note"]
@@ -346,9 +415,13 @@ def test_a_structure_only_export_says_it_is_not_a_dataset(tmp_path, stub):
 def test_the_manifest_never_claims_cas_or_system_xattrs(tmp_path, stub):
     """Neither is preserved by any write path available here, and a fixture that
     silently drops something is worse than one that refuses."""
-    fixture.handle("admin_fixture_export", {
-        "fixture_id": "fx", "fixture_path": str(tmp_path / "out"),
-    })
+    fixture.handle(
+        "admin_fixture_export",
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "out"),
+        },
+    )
     manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
     assert manifest["fidelity"]["cas"] is False
     assert manifest["fidelity"]["system_xattrs"] is False
@@ -450,15 +523,30 @@ def test_listing_filters_on_every_named_tag(tmp_path):
     manifest["tags"] = {"scenario": "hurricane", "version": "1.1"}
     (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    matching = json.loads(_text(fixture.handle("admin_fixture_list", {
-        "root_path": str(tmp_path), "tags": {"scenario": "hurricane"},
-    })))
+    matching = json.loads(
+        _text(
+            fixture.handle(
+                "admin_fixture_list",
+                {
+                    "root_path": str(tmp_path),
+                    "tags": {"scenario": "hurricane"},
+                },
+            )
+        )
+    )
     assert matching["count"] == 1
 
-    partial = json.loads(_text(fixture.handle("admin_fixture_list", {
-        "root_path": str(tmp_path),
-        "tags": {"scenario": "hurricane", "version": "9.9"},
-    })))
+    partial = json.loads(
+        _text(
+            fixture.handle(
+                "admin_fixture_list",
+                {
+                    "root_path": str(tmp_path),
+                    "tags": {"scenario": "hurricane", "version": "9.9"},
+                },
+            )
+        )
+    )
     assert partial["count"] == 0, "a tag filter matched with one value wrong"
 
 
@@ -469,9 +557,16 @@ def test_verify_reports_a_structure_only_fixture_as_carrying_no_data(tmp_path):
     manifest["payload_sha256"] = None
     (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    payload = json.loads(_text(fixture.handle("admin_fixture_verify", {
-        "fixture_path": str(directory),
-    })))
+    payload = json.loads(
+        _text(
+            fixture.handle(
+                "admin_fixture_verify",
+                {
+                    "fixture_path": str(directory),
+                },
+            )
+        )
+    )
     assert payload["verified"] is True
     assert "must not be presented as a dataset" in payload["note"]
 
@@ -497,11 +592,20 @@ def test_a_full_text_index_is_not_rendered_as_a_create_index(stub, tmp_path):
     which the query service rejected: syntax error near '(', at: ). The tool
     generated invalid SQL from a row it had no business reading.
     """
+
     def rows(statement, parameters=None):
         if "system:indexes" in statement:
-            return [{"name": "mcptest-fts", "bucket_id": "b", "scope_id": "s",
-                     "keyspace_id": "c", "index_key": [], "using": "fts",
-                     "is_primary": False}]
+            return [
+                {
+                    "name": "mcptest-fts",
+                    "bucket_id": "b",
+                    "scope_id": "s",
+                    "keyspace_id": "c",
+                    "index_key": [],
+                    "using": "fts",
+                    "is_primary": False,
+                }
+            ]
         return stub.query(statement, parameters)
 
     definitions, warnings = _with_query(rows, lambda: fixture._index_definitions(set()))
@@ -514,11 +618,20 @@ def test_a_full_text_index_is_not_rendered_as_a_create_index(stub, tmp_path):
 def test_an_index_with_no_keys_that_is_not_primary_is_skipped_with_a_reason(stub):
     """The general form of the same defect: no keys means no renderable
     statement, and `()` is not a statement, it is a syntax error."""
+
     def rows(statement, parameters=None):
         if "system:indexes" in statement:
-            return [{"name": "weird", "bucket_id": "b", "scope_id": "s",
-                     "keyspace_id": "c", "index_key": [], "using": "gsi",
-                     "is_primary": False}]
+            return [
+                {
+                    "name": "weird",
+                    "bucket_id": "b",
+                    "scope_id": "s",
+                    "keyspace_id": "c",
+                    "index_key": [],
+                    "using": "gsi",
+                    "is_primary": False,
+                }
+            ]
         return stub.query(statement, parameters)
 
     definitions, warnings = _with_query(rows, lambda: fixture._index_definitions(set()))
@@ -534,13 +647,26 @@ def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(stub)
     existed already; against a fresh target it would have built indexes for
     collections the fixture carries no data for.
     """
+
     def rows(statement, parameters=None):
         if "system:indexes" in statement:
             return [
-                {"name": "wanted", "bucket_id": "b", "scope_id": "s",
-                 "keyspace_id": "c", "index_key": ["`x`"], "using": "gsi"},
-                {"name": "elsewhere", "bucket_id": "b", "scope_id": "other",
-                 "keyspace_id": "c", "index_key": ["`x`"], "using": "gsi"},
+                {
+                    "name": "wanted",
+                    "bucket_id": "b",
+                    "scope_id": "s",
+                    "keyspace_id": "c",
+                    "index_key": ["`x`"],
+                    "using": "gsi",
+                },
+                {
+                    "name": "elsewhere",
+                    "bucket_id": "b",
+                    "scope_id": "other",
+                    "keyspace_id": "c",
+                    "index_key": ["`x`"],
+                    "using": "gsi",
+                },
             ]
         return stub.query(statement, parameters)
 

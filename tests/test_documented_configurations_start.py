@@ -100,13 +100,12 @@ def _enforce(env: dict, _monkeypatch=None) -> list[str]:
         f"the validation subprocess failed:\n{result.stdout}\n{result.stderr}"
     )
     marker = [
-        line for line in result.stdout.splitlines()
-        if line.startswith("PROBLEMS_JSON ")
+        line for line in result.stdout.splitlines() if line.startswith("PROBLEMS_JSON ")
     ]
     assert marker, (
         f"the validation subprocess printed no result:\n{result.stdout}\n{result.stderr}"
     )
-    return json.loads(marker[-1][len("PROBLEMS_JSON "):])
+    return json.loads(marker[-1][len("PROBLEMS_JSON ") :])
 
 
 # ── The Quick start ──────────────────────────────────────────────────────────
@@ -285,7 +284,7 @@ def _compose_service_environment(filename: str, supplied: dict) -> dict:
     document = load_compose(DEPLOY / filename)
     services = document.get("services") or {}
     assert len(services) == 1, f"{filename} no longer has exactly one service"
-    raw = (next(iter(services.values())).get("environment") or {})
+    raw = next(iter(services.values())).get("environment") or {}
 
     resolved: dict[str, str] = {}
     for key, value in raw.items():
@@ -379,8 +378,11 @@ def test_the_lab_override_runs_the_transport_without_an_identity_provider(
     """
     base = _compose_service_environment(
         "docker-compose.ee.yml",
-        {"CB_CONNECTION_STRING": "couchbase://cluster",
-         "CB_USERNAME": "Administrator", "CB_PASSWORD": "password"},
+        {
+            "CB_CONNECTION_STRING": "couchbase://cluster",
+            "CB_USERNAME": "Administrator",
+            "CB_PASSWORD": "password",
+        },
     )
     override = _compose_service_environment("docker-compose.ee.lab.yml", {})
     merged = {**base, **override}
@@ -388,8 +390,8 @@ def test_the_lab_override_runs_the_transport_without_an_identity_provider(
     assert merged["CB_ADMIN_PROFILE"] == "workstation", merged
     assert merged["CB_ADMIN_TRANSPORT"] == "http", merged
     problems = _enforce(_with_local_audit(merged, tmp_path), monkeypatch)
-    assert not problems, (
-        "the lab override refuses to start:\n  " + "\n  ".join(problems)
+    assert not problems, "the lab override refuses to start:\n  " + "\n  ".join(
+        problems
     )
 
 
@@ -402,8 +404,11 @@ def test_each_lab_acknowledgement_is_load_bearing(dropped, tmp_path, monkeypatch
     the comment explaining it is misleading and should go."""
     base = _compose_service_environment(
         "docker-compose.ee.yml",
-        {"CB_CONNECTION_STRING": "couchbase://cluster",
-         "CB_USERNAME": "Administrator", "CB_PASSWORD": "password"},
+        {
+            "CB_CONNECTION_STRING": "couchbase://cluster",
+            "CB_USERNAME": "Administrator",
+            "CB_PASSWORD": "password",
+        },
     )
     override = _compose_service_environment("docker-compose.ee.lab.yml", {})
     merged = {**base, **override}

@@ -54,7 +54,9 @@ MAY_BE_EMPTY = {
 
 
 def _test_modules() -> list[pathlib.Path]:
-    return sorted(p for p in HERE.glob("test_*.py") if p.name != pathlib.Path(__file__).name)
+    return sorted(
+        p for p in HERE.glob("test_*.py") if p.name != pathlib.Path(__file__).name
+    )
 
 
 def _guarded_names(tree: ast.AST) -> set[str]:
@@ -126,11 +128,7 @@ def test_every_parametrised_collection_is_guarded_against_being_empty():
                 argument = decorator.args[1]
                 if not isinstance(argument, (ast.Name, ast.Attribute)):
                     continue  # a literal list cannot surprise anyone
-                name = (
-                    argument.id
-                    if isinstance(argument, ast.Name)
-                    else argument.attr
-                )
+                name = argument.id if isinstance(argument, ast.Name) else argument.attr
                 if name in MAY_BE_EMPTY:
                     continue
                 if name not in guarded:
@@ -139,7 +137,7 @@ def test_every_parametrised_collection_is_guarded_against_being_empty():
     assert not missing, (
         "these tests parametrise over a collection that nothing asserts is "
         "non-empty, so they report a SKIP indistinguishable from a platform skip "
-        "if it ever comes back empty. Add `assert <name>, \"...\"` to the module "
+        'if it ever comes back empty. Add `assert <name>, "..."` to the module '
         "(see test_handler_contract.test_there_is_something_to_test), or add the "
         "name to MAY_BE_EMPTY with a companion test proving why:\n  "
         + "\n  ".join(missing)
@@ -176,9 +174,7 @@ def test_every_collection_a_test_only_loops_over_is_guarded():
             # Literals, ranges and comprehensions are visible at the call site.
             if not isinstance(iterated, (ast.Name, ast.Attribute)):
                 continue
-            name = (
-                iterated.id if isinstance(iterated, ast.Name) else iterated.attr
-            )
+            name = iterated.id if isinstance(iterated, ast.Name) else iterated.attr
             if name in MAY_BE_EMPTY or name in guarded:
                 continue
             # A name bound to a literal a few lines up is as visible as the
@@ -188,7 +184,9 @@ def test_every_collection_a_test_only_loops_over_is_guarded():
             # That is how a check like this stops being read.
             if _bound_to_a_literal(node, name):
                 continue
-            missing.append(f"{path.name}:{node.lineno} {node.name} <- for ... in {name}")
+            missing.append(
+                f"{path.name}:{node.lineno} {node.name} <- for ... in {name}"
+            )
 
     assert not missing, (
         "every assertion in these tests is inside a loop over a collection that "
@@ -285,7 +283,9 @@ def test_each_deployment_mode_loads_the_surfaces_it_claims():
 
     reachable = set(deployment.CAPELLA_REACHABLE_ADMIN_TOOLS)
 
-    loaded = {mode: _tool_names_under(mode) for mode in ("capella", "self_managed", "both")}
+    loaded = {
+        mode: _tool_names_under(mode) for mode in ("capella", "self_managed", "both")
+    }
 
     # Capella: the whole capella_* family, plus EXACTLY the declared exceptions.
     capella_side = {n for n in loaded["capella"] if n.startswith("capella_")}
@@ -337,6 +337,7 @@ def _tool_names_under(mode: str) -> set[str]:
 
     result = subprocess.run(
         [sys.executable, "-c", probe],
+        check=False,
         cwd=str(REPO_ROOT),
         env=env,
         capture_output=True,

@@ -30,6 +30,7 @@ def _http_transport(monkeypatch):
 def _raise(exc):
     def _urlopen(*args, **kwargs):
         raise exc
+
     return _urlopen
 
 
@@ -41,7 +42,9 @@ def _http_error(code: int) -> urllib.error.HTTPError:
 def test_an_application_refusal_is_healthy(code, monkeypatch):
     """The process answered. For 401 it also proves the auth layer is engaged --
     and 401 is the NORMAL state of an enterprise deployment, not an error."""
-    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", _raise(_http_error(code)))
+    monkeypatch.setattr(
+        healthcheck.urllib.request, "urlopen", _raise(_http_error(code))
+    )
     exit_code, reason = healthcheck.check()
     assert exit_code == 0, reason
 
@@ -50,14 +53,17 @@ def test_an_application_refusal_is_healthy(code, monkeypatch):
 def test_a_server_error_is_not_healthy(code, monkeypatch):
     """Tolerating everything would move the failure rather than remove it: a
     wedged process answering 500 must not read as healthy."""
-    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", _raise(_http_error(code)))
+    monkeypatch.setattr(
+        healthcheck.urllib.request, "urlopen", _raise(_http_error(code))
+    )
     exit_code, reason = healthcheck.check()
     assert exit_code == 1, reason
 
 
 def test_nothing_listening_is_not_healthy(monkeypatch):
     monkeypatch.setattr(
-        healthcheck.urllib.request, "urlopen",
+        healthcheck.urllib.request,
+        "urlopen",
         _raise(urllib.error.URLError("connection refused")),
     )
     exit_code, reason = healthcheck.check()
@@ -69,7 +75,8 @@ def test_a_stdio_deployment_has_nothing_to_probe(monkeypatch):
     must not fail a container that is working exactly as configured."""
     monkeypatch.setenv("CB_ADMIN_TRANSPORT", "stdio")
     monkeypatch.setattr(
-        healthcheck.urllib.request, "urlopen",
+        healthcheck.urllib.request,
+        "urlopen",
         _raise(AssertionError("stdio must not be probed over HTTP")),
     )
     exit_code, reason = healthcheck.check()

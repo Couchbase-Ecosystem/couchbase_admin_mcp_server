@@ -121,7 +121,9 @@ class Cycle:
 
         self.say("=" * 70)
         self.say(f"backup cycle  repository={repository}")
-        self.say(f"mode          {'PERFORM (real writes)' if self.performed else 'DRY RUN (previews)'}")
+        self.say(
+            f"mode          {'PERFORM (real writes)' if self.performed else 'DRY RUN (previews)'}"
+        )
         self.say("=" * 70)
 
         # 1. Plans. A repository must name one, and the plan list is also the
@@ -146,8 +148,12 @@ class Cycle:
         unconfirmed = await self.call(
             session,
             "admin_backup_repository_create",
-            {"repository_id": repository, "plan": plan, "archive": self.args.archive,
-             **({"bucket_name": self.args.bucket} if self.args.bucket else {})},
+            {
+                "repository_id": repository,
+                "plan": plan,
+                "archive": self.args.archive,
+                **({"bucket_name": self.args.bucket} if self.args.bucket else {}),
+            },
         )
         self.check(
             unconfirmed.get("requires_confirmation") is True
@@ -159,9 +165,13 @@ class Cycle:
         created = await self.call(
             session,
             "admin_backup_repository_create",
-            {"repository_id": repository, "plan": plan, "archive": self.args.archive,
-             "confirm": True,
-             **({"bucket_name": self.args.bucket} if self.args.bucket else {})},
+            {
+                "repository_id": repository,
+                "plan": plan,
+                "archive": self.args.archive,
+                "confirm": True,
+                **({"bucket_name": self.args.bucket} if self.args.bucket else {}),
+            },
         )
 
         if not self.performed:
@@ -187,33 +197,49 @@ class Cycle:
 
         # 3. Read it back. A create that reports success and leaves nothing is
         #    the failure this step exists for.
-        listed = await self.call(session, "admin_backup_repository_list", {"state": "active"})
+        listed = await self.call(
+            session, "admin_backup_repository_list", {"state": "active"}
+        )
         text = json.dumps(listed)
         self.check(repository in text, "the new repository appears in the active list")
 
         got = await self.call(
-            session, "admin_backup_repository_get",
+            session,
+            "admin_backup_repository_get",
             {"repository_id": repository, "state": "active"},
         )
-        self.check(got.get(ERROR_MARKER) is not True, "the repository is readable by id")
+        self.check(
+            got.get(ERROR_MARKER) is not True, "the repository is readable by id"
+        )
 
         # 4. Back it up.
         run = await self.call(
-            session, "admin_backup_run",
-            {"repository_id": repository, "state": "active",
-             "full_backup": True, "confirm": True},
+            session,
+            "admin_backup_run",
+            {
+                "repository_id": repository,
+                "state": "active",
+                "full_backup": True,
+                "confirm": True,
+            },
         )
-        self.check(run.get(ERROR_MARKER) is not True, "a backup was triggered",
-                   json.dumps(run)[:300])
+        self.check(
+            run.get(ERROR_MARKER) is not True,
+            "a backup was triggered",
+            json.dumps(run)[:300],
+        )
 
         # 5. And the backups come back through /info, which is the path that
         #    used to be /backups and 404'd.
         info = await self.call(
-            session, "admin_backup_list",
+            session,
+            "admin_backup_list",
             {"repository_id": repository, "state": "active"},
         )
-        self.check(info.get(ERROR_MARKER) is not True,
-                   "the repository info document is readable")
+        self.check(
+            info.get(ERROR_MARKER) is not True,
+            "the repository info document is readable",
+        )
         self.say("\n   NOTE: a backup is asynchronous. An empty `backups` array here")
         self.say("   means it has not finished, not that it failed -- re-run")
         self.say("   admin_backup_list, or watch admin_cluster_tasks.")
@@ -249,17 +275,33 @@ async def main_async(args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--perform", dest="dry_run", action="store_false", default=True,
-                        help="actually create the repository and run the backup")
-    parser.add_argument("--archive",
-                        default="/opt/couchbase/var/lib/couchbase/backup",
-                        help="path the BACKUP SERVICE can write, inside its own filesystem")
-    parser.add_argument("--plan", default=None,
-                        help="plan name; defaults to the first the service lists")
-    parser.add_argument("--bucket", default=os.environ.get("CB_BUCKET") or None,
-                        help="restrict the repository to one bucket")
-    parser.add_argument("--repository", default=None,
-                        help="repository name; defaults to a timestamped one")
+    parser.add_argument(
+        "--perform",
+        dest="dry_run",
+        action="store_false",
+        default=True,
+        help="actually create the repository and run the backup",
+    )
+    parser.add_argument(
+        "--archive",
+        default="/opt/couchbase/var/lib/couchbase/backup",
+        help="path the BACKUP SERVICE can write, inside its own filesystem",
+    )
+    parser.add_argument(
+        "--plan",
+        default=None,
+        help="plan name; defaults to the first the service lists",
+    )
+    parser.add_argument(
+        "--bucket",
+        default=os.environ.get("CB_BUCKET") or None,
+        help="restrict the repository to one bucket",
+    )
+    parser.add_argument(
+        "--repository",
+        default=None,
+        help="repository name; defaults to a timestamped one",
+    )
     parser.add_argument("--timeout", type=float, default=120.0)
     return asyncio.run(main_async(parser.parse_args()))
 

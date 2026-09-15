@@ -113,7 +113,9 @@ class Restore:
         for key, value in arguments.items():
             shown = value
             if isinstance(value, dict):
-                shown = {k: ("***" if "pass" in k.lower() else v) for k, v in value.items()}
+                shown = {
+                    k: ("***" if "pass" in k.lower() else v) for k, v in value.items()
+                }
             self.say(f"     {key} = {shown!r}")
         response = await asyncio.wait_for(
             session.call_tool(tool, arguments), timeout=self.args.timeout
@@ -140,7 +142,11 @@ class Restore:
         stats from inside a container.
         """
         body = await self.call(session, "admin_bucket_list", {})
-        buckets = body.get("_list") if isinstance(body.get("_list"), list) else body.get("buckets")
+        buckets = (
+            body.get("_list")
+            if isinstance(body.get("_list"), list)
+            else body.get("buckets")
+        )
         if not isinstance(buckets, list):
             return None
         for entry in buckets:
@@ -159,7 +165,9 @@ class Restore:
 
         self.say("=" * 70)
         self.say(f"restore cycle   repository={self.args.repository}  bucket={bucket}")
-        self.say(f"mode            {'PERFORM (OVERWRITES DATA)' if self.performed else 'DRY RUN (preview)'}")
+        self.say(
+            f"mode            {'PERFORM (OVERWRITES DATA)' if self.performed else 'DRY RUN (preview)'}"
+        )
         self.say("=" * 70)
 
         if bucket not in allowed:
@@ -179,14 +187,20 @@ class Restore:
             {"repository_id": self.args.repository, "state": self.args.state},
         )
         backups = info.get("backups") or []
-        self.check(bool(backups), "the repository holds at least one backup",
-                   f"{len(backups)} found")
+        self.check(
+            bool(backups),
+            "the repository holds at least one backup",
+            f"{len(backups)} found",
+        )
         if not backups:
             self.say("\n   Run scripts/backup_cycle_test.py --perform first.")
             return
         complete = [b for b in backups if b.get("complete")]
-        self.check(bool(complete), "at least one backup is COMPLETE",
-                   "an in-flight backup is not a restore source")
+        self.check(
+            bool(complete),
+            "at least one backup is COMPLETE",
+            "an in-flight backup is not a restore source",
+        )
 
         before = await self.count(session, bucket)
         self.say(f"\n   documents before: {before}")
@@ -215,8 +229,11 @@ class Restore:
         unconfirmed = await self.call(
             session,
             "admin_backup_restore_run",
-            {"repository_id": self.args.repository, "state": self.args.state,
-             "target": target},
+            {
+                "repository_id": self.args.repository,
+                "state": self.args.state,
+                "target": target,
+            },
         )
         self.check(
             unconfirmed.get("requires_confirmation") is True
@@ -228,8 +245,12 @@ class Restore:
         result = await self.call(
             session,
             "admin_backup_restore_run",
-            {"repository_id": self.args.repository, "state": self.args.state,
-             "target": target, "confirm": True},
+            {
+                "repository_id": self.args.repository,
+                "state": self.args.state,
+                "target": target,
+                "confirm": True,
+            },
         )
 
         if not self.performed:
@@ -238,29 +259,44 @@ class Restore:
                 "restore is previewed, not executed",
             )
             self.say("\nDry run complete. Nothing was restored.")
-            self.say("The body above is what --perform would send. Read it before running it.")
+            self.say(
+                "The body above is what --perform would send. Read it before running it."
+            )
             return
 
         if result.get(ERROR_MARKER) is True:
-            self.say("\n   The restore was REJECTED. That is the finding, not a failure:")
+            self.say(
+                "\n   The restore was REJECTED. That is the finding, not a failure:"
+            )
             self.say("   the message names what the service wanted, and the tool's own")
-            self.say("   schema describes a different shape (filter_keys, mappings...).")
-            self.say("   Record the real shape in handlers/backup.py and the body stops")
+            self.say(
+                "   schema describes a different shape (filter_keys, mappings...)."
+            )
+            self.say(
+                "   Record the real shape in handlers/backup.py and the body stops"
+            )
             self.say("   being a guess.")
-            self.check(False, "the service accepted the restore body",
-                       json.dumps(result)[:400])
+            self.check(
+                False, "the service accepted the restore body", json.dumps(result)[:400]
+            )
             return
 
-        self.check(True, "the service accepted the restore body",
-                   "the flat shape from the reference is correct, by observation")
+        self.check(
+            True,
+            "the service accepted the restore body",
+            "the flat shape from the reference is correct, by observation",
+        )
 
         self.say("\n   A restore is ASYNCHRONOUS. Counting again proves it landed;")
         self.say("   an unchanged count immediately after means in flight, not failed.")
         after = await self.count(session, bucket)
         self.say(f"   documents after: {after}")
         if before is not None and after is not None:
-            self.check(after >= before, "the document count did not go backwards",
-                       f"{before} -> {after}")
+            self.check(
+                after >= before,
+                "the document count did not go backwards",
+                f"{before} -> {after}",
+            )
 
 
 async def main_async(args) -> int:
@@ -296,12 +332,22 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--state", default="active")
     parser.add_argument("--bucket", default="mcptest")
-    parser.add_argument("--allow", nargs="*", default=list(DEFAULT_ALLOWED),
-                        help="buckets a restore may target")
-    parser.add_argument("--cluster-url", default="http://127.0.0.1:8091",
-                        help="the TARGET cluster, as the BACKUP SERVICE sees it")
-    parser.add_argument("--map-data", default=None,
-                        help="remap on restore, e.g. mcptest=mcptest_restored")
+    parser.add_argument(
+        "--allow",
+        nargs="*",
+        default=list(DEFAULT_ALLOWED),
+        help="buckets a restore may target",
+    )
+    parser.add_argument(
+        "--cluster-url",
+        default="http://127.0.0.1:8091",
+        help="the TARGET cluster, as the BACKUP SERVICE sees it",
+    )
+    parser.add_argument(
+        "--map-data",
+        default=None,
+        help="remap on restore, e.g. mcptest=mcptest_restored",
+    )
     parser.add_argument("--perform", dest="dry_run", action="store_false", default=True)
     parser.add_argument("--timeout", type=float, default=180.0)
     return asyncio.run(main_async(parser.parse_args()))

@@ -131,6 +131,9 @@ from handlers.fixture_core import (
     resolve_under_root as _resolve_under_root,
 )
 from handlers.fixture_core import (
+    index_target as _index_target,
+)
+from handlers.fixture_core import (
     rewrite_index_keyspace as _rewrite_index_keyspace,
 )
 from handlers.fixture_core import (
@@ -966,6 +969,52 @@ def _export(args: dict) -> list[TextContent]:
             )
         documents_ok = True
 
+    # ── GSI definitions are scoped to what this fixture CARRIES ──────────
+    #
+    # capella_query_index_definitions_list takes bucket, scope and collection as
+    # query parameters, and this export sends only `bucket`. So a fixture
+    # covering ONE collection came back carrying every index in the bucket.
+    #
+    # MEASURED 2026-09-14 on a live Capella round trip: a fixture of
+    # travel-sample.inventory.airline recorded 4 GSI definitions, of which the
+    # import applied `sg_roles_x1` and `sg_users_x1` -- Sync Gateway indexes on
+    # a collection the fixture holds no documents for. On that cluster they
+    # already existed and the import said so; against a FRESH target it would
+    # have built them, and a fixture that silently creates indexes for
+    # collections it does not carry is doing work nobody asked for on somebody
+    # else's cluster.
+    #
+    # The Enterprise Edition exporter had the same defect and scopes its
+    # definitions the same way (handlers/fixture.py `_index_definitions`).
+    #
+    # Filtering on the rendered statement rather than on per-definition bucket,
+    # scope and collection fields is deliberate: the statement is the one part
+    # of this payload whose shape is already relied on -- the import reads it --
+    # whereas the field spellings have not been read from the provider's
+    # generated client, and CLAUDE.md section 1.5 puts that source above a guess.
+    # Narrowing the request itself is the better fix and needs that source.
+    carried_keyspaces = {str(f["keyspace"]) for f in data_files}
+    definitions_skipped: list[str] = []
+    if carried_keyspaces:
+        kept: list[Any] = []
+        for definition in indexes:
+            statement = str((definition or {}).get("definition") or "")
+            target = _index_target(statement) if statement else None
+            if target is not None and "." not in target:
+                # A two-part `ON \`bucket\`` form targets that bucket's default
+                # collection. Spelling it out makes it comparable.
+                target = f"{target}._default._default"
+            if target is None or target in carried_keyspaces:
+                # An unparseable or absent target is KEPT, not dropped. Dropping
+                # on "I could not tell" would silently lose a real index, which
+                # is the more expensive mistake of the two.
+                kept.append(definition)
+                continue
+            name = str((definition or {}).get("indexName")
+                       or (definition or {}).get("name") or "?")
+            definitions_skipped.append(f"{name} on {target}")
+        indexes = kept
+
     finished = datetime.now(timezone.utc)
     manifest = {
         "schema": MANIFEST_SCHEMA,
@@ -1059,6 +1108,17 @@ def _export(args: dict) -> list[TextContent]:
         "data_files": len(data_files),
         "fidelity": manifest["fidelity"],
     }
+    if definitions_skipped:
+        # NOT a warning. `warnings` feeds fidelity.gsi_definitions, and a
+        # correctly scoped export is not a fidelity loss -- reporting it there
+        # would turn a working filter into a claim that the definitions are
+        # untrustworthy.
+        result["gsi_definitions_skipped"] = definitions_skipped
+        result["gsi_definitions_skipped_note"] = (
+            "Recorded on the cluster but outside the keyspaces this fixture "
+            "carries, so they were not written to the manifest. Export those "
+            "keyspaces too if you want their indexes."
+        )
     if warnings:
         result["warnings"] = warnings
     return ok(result)

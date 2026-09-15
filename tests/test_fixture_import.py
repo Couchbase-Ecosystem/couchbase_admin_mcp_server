@@ -440,7 +440,8 @@ def test_a_recorded_index_that_is_deferred_names_its_keyspace_in_the_problem(
 
 
 def _stub_export_cluster(monkeypatch, *, collections: list[str],
-                         rows_by_keyspace: dict[str, list[dict]]):
+                         rows_by_keyspace: dict[str, list[dict]],
+                         definitions: list[dict] | None = None):
     """Stand a cluster up in memory: one bucket, one scope, named collections."""
     from handlers.capella import environment as env
 
@@ -460,7 +461,7 @@ def _stub_export_cluster(monkeypatch, *, collections: list[str],
 
     monkeypatch.setattr(env, "_invoke", _invoke)
     monkeypatch.setattr(fixture, "capella_request",
-                        lambda *a, **k: {"definitions": []})
+                        lambda *a, **k: {"definitions": definitions or []})
 
     def _query(base, credential, statement, parameters=None, timeout=None):
         for keyspace, rows in rows_by_keyspace.items():
@@ -889,3 +890,82 @@ def test_an_unmapped_keyspace_still_uses_its_recorded_names(monkeypatch, tmp_pat
     structure = next(s for s in payload["steps"] if s["step"] == "structure")
     assert "b.untouched.hotel" in structure["collections_created"]
     assert not payload["problems"]
+
+def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(
+    tmp_path, monkeypatch
+):
+    """MEASURED 2026-09-14 on a live Capella round trip.
+
+    capella_query_index_definitions_list takes bucket, scope and collection as
+    query parameters and the export sends only `bucket`, so a fixture covering
+    ONE collection came back carrying every index in the bucket. The import
+    then applied `sg_roles_x1` and `sg_users_x1` -- Sync Gateway indexes on a
+    collection the fixture holds no documents for. They already existed on that
+    cluster so it reported `existing`; against a FRESH target it would have
+    built them.
+
+    The bucket-level `ON \`b\`` form is in here on purpose: it names the
+    bucket's default collection, which a fixture of b.s.airline does not carry,
+    and a filter that compared strings without expanding it would keep it.
+    """
+    _stub_export_cluster(
+        monkeypatch,
+        collections=["airline", "hotel"],
+        rows_by_keyspace={"b.s.airline": [{"id": "airline_10", "x": 1}]},
+        definitions=[
+            {"indexName": "ix_airline",
+             "definition": "CREATE INDEX `ix_airline` ON `b`.`s`.`airline`(`x`)"},
+            {"indexName": "sg_users_x1",
+             "definition": "CREATE INDEX `sg_users_x1` ON `b`.`s`.`hotel`(`y`)"},
+            {"indexName": "ix_bucket_default",
+             "definition": "CREATE PRIMARY INDEX `ix_bucket_default` ON `b`"},
+        ],
+    )
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.airline"],
+    })
+    payload = json.loads("".join(block.text for block in result))
+
+    assert payload["gsi_definitions"] == 1, (
+        "only the index on the carried keyspace belongs in this fixture"
+    )
+    skipped = payload["gsi_definitions_skipped"]
+    assert any("sg_users_x1" in entry for entry in skipped)
+    assert any("ix_bucket_default" in entry for entry in skipped)
+
+    manifest = json.loads(
+        (tmp_path / "fx" / "manifest.json").read_text(encoding="utf-8")
+    )
+    recorded = [d["indexName"] for d in manifest["gsi_definitions"]]
+    assert recorded == ["ix_airline"]
+
+    # Scoping correctly is NOT a fidelity loss, and saying so through `warnings`
+    # would flip fidelity.gsi_definitions to false.
+    assert payload["fidelity"]["gsi_definitions"] is True
+    assert "warnings" not in payload
+
+
+def test_a_definition_whose_target_cannot_be_read_is_kept_not_dropped(
+    tmp_path, monkeypatch
+):
+    """Dropping on "I could not tell" silently loses a real index, which is the
+    more expensive of the two mistakes. The filter keeps anything it cannot
+    place and lets the import report it."""
+    _stub_export_cluster(
+        monkeypatch,
+        collections=["airline"],
+        rows_by_keyspace={"b.s.airline": [{"id": "airline_10", "x": 1}]},
+        definitions=[
+            {"indexName": "ix_unparseable", "definition": "CREATE INDEX no_on_clause"},
+        ],
+    )
+    result = fixture._export({
+        "fixture_id": "fx", "fixture_path": str(tmp_path / "fx"),
+        "cluster_id": "c", "organization_id": "o", "project_id": "p",
+        "include_data": True, "keyspaces": ["b.s.airline"],
+    })
+    payload = json.loads("".join(block.text for block in result))
+    assert payload["gsi_definitions"] == 1
+    assert "gsi_definitions_skipped" not in payload

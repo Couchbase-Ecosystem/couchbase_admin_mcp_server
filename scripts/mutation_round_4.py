@@ -18,8 +18,52 @@ class MutationTimeoutError(RuntimeError):
 # harness works from a checkout anywhere.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 T3 = "tests/test_round3_hardening.py"
+TLIST = "tests/test_tool_listing_is_scoped.py"
 
 MUTATIONS = [
+    # ── The tool listing is scoped to the principal ─────────────────────────
+    #
+    # Found against a real Keycloak reader token on 2026-09-15, not by reading the
+    # code: 146 tools offered to a principal holding only the read scope. These
+    # three are the ways the fix can be quietly undone.
+    (
+        "listing: every principal gets the whole catalog again",
+        "server.py",
+        """    return [tool for tool in _TOOLS if denial_for(tool, claims) is None]""",
+        """    return _TOOLS""",
+        TLIST,
+    ),
+    (
+        "listing: filtered by a SECOND classifier instead of the gate",
+        "server.py",
+        """    return [tool for tool in _TOOLS if denial_for(tool, claims) is None]""",
+        """    return [tool for tool in _TOOLS if scope_gate_is_read_side(tool)]""",
+        TLIST,
+    ),
+    (
+        "listing: an unauthenticated caller gets the catalog rather than nothing",
+        "server.py",
+        """        audit.emit_auth_failure(
+            reason="list_tools with no validated token",
+            source=request_auth.request_source(),
+        )
+        return []""",
+        """        audit.emit_auth_failure(
+            reason="list_tools with no validated token",
+            source=request_auth.request_source(),
+        )
+        return _TOOLS""",
+        TLIST,
+    ),
+    (
+        "gate: check_scope stops agreeing with the listing on write tools",
+        "auth/scope_gate.py",
+        """    return denial_for(tool, current_claims())""",
+        """    if not _is_read_side(tool):
+        return None
+    return denial_for(tool, current_claims())""",
+        TLIST,
+    ),
     # ── The HIGH bypass in my own JWKS fix ──────────────────────────────────
     (
         "JWKS: kid-less token skips the gate (the 101-fetch bypass)",

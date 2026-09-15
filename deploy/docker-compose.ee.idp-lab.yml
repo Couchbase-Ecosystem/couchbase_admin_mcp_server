@@ -1,0 +1,77 @@
+# THE ENTERPRISE PROFILE, IN THE SHIPPED IMAGE, AGAINST A REAL IdP.
+#
+#   docker compose --env-file deploy/.env.ee `
+#       -f deploy/docker-compose.ee.yml `
+#       -f deploy/docker-compose.ee.idp-lab.yml up -d
+#
+# This is the opposite file to docker-compose.ee.lab.yml. That one turns the
+# authorization model OFF to reach the transport; this one turns it fully ON and
+# is the only artifact in the repository that exercises it in the container:
+# scope gate, automation mode, the hard ceiling, and the audit principal, against
+# tokens a real Keycloak actually minted.
+#
+# Requires docker-compose.keycloak.yml to be up first, and the hosts entry it
+# describes.
+#
+# WHAT IS STILL A LAB SHORTCUT
+# ----------------------------
+#   * The listener is cleartext, acknowledged below, published to loopback only.
+#   * Client secrets live in a realm file in git. Lab realm, lab cluster.
+#   * SSL_CERT_FILE below REPLACES Python's trust store for this container, so it
+#     trusts the lab CA and nothing else. Fine here -- this container talks to
+#     ns_server and to Keycloak. Do not carry this line into anything that must
+#     also reach a public endpoint.
+
+services:
+  mcp-ee:
+    environment:
+      # DECLARED here as well as in the base file. The base declares it and this
+      # override does not change it -- but tests/test_one_container_one_surface.py
+      # reads each shipped compose file on its own, as an operator might, and a
+      # declaration that only exists in a file you have to remember to also pass
+      # is not a declaration.
+      CB_ADMIN_REQUIRE_DEPLOYMENT: self_managed
+      CB_DEPLOYMENT: self_managed
+
+      CB_ADMIN_PROFILE: enterprise
+      CB_ADMIN_TRANSPORT: http
+      CB_ADMIN_HOST: 0.0.0.0
+
+      # Every request must carry a bearer token. This is the default in the base
+      # file; naming it here makes the intent of this override explicit.
+      CB_ADMIN_HTTP_REQUIRE_AUTH: "true"
+
+      # Byte-identical to the realm's `issuer`. See the keycloak compose file.
+      OAUTH_ISSUER: https://keycloak:8443/realms/mcp
+
+      # Not optional under REQUIRE_AUTH: without it every validly-signed token
+      # from the realm is accepted, including one minted for another client. The
+      # realm's `cb-admin-mcp-stranger` client exists to prove that denial.
+      OAUTH_AUDIENCE: cb-admin-mcp
+
+      # Named explicitly rather than defaulted, because the realm's role names
+      # have to match these exactly and a silent default is how they drift.
+      CB_ADMIN_SCOPE_READ: couchbase-admin-mcp:read
+      CB_ADMIN_SCOPE_WRITE: couchbase-admin-mcp:write
+      CB_ADMIN_SCOPE_AUTOMATION: couchbase-admin-mcp:automation
+
+      # Cleartext listener, loopback-published. Same acknowledgement, same
+      # reasoning, as docker-compose.ee.lab.yml.
+      CB_ADMIN_TLS_TERMINATED_EXTERNALLY: "1"
+
+      # Write tools must be LOADED for the gate to have anything to deny. With
+      # read-only mode on, a writer token failing is indistinguishable from the
+      # tool not existing -- which is a pass that proves nothing.
+      CB_ADMIN_READ_ONLY_MODE: "false"
+
+      # Trust the lab CA so the JWKS fetch over https://keycloak:8443 succeeds.
+      # REQUESTS_CA_BUNDLE covers requests; SSL_CERT_FILE covers urllib, which is
+      # what PyJWKClient uses. Both are needed.
+      REQUESTS_CA_BUNDLE: /etc/ssl/lab/keycloak-ca.pem
+      SSL_CERT_FILE: /etc/ssl/lab/keycloak-ca.pem
+
+    volumes:
+      - ./keycloak/tls/keycloak.crt.pem:/etc/ssl/lab/keycloak-ca.pem:ro
+
+    ports: !override
+      - "127.0.0.1:${MCP_EE_PORT:-8000}:8000"

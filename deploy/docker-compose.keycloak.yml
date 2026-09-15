@@ -1,0 +1,95 @@
+# A LAB IDENTITY PROVIDER. Not a deployment shape.
+#
+#   docker compose --env-file deploy/.env.ee `
+#       -f deploy/docker-compose.keycloak.yml up -d
+#
+# WHY THIS EXISTS
+# ---------------
+# The authorization model -- scope gate, automation mode, hard ceiling, audit
+# principal -- has never been watched working against a real IdP in the shipped
+# container. tests/test_http_transport_live.py mints its own tokens against a
+# uvicorn it starts itself: it proves the code, not the image, and it proves
+# nothing about the claim shapes a real Keycloak emits.
+#
+# WHY TLS, WHEN EVERY OTHER LAB LISTENER HERE IS CLEARTEXT
+# --------------------------------------------------------
+# Not for symmetry. profile_config.py refuses to start the enterprise profile
+# when OAUTH_ISSUER is http:// at anything other than localhost/127.0.0.1/::1,
+# because the JWKS fetched from that origin is the only thing establishing that
+# a token came from your IdP. The MCP container reaches this one by container
+# name over the docker network -- `keycloak` is not loopback -- so http:// is
+# refused, correctly. Hence a self-signed cert and https://keycloak:8443.
+#
+# That refusal is worth noticing: it is the enterprise profile doing exactly what
+# it says on a configuration a person would otherwise have reached for first.
+#
+# ISSUER IDENTITY IS THE WHOLE TRICK
+# ----------------------------------
+# The `iss` claim must be byte-identical to OAUTH_ISSUER on the server. Keycloak
+# derives it from KC_HOSTNAME, so the URL you fetch the token from and the URL
+# the MCP container validates against must be the same string. That is why
+# KC_HOSTNAME is pinned below, and why the host needs
+#
+#   127.0.0.1  keycloak
+#
+# in C:\Windows\System32\drivers\etc\hosts (Notepad as Administrator). Without
+# it, tokens fetched from PowerShell via localhost carry a different issuer --
+# or Keycloak refuses the request outright -- and every call is a 401 that looks
+# like a scope problem and is not.
+#
+# VERIFY IT RATHER THAN BELIEVING THIS COMMENT. After `up`:
+#
+#   (Invoke-RestMethod https://keycloak:8443/realms/mcp/.well-known/openid-configuration `
+#       -SkipCertificateCheck).issuer
+#
+# must print exactly  https://keycloak:8443/realms/mcp .
+
+services:
+  keycloak:
+    # NOT an MCP surface. This starts an identity provider, not this server, so
+    # there is no control plane for it to declare and
+    # tests/test_one_container_one_surface.py has nothing to ask it for.
+    #
+    # Declared rather than inferred, on purpose. That test could have exempted
+    # this service by noticing the third-party image or the absence of CB_ADMIN_*
+    # variables, and inference is the precise failure mode the test exists to
+    # prevent: a real MCP service that was misconfigured enough would exempt
+    # itself. This key has to be typed, and it shows up in a diff.
+    x-not-an-mcp-surface: true
+    image: quay.io/keycloak/keycloak:26.7.3
+    container_name: cb-mcp-keycloak
+    restart: unless-stopped
+
+    # --import-realm reads /opt/keycloak/data/import on FIRST START ONLY. Editing
+    # the realm file later changes nothing until you `down -v` this stack.
+    command: ["start-dev", "--import-realm"]
+
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set a password for the lab Keycloak admin console}
+
+      # Frontend URL -> the iss claim and every endpoint in the discovery doc.
+      KC_HOSTNAME: https://keycloak:8443
+
+      KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/tls/keycloak.crt.pem
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/tls/keycloak.key.pem
+
+    volumes:
+      - ./keycloak/realm-cb-admin-mcp.json:/opt/keycloak/data/import/realm.json:ro
+      - ./keycloak/tls:/opt/keycloak/conf/tls:ro
+
+    # LOOPBACK ONLY, same reasoning as the lab override: a cleartext-adjacent
+    # admin console with a known password does not belong on the office network.
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HTTPS_PORT:-8443}:8443"
+
+    # The SAME external network the MCP container is on, so `keycloak` resolves
+    # for the JWKS fetch. This puts an IdP on the cluster's network, which is a
+    # lab convenience and not a pattern to copy.
+    networks:
+      - cluster
+
+networks:
+  cluster:
+    external: true
+    name: ${COUCHBASE_NETWORK:?set to the docker network your Couchbase containers are on}

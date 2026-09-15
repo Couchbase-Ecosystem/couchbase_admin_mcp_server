@@ -98,6 +98,7 @@ from auth import request_auth
 from auth.scope_gate import (
     check_scope,
     current_claims,
+    denial_for,
     principal_of,
     session_has_automation_scope,
 )
@@ -362,16 +363,43 @@ async def list_tools() -> list[Tool]:
     Resolved off the event loop for the same reason the dispatch is: validation can
     reach the IdP.
     """
-    if _auth_required_for_listing():
-        claims = await asyncio.to_thread(current_claims)
-        if claims is None:
-            _log.warning("tool listing refused: no validated token")
-            audit.emit_auth_failure(
-                reason="list_tools with no validated token",
-                source=request_auth.request_source(),
-            )
-            return []
-    return _TOOLS
+    if not _auth_required_for_listing():
+        return _TOOLS
+
+    claims = await asyncio.to_thread(current_claims)
+    if claims is None:
+        _log.warning("tool listing refused: no validated token")
+        audit.emit_auth_failure(
+            reason="list_tools with no validated token",
+            source=request_auth.request_source(),
+        )
+        return []
+
+    # SCOPED TO THE PRINCIPAL, through the same function that decides the call.
+    #
+    # Authentication was already enforced above; this is authorization, and until
+    # now the listing had none. A validated reader token was handed all 146 loaded
+    # tools -- every write tool, every argument schema -- and found out only at
+    # invocation that it held none of them. MEASURED 2026-09-15 against a real
+    # Keycloak reader token.
+    #
+    # Nothing escalated: the gate refused the call. What leaked was the deployment's
+    # posture -- which tools are loaded, that writes are enabled at all, what
+    # arguments they take -- to whoever holds the weakest credential in the tenant,
+    # which is also the credential most widely handed out. Least privilege says a
+    # principal is not given a catalog it cannot use.
+    #
+    # denial_for() rather than a filter written here: a second classifier would
+    # eventually disagree with the gate, and the disagreement has two shapes. A tool
+    # advertised then refused is merely confusing. A tool OMITTED from the listing
+    # that the gate would still allow by name is a control that looks enforced and
+    # is not -- the listing is not a security boundary, the gate is, and the listing
+    # must never be mistaken for one. Sharing the function makes them one decision.
+    #
+    # Claims are resolved once, above, and passed in: resolution can reach the IdP
+    # on a cache miss, which is why it happens off the event loop, and doing that
+    # per tool across the catalog would be both slow and pointless.
+    return [tool for tool in _TOOLS if denial_for(tool, claims) is None]
 
 
 def _auth_required_for_listing() -> bool:

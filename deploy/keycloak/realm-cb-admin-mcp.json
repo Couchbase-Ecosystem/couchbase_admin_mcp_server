@@ -1,0 +1,187 @@
+{
+  "realm": "mcp",
+  "enabled": true,
+  "displayName": "CB Admin MCP lab realm",
+  "sslRequired": "none",
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      {
+        "name": "couchbase-admin-mcp:read",
+        "description": "Read-side tools"
+      },
+      {
+        "name": "couchbase-admin-mcp:write",
+        "description": "Write-side tools"
+      },
+      {
+        "name": "couchbase-admin-mcp:automation",
+        "description": "Skip per-call confirmation. Never grants write on its own."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "cb-admin-mcp-reader",
+      "name": "MCP lab: read-only principal",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "reader-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "cb-admin-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "cb-admin-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "cb-admin-mcp-writer",
+      "name": "MCP lab: write principal, NO automation",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "writer-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "cb-admin-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "cb-admin-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "cb-admin-mcp-automation",
+      "name": "MCP lab: unattended principal, write + automation",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "automation-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "cb-admin-mcp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "cb-admin-mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "cb-admin-mcp-stranger",
+      "name": "MCP lab: validly-signed token with NO grant and NO audience",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "stranger-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": true
+    },
+    {
+      "clientId": "cb-admin-mcp-otherapp",
+      "name": "MCP lab: well-formed token for a DIFFERENT audience",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "otherapp-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "otherapp-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "some-other-app",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-cb-admin-mcp-reader",
+      "enabled": true,
+      "serviceAccountClientId": "cb-admin-mcp-reader",
+      "realmRoles": [
+        "couchbase-admin-mcp:read"
+      ]
+    },
+    {
+      "username": "service-account-cb-admin-mcp-writer",
+      "enabled": true,
+      "serviceAccountClientId": "cb-admin-mcp-writer",
+      "realmRoles": [
+        "couchbase-admin-mcp:write"
+      ]
+    },
+    {
+      "username": "service-account-cb-admin-mcp-automation",
+      "enabled": true,
+      "serviceAccountClientId": "cb-admin-mcp-automation",
+      "realmRoles": [
+        "couchbase-admin-mcp:write",
+        "couchbase-admin-mcp:automation"
+      ]
+    },
+    {
+      "username": "service-account-cb-admin-mcp-stranger",
+      "enabled": true,
+      "serviceAccountClientId": "cb-admin-mcp-stranger",
+      "realmRoles": []
+    },
+    {
+      "username": "service-account-cb-admin-mcp-otherapp",
+      "enabled": true,
+      "serviceAccountClientId": "cb-admin-mcp-otherapp",
+      "realmRoles": [
+        "couchbase-admin-mcp:write"
+      ]
+    }
+  ]
+}

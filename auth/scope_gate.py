@@ -284,8 +284,49 @@ def check_scope(tool: Any) -> str | None:
 
     Returns None when allowed (including the no-token no-op case), or a
     human-readable denial message when the token lacks the required scope.
+
+    Thin wrapper over denial_for() so that the CALL path and the LISTING path
+    reach the same verdict through the same code. See denial_for.
     """
-    claims = current_claims()
+    return denial_for(tool, current_claims())
+
+
+def denial_for(tool: Any, claims: dict[str, Any] | None) -> str | None:
+    """The authorization decision for `tool` under `claims`, as a pure function.
+
+    WHY THIS IS SEPARATE FROM check_scope
+    ─────────────────────────────────────
+    The tool LISTING needs the same verdict as the tool CALL, and it needs it for
+    146 tools against claims it has already resolved. Two things follow.
+
+    First, correctness: server.py's list_tools() must not advertise a tool that
+    calling would refuse. A read-only principal was offered the entire surface --
+    every write tool, every argument schema -- and only discovered at call time
+    that it held none of them. MEASURED 2026-09-15 against a real Keycloak
+    reader token: 146 tools listed, admin_scope_create among them, denied on
+    invocation. Least privilege says a principal is not handed a catalog it
+    cannot use, and the deployment's posture (which tools loaded, whether writes
+    are enabled at all) is not something an under-scoped caller should be able to
+    read off the listing.
+
+    A separate filter in server.py would have been the obvious fix and the wrong
+    one: it would be a SECOND classifier, and the first thing this module's
+    docstring promises is that there is only one. Two predicates agree until they
+    do not, and the disagreement surfaces as either a tool advertised then
+    refused, or -- far worse -- a tool omitted from the listing that a caller can
+    still invoke by name. Sharing this function makes the listing and the gate
+    the same decision by construction.
+
+    Second, cost: claims are resolved ONCE by the caller and passed in. check_scope
+    resolves per call, which is right for a single dispatch and wrong for a loop
+    over the catalog -- resolution can reach the IdP on a cache miss, which is
+    why list_tools already resolves off the event loop.
+
+    `claims` is None for stdio, for HTTP without OAuth configured, and for a token
+    that failed validation. The first two are no-ops; the third is a refusal when
+    the operator asked for enforcement. That distinction is made below, not by the
+    caller.
+    """
     if claims is None:
         # FAIL CLOSED when the operator asked for enforcement.
         #

@@ -386,9 +386,37 @@ skipped on the indexes that most need it.
 
 The lesson is not "the round trip works". It is that **a clean result on the
 thing you measured says nothing about the thing beside it**, and the index step
-was beside it. Run the round trip against a FRESH target bucket before treating
-the index path as exercised: in that run every recorded index already existed,
-so the import created none of them.
+was beside it.
+
+**The fresh-target run is DONE, 2026-09-14, and it is clean.** This section used
+to say the index path was unexercised because every recorded index already
+existed. `scratch.inventory.airline`, a bucket created for the purpose, closed
+that: 187 documents out and back identical, and the import reported
+`created: ["def_inventory_airline_primary"]` with no failures -- index creation
+running for the first time rather than reporting `already exists`.
+
+What that run does NOT cover, stated so the next reader does not take it wider
+than it goes: the source collection carried exactly one GSI definition, a
+primary index, and `fidelity.search_definitions` is false, so the exporter never
+captured a Search index and the FTS-rendered-as-CREATE-INDEX fix was not
+exercised by it. A collection with a real secondary index and a search index
+would test more.
+
+**Capella round-tripped clean the same day**, 188 documents, and the `META().id`
+fix is confirmed by reading the fixture rather than by the comparison alone: the
+recorded key is `airline_10` with the document's own `id: 10` nested under
+`doc`, where it cannot reach the alias. That distinction matters, because a
+round trip cannot catch a defect symmetric across both exports -- if both had
+recorded `10`, `identical: true` would still hold.
+
+**It also found a real defect**, which is the point of running it. The import's
+structure step remapped only the bucket while the document step remapped the
+whole keyspace, so a same-bucket `keyspace_map` created nothing and every
+document write answered 404 ScopeNotFound. Fixed. A second finding, the
+exporter carrying every index in the bucket rather than the fixture's own
+keyspaces, is fixed too. Both are the Capella twins of defects already fixed on
+the EE side, and both hid behind a round trip that mapped into a DIFFERENT
+bucket -- which is the shape that happens to work.
 
 ### Capella write bodies: MOSTLY PROVEN NOW, and the failure mode has changed
 

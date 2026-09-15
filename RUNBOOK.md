@@ -592,8 +592,8 @@ uv run python scripts\dump_tool.py admin_scope_delete `
 
 | Plane | Round trip run? |
 |---|---|
-| Capella | **Yes** — and it is what found the key bug. The fix is in; a confirming re-run is outstanding. |
-| Enterprise Edition | **Yes, clean.** 187 documents out and back, keys, bodies and expiries identical. |
+| Capella | **Yes, clean on the confirming re-run.** 188 documents out and back, keys, bodies and expiries identical. The earlier run is what found the key bug; this one confirms the fix. |
+| Enterprise Edition | **Yes, clean**, twice — once within one bucket, and once into a FRESH bucket, which is the run that finally exercised index creation. 187 documents each time. |
 
 The EE run passed on its first attempt **and still found four defects in the
 index step**, which the document comparison does not cover: a Search index
@@ -602,17 +602,46 @@ than the fixture's keyspaces, a `keyspace_map` that rewrote only the bucket, and
 `defer_build` skipped on exactly the indexes that need it. All four are fixed,
 and `docs/FIXTURE_DESIGN.md` records each with the run that found it.
 
-**What is still not established**: the index step against a FRESH target. That
-round trip mapped within one bucket where every recorded index already existed,
-so the import reported `already exists` and created nothing. Run one into a
-second bucket to exercise it:
+**The index step against a FRESH target is now established**, 2026-09-14. The
+earlier run mapped within one bucket where every recorded index already existed,
+so the import created nothing and the path went unexercised. This one created
+`def_inventory_airline_primary` with no failures:
 
 ```powershell
+uv run python scripts\dump_tool.py admin_bucket_create `
+    -a name=scratch -a ramQuota=256 -a confirm=true --write --perform
+
 uv run python scripts\fixture_round_trip.py --plane ee `
     --keyspace travel-sample.inventory.airline `
     --scratch  scratch.inventory.airline `
     --work     C:\Work\Development\roundtrip-ee-2 --perform
 ```
 
-That needs the `scratch` bucket to exist first — the importer will not create
-one, by design.
+The `scratch` bucket has to exist first — the importer will not create one, by
+design — and `confirm=true` is not optional on the create, because the server
+treats a destructive operation as two-step and `--perform` does not satisfy that
+gate.
+
+**What that run still does not cover.** The source collection carried one GSI
+definition, a primary index, and the exporter does not capture Search
+definitions at all (`fidelity.search_definitions` is false). So the
+FTS-row-rendered-as-`CREATE INDEX` fix was not exercised by it. A source
+collection with a real secondary index, and a cluster with a Search service,
+would test more — of the two Capella clusters only Bride-of-Frankenstein has one.
+
+### The environment is four variables, and they die with the window
+
+Every failure in the 2026-09-14 session that looked like a tool defect was a
+variable missing from the shell:
+
+| Variable | What its absence looks like |
+|---|---|
+| `CB_DEPLOYMENT` | `'admin_bucket_create' is not advertised in this posture` — the mode inferred `capella` and unloaded every `admin_*` tool |
+| `CB_PASSWORD` | `HTTP 401 on GET /pools/default/buckets` — pinning the deployment does not fix which credential it uses. `deploy/.env.ee` holds the real pair |
+| `CB_BUCKET` | `BucketNotFoundException` naming the keyspace you asked for, raised while opening the bucket named by `CB_BUCKET`, which defaults to `default` |
+| `CAPELLA_ALLOWED_PROJECTS` | `Refused by guardrail policy ... no defined sandbox` — fail-closed, working as intended |
+
+`CB_DEPLOYMENT` pins which tools load. It says nothing about which credentials
+they use, and those are two separate failure modes that look identical from the
+prompt. Set the whole set together, in one script, rather than one at a time as
+each refusal arrives.

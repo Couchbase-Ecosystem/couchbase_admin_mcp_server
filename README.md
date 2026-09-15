@@ -303,15 +303,35 @@ listing through `auth.scope_gate.denial_for()`, the same function the call path
 uses, so the two cannot drift; `tests/test_tool_listing_is_scoped.py` and four
 entries in `scripts/mutation_round_4.py` hold it in place.
 
-**What this still does not establish.** The server under test ran from the working
-tree on the host, not from the shipped container image, and the listener was
-cleartext on loopback. Container-plus-IdP over the docker network needs TLS on the
-IdP (`profile_config.py` refuses a non-loopback `http://` issuer, correctly) and is
-covered by `deploy/docker-compose.keycloak.yml` and
-`deploy/docker-compose.ee.idp-lab.yml`, which have **not** been run. Keycloak is
-also one provider: these results say nothing about where Entra, Okta or Auth0 put a
-grant in any particular tenant's configuration. The check for that is a decoded
-sample token from the tenant in question, not another synthetic realm.
+**Repeated in the shipped image, same day.** The run above used the working tree on
+the host. It was then repeated end to end against `cb-admin-mcp:ee` started by
+`deploy/docker-compose.ee.yml` + `deploy/docker-compose.ee.idp-lab.yml`, with
+Keycloak on the cluster's docker network per `deploy/docker-compose.keycloak.yml`:
+same refusals, same 70-tool listing, and the automation principal creating and
+deleting a scope on the cluster unattended. Both compose files ran for the first
+time in doing so.
+
+That path additionally exercises what the host run could not — the container
+resolving the IdP by name over the docker network and trusting a private CA for the
+JWKS fetch. It needs TLS on the IdP because `profile_config.py` refuses a
+non-loopback `http://` issuer, which is the guard behaving correctly on the
+configuration anyone would reach for first.
+
+Three things that run cost, all of them environmental rather than code:
+
+  * **`docker compose --env-file` does not win.** Compose resolves `${VAR}` from the
+    invoking shell FIRST, so a shell carrying `CB_CONNECTION_STRING` from an earlier
+    host run silently overrode `deploy/.env.ee`. The container pointed at its own
+    loopback and reported `Connection refused` — accurately, and misleadingly.
+  * **`--build` is not implied.** `up -d` reuses a stale image, which quietly
+    reproduced the pre-fix 146-tool listing until the image was rebuilt.
+  * **The IdP key needs mode 0644.** Keycloak runs as uid 1000 and fails with
+    `AccessDeniedException` on a key written 0600 by root.
+
+**What this still does not establish.** Keycloak is one provider. These results say
+nothing about where Entra, Okta or Auth0 put a grant in any particular tenant's
+configuration. The check for that is a decoded sample token from the tenant in
+question, not another synthetic realm.
 
 ### Per-environment policy
 

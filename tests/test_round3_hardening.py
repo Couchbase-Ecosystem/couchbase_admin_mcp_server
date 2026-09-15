@@ -830,10 +830,17 @@ def test_the_gui_configures_logging_in_its_own_process(monkeypatch):
             importlib.reload(sys.modules[name])
         else:
             importlib.import_module(name)
-    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
-    # time and that side effect is what these tests assert on, so it must genuinely
-    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
-    # file holds a long-lived reference to this module object.
+    # gui.gui_server is POPPED, not reloaded, so the module body genuinely
+    # re-executes. Popping it is safe -- unlike the shared policy modules, no other
+    # test file holds a long-lived reference to this module object.
+    #
+    # The posture check no longer runs at IMPORT (2026-09-15): importing this module
+    # could terminate the interpreter, which took an unrelated test down during
+    # collection under randomised order. It now runs in create_app(), with a
+    # before_request guard catching a launcher that skips the factory. These tests
+    # therefore call the factory rather than relying on an import side effect --
+    # which is also a stronger assertion, because it exercises the path an operator
+    # actually starts the console through.
     sys.modules.pop("gui.gui_server", None)
     import profile_config  # noqa: F401
 
@@ -878,19 +885,119 @@ def test_the_gui_refuses_to_start_on_an_unusable_audit_sink(tmp_path, monkeypatc
             importlib.reload(sys.modules[name])
         else:
             importlib.import_module(name)
-    # gui.gui_server is POPPED, not reloaded: its posture enforcement runs at IMPORT
-    # time and that side effect is what these tests assert on, so it must genuinely
-    # re-execute. Popping it is safe -- unlike the shared policy modules, no other test
-    # file holds a long-lived reference to this module object.
+    # gui.gui_server is POPPED, not reloaded, so the module body genuinely
+    # re-executes. Popping it is safe -- unlike the shared policy modules, no other
+    # test file holds a long-lived reference to this module object.
+    #
+    # The posture check no longer runs at IMPORT (2026-09-15): importing this module
+    # could terminate the interpreter, which took an unrelated test down during
+    # collection under randomised order. It now runs in create_app(), with a
+    # before_request guard catching a launcher that skips the factory. These tests
+    # therefore call the factory rather than relying on an import side effect --
+    # which is also a stronger assertion, because it exercises the path an operator
+    # actually starts the console through.
     sys.modules.pop("gui.gui_server", None)
     import profile_config  # noqa: F401
 
     try:
+        module = importlib.import_module("gui.gui_server")
         with pytest.raises(SystemExit) as excinfo:
-            importlib.import_module("gui.gui_server")
+            module.create_app()
         assert excinfo.value.code == 2
         assert victim.read_text(encoding="utf-8") == "keep"
     finally:
+        audit.reset_audit_sink()
+        sys.modules.pop("gui.gui_server", None)
+
+
+def _console_under_a_broken_posture(monkeypatch):
+    """Import the console with an incoherent posture, WITHOUT needing a symlink.
+
+    `enterprise` with no OAUTH_ISSUER and no OAUTH_AUDIENCE is incoherent, and
+    profile_config says so in PROFILE_ERRORS. The neighbouring tests build their
+    bad posture from a symlinked audit path because the sink is what they are
+    testing; these two are about the ENFORCEMENT POINT, so they need any invalid
+    posture at all.
+
+    That distinction matters beyond tidiness: @requires_symlinks skips without
+    Developer Mode, `live` and skipped tests are excluded from the mutation
+    harnesses, and a control nothing can mutate is a control nothing checks.
+    These now run on every platform.
+    """
+    pytest.importorskip("flask")
+    monkeypatch.setenv("CB_ADMIN_PROFILE", "enterprise")
+    monkeypatch.delenv("OAUTH_ISSUER", raising=False)
+    monkeypatch.delenv("OAUTH_AUDIENCE", raising=False)
+
+    import audit
+
+    audit.reset_audit_sink()
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+        else:
+            importlib.import_module(name)
+    sys.modules.pop("gui.gui_server", None)
+    return importlib.import_module("gui.gui_server")
+
+
+def test_importing_the_console_does_not_terminate_the_interpreter(monkeypatch):
+    """The cost the import-time guard was charging, now removed.
+
+    MEASURED 2026-09-15. A test elsewhere reloaded profile_config under a
+    deliberately invalid enterprise configuration -- which is how each requirement
+    is proven load-bearing -- and the next test to import this module died during
+    COLLECTION with SystemExit(2), naming an OAuth control unrelated to it.
+
+    server.py never had this problem: it enforces from _async_main(), at run time.
+    """
+    try:
+        module = _console_under_a_broken_posture(monkeypatch)  # must NOT raise
+        assert hasattr(module, "create_app")
+        assert module.app is not None
+    finally:
+        import audit
+
+        audit.reset_audit_sink()
+        sys.modules.pop("gui.gui_server", None)
+
+
+def test_the_factory_still_refuses_an_incoherent_posture(monkeypatch):
+    """The other half. Moving the check out of import must not remove it."""
+    try:
+        module = _console_under_a_broken_posture(monkeypatch)
+        with pytest.raises(SystemExit) as excinfo:
+            module.create_app()
+        assert excinfo.value.code == 2
+    finally:
+        import audit
+
+        audit.reset_audit_sink()
+        sys.modules.pop("gui.gui_server", None)
+
+
+def test_a_launcher_that_skips_the_factory_cannot_serve(monkeypatch):
+    """Closes the regression that moving enforcement out of import could cause.
+
+    `gunicorn gui.gui_server:app` is the form the old comment documented, and the
+    reason the guard sat at module scope. It bypasses create_app(), so the same
+    posture check runs as a before_request guard and answers 503 rather than
+    serving the admin surface.
+
+    503 rather than SystemExit on purpose: raising inside a worker is a crash loop,
+    and an operator who reaches this started the process by an unsupported route.
+    Failing every request with the reason is louder and cheaper to diagnose.
+    """
+    try:
+        module = _console_under_a_broken_posture(monkeypatch)
+        response = module.app.test_client().get("/api/tools")
+        assert response.status_code == 503, response.status_code
+        body = response.get_json()
+        assert body["problems"], body
+        assert "create_app()" in body["hint"]
+    finally:
+        import audit
+
         audit.reset_audit_sink()
         sys.modules.pop("gui.gui_server", None)
 

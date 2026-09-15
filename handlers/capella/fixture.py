@@ -119,6 +119,9 @@ from handlers.fixture_core import (
     fixture_integrity as _fixture_integrity,
 )
 from handlers.fixture_core import (
+    index_target as _index_target,
+)
+from handlers.fixture_core import (
     parse_timestamp as _parse_timestamp,
 )
 from handlers.fixture_core import (
@@ -129,9 +132,6 @@ from handlers.fixture_core import (
 )
 from handlers.fixture_core import (
     resolve_under_root as _resolve_under_root,
-)
-from handlers.fixture_core import (
-    index_target as _index_target,
 )
 from handlers.fixture_core import (
     rewrite_index_keyspace as _rewrite_index_keyspace,

@@ -355,15 +355,27 @@ def _run_gui_posture(env: dict) -> list[str]:
         importlib.reload(tls_config)
         audit.reset_audit_sink()
 
-        # A fresh import, not a reload: the module runs `_enforce_gui_posture()` at import
-        # and captures OAUTH_ENABLED into module-level constants, so it has to be built
-        # under this environment. Popping first is what makes the import actually re-execute.
+        # A fresh import, not a reload: the module captures OAUTH_ENABLED into
+        # module-level constants, so it has to be built under this environment.
+        # Popping first is what makes the import actually re-execute.
+        #
+        # THE IMPORT NO LONGER ENFORCES ANYTHING (2026-09-15). The posture check
+        # moved into create_app(), because importing this module could terminate
+        # the interpreter and took an unrelated test down during collection. So
+        # the factory is called explicitly here -- which is what an operator
+        # starting the console actually does, and therefore a truer test than the
+        # import side effect it replaces.
+        #
+        # This file-order run is what caught the change: under randomised order
+        # the test happened to pass twice. CLAUDE.md section 4.
         sys.modules.pop("gui.gui_server", None)
-        import gui.gui_server  # noqa: F401
+        import gui.gui_server
+
+        gui.gui_server.create_app()
 
         return []
     except SystemExit:
-        # _enforce_gui_posture prints each problem then raises SystemExit(2). The reasons go
+        # create_app() prints each problem then raises SystemExit(2). The reasons go
         # to stderr, which pytest captures; the caller checks that instead.
         return ["refused"]
     finally:

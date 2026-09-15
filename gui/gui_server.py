@@ -84,8 +84,8 @@ import mcp_compat  # noqa: E402
 import profile_config  # noqa: E402
 
 
-def _enforce_gui_posture() -> None:
-    """Refuse to serve an incoherent or exposed posture. Module scope, not __main__.
+def _gui_posture_problems() -> list[str]:
+    """Every reason this process must not serve, or an empty list.
 
     Two defects this replaces:
 
@@ -165,12 +165,58 @@ def _enforce_gui_posture() -> None:
 
         problems.extend(_tls.validate(host, "http"))
 
+    return problems
+
+
+#: Computed once. The posture cannot change while the process runs, and a probe on
+#: every request would re-read the environment for no reason.
+_POSTURE_PROBLEMS: list[str] | None = None
+
+
+def _posture_problems() -> list[str]:
+    global _POSTURE_PROBLEMS
+    if _POSTURE_PROBLEMS is None:
+        _POSTURE_PROBLEMS = _gui_posture_problems()
+    return _POSTURE_PROBLEMS
+
+
+def create_app():
+    """The application factory. Enforces the posture, then returns the app.
+
+    WHY A FACTORY, AND WHY IMPORTING THIS MODULE IS NOW INERT
+    ========================================================
+    `_enforce_gui_posture()` used to run at MODULE SCOPE, so `import gui.gui_server`
+    could terminate the interpreter. It was moved there for a good reason -- under
+    `gunicorn gui.gui_server:app` there is no `__main__`, so the guard was being
+    skipped entirely -- but the cost was that the console could not be imported for
+    ANY purpose without a coherent deployment environment in the ambient shell.
+
+    MEASURED 2026-09-15: a test that reloads profile_config under a deliberately
+    invalid enterprise configuration left PROFILE_ERRORS populated, and the next
+    test to import this module died during collection with SystemExit(2), naming
+    an OAuth control that had nothing to do with it. Under randomised order that
+    is a coin flip, which CLAUDE.md section 4 says is not a pass.
+
+    `server.py` does not have this problem: it calls _enforce_profile() from
+    _async_main(), at RUN time. This brings the console into line.
+
+    Launch it as:  gunicorn "gui.gui_server:create_app()"
+
+    THE OLD INVOCATION STILL CANNOT SERVE UNGUARDED. `gunicorn gui.gui_server:app`
+    skips this factory, so the same check runs again as a before_request guard and
+    answers 503. That path returns rather than exits, deliberately: a SystemExit
+    inside a worker is a crash loop, and an operator who reaches it has already
+    started the process by an unsupported route. Failing every request with the
+    reason is louder and cheaper to diagnose.
+    """
+    problems = _posture_problems()
     if problems:
         for problem in problems:
             print(
                 f"[couchbase-admin-gui] REFUSING TO START: {problem}", file=sys.stderr
             )
         raise SystemExit(2)
+    return app
 
 
 import audit  # noqa: E402
@@ -239,8 +285,9 @@ if _OAUTH_ENABLED:
 # ---------------------------------------------------------------------------
 # Flask app
 # ---------------------------------------------------------------------------
-# Enforced at import so a WSGI launch (gunicorn/uwsgi) cannot skip it.
-_enforce_gui_posture()
+# NOT enforced at import. See create_app() -- importing this module is inert, the
+# factory enforces at start, and the before_request guard below catches a launcher
+# that bypassed the factory.
 
 # Configure logging in THIS process.
 #
@@ -257,6 +304,27 @@ _enforce_gui_posture()
 configure_from_env()
 
 app = Flask(__name__, static_folder="static")
+
+
+@app.before_request
+def _posture_guard():
+    """Refuse every request if the posture is incoherent. Registered first.
+
+    Reachable only when something started this app WITHOUT create_app() -- the
+    documented `gunicorn gui.gui_server:app` form, for instance. The guard that
+    used to run at import is what made that safe; this is what replaces it.
+    """
+    problems = _posture_problems()
+    if problems:
+        return (
+            jsonify({
+                "error": "refusing to serve: incoherent security posture",
+                "problems": problems,
+                "hint": 'start with gunicorn "gui.gui_server:create_app()"',
+            }),
+            503,
+        )
+    return None
 
 # CB_GUI_ALLOWED_ORIGINS is honoured HERE as well as in _reject_cross_site_request.
 # Without it the refusal message told operators to set the variable, the request-side
@@ -680,7 +748,7 @@ def _client_is_local() -> bool:
     # A forwarding header means an intermediary is present, and REMOTE_ADDR is then
     # the PROXY's address rather than the client's. nginx or Traefik on the same host
     # in front of 127.0.0.1:5173 makes every remote client look loopback, which turns
-    # this check into a rubber stamp — and _enforce_gui_posture sees GUI_HOST=127.0.0.1
+    # this check into a rubber stamp — and _gui_posture_problems sees GUI_HOST=127.0.0.1
     # and raises nothing. Refusing rather than guessing: the header is not trusted to
     # identify the client (that would be worse), it is only taken as evidence that
     # REMOTE_ADDR cannot be believed.
@@ -1544,8 +1612,9 @@ if __name__ == "__main__":
     host = os.environ.get("GUI_HOST", "127.0.0.1")
     debug = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true", "yes", "on")
 
-    # Bind posture is enforced by _enforce_gui_posture() at import time, which
-    # handles every non-loopback form and cannot be skipped by a WSGI launcher.
+    # Bind posture is enforced by create_app(), which handles every non-loopback
+    # form. A WSGI launcher that skips the factory is caught by _posture_guard.
+    create_app()
 
     if debug:
         print(

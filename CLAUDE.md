@@ -278,6 +278,32 @@ Platform limits, probed in `tests/_platform.py` rather than inferred from
 bits do not exist, so `logging_config._restrict_to_owner` deliberately does
 nothing there rather than calling `os.chmod` and looking enforced.
 
+### 4.0 The mutation harnesses are only meaningful where symlinks work
+
+On a plain Windows shell, `scripts/mutation_rounds_1_3.py` and
+`mutation_round_4.py` report three SURVIVORS, all in the audit-sink family:
+
+    audit sink: degrade silently instead of refusing to start
+    audit sink: server no longer refuses to start
+    audit sink: GUI no longer refuses to start
+
+**Nothing is wrong with the code.** Every test that covers those lines is marked
+`@requires_symlinks`, because it proves the property by CREATING a symlink where
+the audit file is expected. Without Developer Mode those tests skip, a skipped
+test cannot fail, and the harness scores the mutation as uncaught. Run the
+harnesses in the Linux container, or on Windows with Developer Mode enabled.
+
+This is section 1.7 applied to our own tooling, and the harness has the blind
+spot the rule is about: it prints `SURVIVED`, which reads as a claim about the
+CODE, when what it observed was that the covering test did not run on this
+machine. It knows which test files it invoked and could say "the target suite
+skipped N tests" beside a survivor. Until it does, treat an audit-sink survivor
+from a Windows host as unproven rather than as a finding.
+
+CONTRIBUTING.md tells a contributor both harnesses must report all mutations
+caught and does not mention this. On a fresh Windows checkout that instruction
+cannot be satisfied, and the failure looks like a missing security control.
+
 ### 4.1 Docker on Windows: three ways the fixture looks broken and is not
 
 Each of these produces a symptom that reads as a tool defect. All three were
@@ -417,6 +443,29 @@ exporter carrying every index in the bucket rather than the fixture's own
 keyspaces, is fixed too. Both are the Capella twins of defects already fixed on
 the EE side, and both hid behind a round trip that mapped into a DIFFERENT
 bucket -- which is the shape that happens to work.
+
+### Two fixture questions left open on 2026-09-14
+
+**The Capella exporter carries `_sync:syncInfo` into fixtures.** It is the 188th
+document where EE records 187: a Sync Gateway metadata document with an empty
+body, exported and then written into the target collection on import. The
+manifest's fidelity note says system xattrs "including `_sync`" are not
+captured, which is true and misleading together — this is a `_sync:` DOCUMENT,
+not an xattr. It matters because this repository already decided the neighbouring
+case: the path verifier was changed to never bind an App Endpoint over a real
+collection, on the grounds that writing sync metadata into somebody's bucket is
+not a verification tool's business. Importing a `_sync:` document into a fresh
+collection is the quieter version of the same act. Either skip `_sync:*` keys by
+default or record them and say so in `not_applied`. NEEDS A DECISION, because it
+changes what a fixture contains.
+
+**The GSI definition filter is applied after the fact, not to the request.**
+`capella_query_index_definitions_list` declares bucket, scope and collection as
+query parameters; the export sends only `bucket` and now filters the response by
+parsing each rendered `definition` statement. That is correct and it is a second
+best. Narrowing the request needs the parameter names as the service implements
+them, which is `internal/generated/api/openapi.gen.go` in the Terraform provider
+— section 1.5, and the checkout that task is parked on.
 
 ### Capella write bodies: MOSTLY PROVEN NOW, and the failure mode has changed
 

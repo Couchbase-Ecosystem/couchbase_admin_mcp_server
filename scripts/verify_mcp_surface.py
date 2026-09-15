@@ -97,7 +97,7 @@ import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -924,7 +924,7 @@ class Run:
     #: 404: correct id, wrong path. That is the same mistake as sending an App
     #: Endpoint name where a keyspace belongs, and it is why the id and the
     #: cluster travel together here rather than the id alone being seeded.
-    _CLUSTER_FROM: dict[str, str] = {
+    _CLUSTER_FROM: ClassVar[dict[str, str]] = {
         "capella_replication_get": "_replication_cluster_id",
         "capella_replication_delete": "_replication_cluster_id",
     }

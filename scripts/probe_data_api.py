@@ -37,6 +37,7 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import pathlib
 import sys
@@ -117,10 +118,9 @@ def main() -> int:
     print(f"  {text[:600]}")
     current = {}
     if status == 200:
-        try:
+        # The body is informational here; an unparseable one is not a failure.
+        with contextlib.suppress(Exception):
             current = json.loads(text)
-        except Exception:
-            pass
     print(
         f'\n  Record "capella_data_api_get": "{status}" in LIVE_VERIFIED.'
         if str(status) in {"200", "400", "404", "405", "422"}

@@ -303,6 +303,35 @@ listing through `auth.scope_gate.denial_for()`, the same function the call path
 uses, so the two cannot drift; `tests/test_tool_listing_is_scoped.py` and four
 entries in `scripts/mutation_round_4.py` hold it in place.
 
+**What Keycloak does NOT establish, and Okta is the next answer.** Every row above
+is one provider. It proves the plumbing — JWKS, issuer, audience, the gate,
+automation, the audit principal — and nothing about where a *different* tenant puts
+the grant, which the `realm_access.roles` finding shows is exactly where the
+surprise lives. Couchbase uses Okta internally, so Okta is the provider this will
+actually be driven by here.
+
+`scripts/idp_lab_assertions.py --idp okta` runs the identical assertions against a
+real Okta authorization server, and `docs/OKTA_LAB.md` has the setup. The token
+request is the only part that differs; a shape difference is therefore a failing
+assertion about the *server* rather than a second test that quietly checks
+something else.
+
+**Reading Okta's published token shape against this code on 2026-09-16 found a
+defect before any token was minted.** Okta carries the client id in `cid`, and a
+client-credentials token has no user — Okta's reference says `uid` *"isn't included
+in the access token if there is no user bound to it"*. `principal_of()` read
+`sub`/`oid`/`client_id` and `client_id`/`azp`/`appid`; **none of those is `cid`**.
+Against an Okta service principal the audit record would have named nobody, on a
+call that was authenticated, authorized and executed — and for an unattended
+deployment the token is the only identity there is. Fixed, with the provider table
+in `tests/test_scope_claim_shapes.py` extended to cover the audit principal and not
+only the grant. Same class of gap as the `realm_access.roles` one, one field over.
+
+**Not yet run against a live Okta tenant.** The claim-shape facts above are read
+from Okta's documentation, not measured. `idp_lab_assertions.py claims` prints what
+a tenant actually minted alongside what this server reads from it, and exits
+non-zero if the gate read no grants or the audit record would name nobody.
+
 **Repeated in the shipped image, same day.** The run above used the working tree on
 the host. It was then repeated end to end against `cb-admin-mcp:ee` started by
 `deploy/docker-compose.ee.yml` + `deploy/docker-compose.ee.idp-lab.yml`, with

@@ -327,6 +327,19 @@ deployment the token is the only identity there is. Fixed, with the provider tab
 in `tests/test_scope_claim_shapes.py` extended to cover the audit principal and not
 only the grant. Same class of gap as the `realm_access.roles` one, one field over.
 
+**Couchbase's own Okta cannot host this model today.** Measured 2026-09-16:
+`couchbase.okta.com` answers unauthenticated discovery on its ORG authorization
+server and refuses the custom-authorization-server endpoint with
+`E0000015 · You do not have permission to access the feature you are requesting`.
+The org authorization server cannot carry custom scopes or a configurable
+audience, so there is nowhere for this server's three scopes to live until API
+Access Management is enabled on the tenant. `docs/OKTA_LAB.md` §1a has both
+commands, what would overturn the reading, and the three ways out.
+
+Worth carrying to customers rather than only noting internally: if Couchbase's
+tenant lacks the add-on, a customer's may too, and every deployment shape
+documented here assumes custom scopes on a custom authorization server.
+
 **Not yet run against a live Okta tenant.** The claim-shape facts above are read
 from Okta's documentation, not measured. `idp_lab_assertions.py claims` prints what
 a tenant actually minted alongside what this server reads from it, and exits

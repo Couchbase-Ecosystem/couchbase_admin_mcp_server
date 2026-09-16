@@ -43,6 +43,81 @@ decides which of the two routes below you take.
 
 ---
 
+## 1a. MEASURED: `couchbase.okta.com` has no custom authorization server
+
+Two unauthenticated requests, 2026-09-16, from a corporate laptop:
+
+```powershell
+# The CUSTOM authorization server named `default`
+Invoke-RestMethod 'https://couchbase.okta.com/oauth2/default/.well-known/openid-configuration'
+
+  {"errorCode":"E0000015",
+   "errorSummary":"You do not have permission to access the feature you are requesting"}
+
+# The ORG authorization server, which every Okta tenant has
+Invoke-RestMethod 'https://couchbase.okta.com/.well-known/openid-configuration'
+
+  issuer          https://couchbase.okta.com
+  token_endpoint  https://couchbase.okta.com/oauth2/v1/token
+```
+
+The second is what makes the first mean something. The tenant answers
+unauthenticated discovery normally, so the refusal is not TLS, not the URL, not
+a network policy, and **not the caller's own permissions** — nobody was
+authenticating. It is specific to the custom-authorization-server feature.
+
+**Reading: API Access Management is not enabled on this org.** Stated as the
+conclusion it is, not a certainty. **What would overturn it:** an Okta
+administrator opening Security → API → Authorization Servers and finding one
+listed. If a server exists under an id other than `default`, the feature is on
+and only that name is absent.
+
+### Why this is not a small problem
+
+The org authorization server **cannot** carry custom scopes or a configurable
+audience — Okta's own documentation says so, and it is not a setting anyone can
+change. It issues `okta.*` scopes for Okta's own APIs and nothing else.
+
+So as `couchbase.okta.com` stands today it cannot express this server's
+authorization model at all. Not "needs configuring" — cannot express. The three
+scopes and the audience check have nowhere to live.
+
+Three ways out, honestly weighed:
+
+1. **Enable API Access Management.** The clean answer, and the only one that
+   keeps the IdP as the authority on who may do what. It is a paid add-on, so
+   this is a procurement conversation rather than a configuration one. The ask
+   is small once the feature exists: three scopes on an authorization server,
+   and one API Services app per principal.
+2. **Test against a tenant you own.** The Okta Integrator Free Plan includes API
+   Access Management. This answers *does this server read an Okta-shaped token
+   correctly*, which is the question that gates the CODE, and it needs nobody's
+   approval. It does not answer how Couchbase's administrators configure claims.
+3. **Map grants locally instead of reading them from the token.** Authenticate
+   with Okta, then decide scopes from a server-side table keyed on `cid`.
+   **Recorded because somebody will suggest it, not because it is recommended.**
+   It moves the authorization decision out of the IdP and into this server's
+   configuration, which is the property the whole model exists to avoid: the
+   audit trail would then say what this server believed rather than what the
+   identity provider granted, and revocation at the IdP would stop meaning
+   anything. If it is ever taken, it should be a written decision with that
+   trade named.
+
+### And it is a signal about customers, not just about us
+
+If Couchbase's own Okta does not have API Access Management, a customer's may
+not either — and the deployment shape this server documents assumes custom
+scopes on a custom authorization server. That is worth asking Disney directly,
+alongside the sample-token request that is already outstanding:
+
+> Does your Okta (or Entra) tenant have a custom authorization server we can be
+> issued scopes on, or only the org one?
+
+An answer of "only the org one" changes the integration before anybody writes
+config, rather than during a working session.
+
+---
+
 ## 2. Two routes, and they answer different questions
 
 ### Route A — an Okta Integrator Free Plan tenant (your own)
@@ -59,12 +134,15 @@ right first step because it is entirely within your control.
 
 **Answers:** the question that actually matters here — what Couchbase's IdP
 administrators put in a token, and whether this server reads it.
-**Costs:** an IT request. Someone with Okta admin rights must create a custom
-authorization server (or add scopes to an existing one) and a service app.
+**Costs:** more than an IT request, as of the measurement in section 1a. There is
+no custom authorization server to add scopes to, so this route is blocked until
+API Access Management is enabled on the org. Read section 1a before spending
+time here.
 
-**Do Route A first.** If Route B then behaves differently, the difference is the
-finding, and you will know immediately that it is configuration rather than code
-because the same assertions passed against Route A an hour earlier.
+**Do Route A first** — and as of 2026-09-16 it is the only one available. If
+Route B later behaves differently, the difference is the finding, and you will
+know immediately that it is configuration rather than code because the same
+assertions passed against Route A.
 
 > **The cheapest version of Route B is not a tenant at all.** A single decoded
 > access token — claims only, `sub` redacted — from a service app in Couchbase's

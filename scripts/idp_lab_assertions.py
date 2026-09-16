@@ -7,14 +7,48 @@ principal — was only ever exercised by tokens the test suite minted for itself
 This drives it with tokens a real Keycloak issued, over the real HTTP transport,
 against a running server. See deploy/keycloak/README.md for the realm.
 
-It is a LAB tool. It hardcodes the lab realm's client secrets, which are in git
-on purpose, and it must never be pointed at anything that matters.
+It is a LAB tool. Against Keycloak it hardcodes the lab realm's client secrets,
+which are in git on purpose, and it must never be pointed at anything that
+matters.
+
+TWO PROVIDERS, ONE SET OF ASSERTIONS
+────────────────────────────────────
+Keycloak proves the PLUMBING. It does not prove where a given tenant puts the
+grant, and that is the failure most likely to bite: Keycloak itself put the
+entire grant in `realm_access.roles` with the top-level `scope` claim carrying
+only `profile email`, so a server reading the obvious claims saw a fully
+authorized automation principal as holding nothing.
+
+So the provider is pluggable and the assertions are not. `--idp okta` runs the
+same checks against a real Okta authorization server, which is what Couchbase
+uses internally — the point being that a shape difference shows up as a FAILING
+ASSERTION here rather than as a surprise in front of a customer.
+
+OKTA CONFIGURATION, all from the environment because these are real secrets:
+
+    IDP_LAB_OKTA_ISSUER      https://<org>.okta.com/oauth2/<authServerId>
+    IDP_LAB_OKTA_SCOPE_READ        default couchbase-admin-mcp:read
+    IDP_LAB_OKTA_SCOPE_WRITE       default couchbase-admin-mcp:write
+    IDP_LAB_OKTA_SCOPE_AUTOMATION  default couchbase-admin-mcp:automation
+    IDP_LAB_OKTA_<PRINCIPAL>_ID       e.g. IDP_LAB_OKTA_READER_ID
+    IDP_LAB_OKTA_<PRINCIPAL>_SECRET   e.g. IDP_LAB_OKTA_READER_SECRET
+
+Okta needs a CUSTOM authorization server: the org authorization server cannot
+carry custom scopes or a configurable audience, so it cannot express this
+server's grants at all. See docs/OKTA_LAB.md.
+
+Okta also differs from Keycloak in a way that matters here: it grants only the
+scopes the token request ASKS for, so each principal names its scopes rather
+than receiving them from a role assignment.
 
 USAGE (PowerShell, from the repo root, with the server running)
 
     uv run python scripts/idp_lab_assertions.py tools --principal automation
     uv run python scripts/idp_lab_assertions.py call  --principal reader --tool <name>
     uv run python scripts/idp_lab_assertions.py audience
+    uv run python scripts/idp_lab_assertions.py claims --principal automation
+
+    uv run python scripts/idp_lab_assertions.py --idp okta tools --principal reader
 
 Licensed under the Apache License, Version 2.0. Copyright 2026 Couchbase, Inc.
 See the LICENSE and NOTICE files at the repository root.
@@ -23,7 +57,10 @@ See the LICENSE and NOTICE files at the repository root.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
+import pathlib
 import sys
 import urllib.error
 import urllib.parse
@@ -53,23 +90,144 @@ PRINCIPALS = {
 PROTOCOL_VERSION = "2025-06-18"
 
 
-def token_for(principal: str) -> str:
-    """A client-credentials access token from the lab realm."""
-    client_id, secret = PRINCIPALS[principal]
-    body = urllib.parse.urlencode(
-        {
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": secret,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        f"{KEYCLOAK}/protocol/openid-connect/token",
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+#: Which provider the current run is minting tokens from. Set once from --idp.
+IDP = "keycloak"
+
+
+def _okta_issuer() -> str:
+    issuer = (os.environ.get("IDP_LAB_OKTA_ISSUER") or "").strip().rstrip("/")
+    if not issuer:
+        raise SystemExit(
+            "IDP_LAB_OKTA_ISSUER is not set. It is the CUSTOM authorization\n"
+            "server's issuer, https://<org>.okta.com/oauth2/<authServerId> --\n"
+            "NOT https://<org>.okta.com, which is the org authorization server\n"
+            "and cannot carry custom scopes or a configurable audience.\n"
+            "See docs/OKTA_LAB.md."
+        )
+    if "/oauth2/" not in issuer:
+        raise SystemExit(
+            f"IDP_LAB_OKTA_ISSUER is {issuer!r}, which has no /oauth2/<id> "
+            f"segment.\nThat is the ORG authorization server. It cannot mint a "
+            f"token carrying this\nserver's scopes, so every call would be "
+            f"denied for a reason that has nothing\nto do with the code under "
+            f"test. See docs/OKTA_LAB.md."
+        )
+    return issuer
+
+
+#: Scopes each principal asks Okta for. Keycloak hands out role assignments
+#: whatever the request asks for; Okta grants only what is REQUESTED, so the
+#: grant has to be named here as well as allowed in the tenant.
+def _okta_scopes(principal: str) -> str:
+    read = os.environ.get("IDP_LAB_OKTA_SCOPE_READ", "couchbase-admin-mcp:read")
+    write = os.environ.get("IDP_LAB_OKTA_SCOPE_WRITE", "couchbase-admin-mcp:write")
+    automation = os.environ.get(
+        "IDP_LAB_OKTA_SCOPE_AUTOMATION", "couchbase-admin-mcp:automation"
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return str(json.load(resp)["access_token"])
+    return {
+        "reader": read,
+        "writer": write,
+        "automation": f"{write} {automation}",
+        # The two negative principals ask for a grant on purpose: the refusal
+        # under test is the AUDIENCE, and a token refused for holding nothing
+        # would prove a different thing.
+        "stranger": read,
+        "otherapp": write,
+    }[principal]
+
+
+def _okta_credentials(principal: str) -> tuple[str, str]:
+    prefix = f"IDP_LAB_OKTA_{principal.upper()}"
+    client_id = (os.environ.get(f"{prefix}_ID") or "").strip()
+    secret = (os.environ.get(f"{prefix}_SECRET") or "").strip()
+    if not client_id or not secret:
+        raise SystemExit(
+            f"{prefix}_ID and {prefix}_SECRET must both be set to run the "
+            f"{principal!r}\nprincipal against Okta. They are real credentials, "
+            f"so they are read from the\nenvironment and never stored in this "
+            f"repository. See docs/OKTA_LAB.md."
+        )
+    return client_id, secret
+
+
+def token_for(principal: str) -> str:
+    """A client-credentials access token for one lab principal.
+
+    THE TOKEN REQUEST IS THE ONLY PROVIDER-SPECIFIC PART. Everything after it --
+    the MCP handshake, the tool listing, the call, the refusals -- is identical,
+    which is the point: a difference between providers has to surface as a
+    failing assertion about the SERVER, not as a different test.
+    """
+    if IDP == "okta":
+        # Issuer FIRST. Pointing at the org authorization server is the mistake
+        # that costs the most time, and a missing-credential message would send
+        # the reader looking for a secret when the endpoint is the problem.
+        issuer = _okta_issuer()
+        client_id, secret = _okta_credentials(principal)
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "scope": _okta_scopes(principal),
+            }
+        ).encode()
+        # HTTP Basic, which is Okta's default client authentication method for
+        # a service app (`client_secret_basic`).
+        basic = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+        req = urllib.request.Request(
+            f"{issuer}/v1/token",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+                "Authorization": f"Basic {basic}",
+            },
+        )
+    else:
+        client_id, secret = PRINCIPALS[principal]
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": secret,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            f"{KEYCLOAK}/protocol/openid-connect/token",
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return str(json.load(resp)["access_token"])
+    except urllib.error.HTTPError as exc:
+        # THE IdP's OWN MESSAGE, not a stack trace. Every failure here is a
+        # tenant configuration problem -- an unassigned scope, a client not
+        # permitted the grant type, the wrong authorization server -- and the
+        # body says which. Swallowing it sends the reader to the code instead.
+        detail = exc.read().decode("utf-8", "replace").strip()
+        raise SystemExit(
+            f"{IDP} refused to mint a token for {principal!r}: "
+            f"HTTP {exc.code}\n{detail}"
+        ) from exc
+
+
+def decode_claims(token: str) -> dict:
+    """The access token's payload, WITHOUT verifying it.
+
+    For reading what the tenant actually put in the token, which is the one
+    thing no amount of local testing can predict. Never used to decide
+    anything -- the server verifies properly; this only prints.
+    """
+    try:
+        payload = token.split(".")[1]
+    except IndexError:
+        return {}
+    payload += "=" * (-len(payload) % 4)
+    try:
+        return dict(json.loads(base64.urlsafe_b64decode(payload)))
+    except Exception:
+        return {}
 
 
 def _parse(raw: bytes, content_type: str) -> dict | None:
@@ -238,8 +396,67 @@ def cmd_audience(args: argparse.Namespace) -> int:
     return 0 if failures == 0 else 1
 
 
+def cmd_claims(args: argparse.Namespace) -> int:
+    """Print the token's claims, and what THIS SERVER would read from them.
+
+    The one command to run against an unfamiliar tenant. Everything else tests
+    the server; this answers the question the server cannot: where did your IdP
+    put the grant, and did we look there.
+    """
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    from auth.scope_gate import _claims_scopes, principal_of
+
+    token = token_for(args.principal)
+    claims = decode_claims(token)
+    if not claims:
+        print("the token payload could not be decoded")
+        return 2
+
+    print(f"--- claims as {IDP} minted them for {args.principal!r}")
+    print(json.dumps(claims, indent=1, sort_keys=True))
+
+    grants = _claims_scopes(claims)
+    principal = principal_of(claims)
+    print("\n--- what this server reads from them")
+    print(f"  grants     {sorted(grants) or 'NOTHING'}")
+    print(f"  principal  {principal['principal']!r}")
+    print(f"  client_id  {principal['client_id']!r}")
+    print(f"  automation {principal['automation']}")
+    print(f"  issuer     {principal['issuer']!r}")
+
+    if not grants:
+        # THE FAILURE THIS COMMAND EXISTS TO CATCH, stated rather than left to
+        # be inferred from an empty list. Keycloak put the whole grant in
+        # realm_access.roles while `scope` carried only `profile email`; a
+        # tenant can put it somewhere else again.
+        print(
+            "\n*** THE GATE READ NO GRANTS FROM THIS TOKEN. Every write will be "
+            "refused and\n    automation will be silently off. Compare the "
+            "claims above against the ones\n    auth/scope_gate.py reads: "
+            "scope, scp, scopes, roles, permissions, realm_access.roles\n    "
+            "and resource_access.<client>.roles. If the grant is in a claim not "
+            "on that\n    list, the token is fine and the READER is the defect."
+        )
+        return 1
+    if not principal["principal"] or not principal["client_id"]:
+        print(
+            "\n*** THE AUDIT RECORD WOULD NAME NOBODY. The call would be "
+            "authorized and\n    executed with no identity recorded, which for "
+            "an unattended deployment is\n    the only identity there is."
+        )
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--idp",
+        default=os.environ.get("IDP_LAB_PROVIDER", "keycloak"),
+        choices=("keycloak", "okta"),
+        help="which identity provider mints the tokens. The assertions are the "
+             "same either way; only the token request differs.",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_tools = sub.add_parser("tools", help="list the tools this principal sees")
@@ -262,7 +479,16 @@ def main() -> int:
     p_aud = sub.add_parser("audience", help="the stranger-token refusal")
     p_aud.set_defaults(func=cmd_audience)
 
+    p_claims = sub.add_parser(
+        "claims", help="print the token's claims and what this server reads"
+    )
+    p_claims.add_argument("--principal", default="automation", choices=PRINCIPALS)
+    p_claims.set_defaults(func=cmd_claims)
+
     args = parser.parse_args()
+
+    global IDP
+    IDP = args.idp
     return int(args.func(args))
 
 

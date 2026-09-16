@@ -130,3 +130,83 @@ def test_a_malformed_claim_yields_nothing_rather_than_raising(malformed):
     """A token is attacker-influenced input. The gate must refuse it, not crash
     into a 500 that a caller can trigger at will."""
     assert _claims_scopes(malformed) in (set(), {"a-string-not-a-list"})
+
+
+# ── the AUDIT PRINCIPAL, which is a different question ───────────────────────
+#
+# The table above asks "did the gate read the grant". These ask "did the audit
+# record name who did it" -- and the two are answered by different claims, which
+# is how the second went unchecked while the first was covered.
+#
+# For an unattended deployment the token IS the identity. There is no human at
+# the keyboard by design, so a record naming nobody is the one failure that
+# cannot be reconstructed after the fact.
+
+#: (label, claims) for a SERVICE PRINCIPAL as each provider mints one. Every
+#: entry must yield both a principal and a client id.
+_PRINCIPAL_SHAPES = [
+    (
+        "keycloak client credentials (`sub` + `client_id`)",
+        {"sub": "service-account-uuid", "client_id": "cb-admin-mcp-automation"},
+    ),
+    (
+        "entra client credentials (`oid` + `appid`)",
+        {"sub": "subject", "oid": "object-id", "appid": "application-guid"},
+    ),
+    (
+        # OKTA. `cid` carries the client id, and a client-credentials token has
+        # no user -- Okta's reference says `uid` "isn't included in the access
+        # token if there is no user bound to it". Read against this function on
+        # 2026-09-16, BEFORE a token had been minted, that produced
+        # principal=None and client_id=None on an authorized, executed call.
+        "okta client credentials (`cid`, no user claims)",
+        {"cid": "0oa1b2c3d4CLIENT", "iss": "https://example.okta.com/oauth2/aus1"},
+    ),
+    (
+        "okta client credentials that also sets `sub`",
+        {"sub": "0oa1b2c3d4CLIENT", "cid": "0oa1b2c3d4CLIENT"},
+    ),
+    (
+        "auth0 machine-to-machine (`sub` ends @clients, `azp`)",
+        {"sub": "abc123@clients", "azp": "abc123"},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "claims"), _PRINCIPAL_SHAPES, ids=[s[0] for s in _PRINCIPAL_SHAPES]
+)
+def test_every_provider_shape_names_a_principal_and_a_client(label, claims):
+    """An audited call must say WHO, whichever IdP minted the token."""
+    from auth.scope_gate import principal_of
+
+    record = principal_of(claims)
+    assert record["principal"], (
+        f"{label}: the audit record has no principal. The token is the only "
+        f"identity an unattended call has."
+    )
+    assert record["client_id"], (
+        f"{label}: the audit record names no client. Which application acted is "
+        f"the question an audit trail exists to answer."
+    )
+
+
+def test_the_principal_shape_table_is_not_empty():
+    """Guards the parametrisation above -- see CLAUDE.md section 3."""
+    assert len(_PRINCIPAL_SHAPES) >= 4, _PRINCIPAL_SHAPES
+
+
+def test_a_principal_is_not_invented_from_nothing():
+    """The mirror of the grant check: claims carrying no identity must yield
+    none, rather than this function reaching for something that is not one."""
+    from auth.scope_gate import principal_of
+
+    record = principal_of({"iss": "https://example", "aud": "api://x"})
+    assert record["principal"] is None
+    assert record["client_id"] is None
+
+
+def test_no_token_is_recorded_as_no_token():
+    from auth.scope_gate import principal_of
+
+    assert principal_of(None) == {"principal": None, "auth": "none"}

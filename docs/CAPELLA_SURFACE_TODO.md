@@ -331,13 +331,25 @@ knows less than its name suggests, each with what would close it.
   whole job) in exchange for preventing a bounded write to a directory the
   operator named. The filesystem write is now stated in the tool's own
   description instead, where a caller reading annotations alone still sees it.
-- **The fixture family is Capella-only.** Decided 2026-09-14 with the argument
-  against recorded alongside it — see the "Scope: which planes the fixture family
-  covers" section of `docs/FIXTURE_DESIGN.md`. It turns on a question only Disney
-  can answer: do they need to reproduce a dataset on Enterprise Edition, or only
-  on Capella?
-- **Nobody has confirmed the `capella_fixture_*` tools are absent from an EE-mode
-  container's tool list.** The capability gating exists and is asserted at the
-  compose-file level, but the tool list itself has not been read back from a
-  running EE-mode container. One run of `scripts/run-docker-verification.ps1`
-  against the EE compose file answers it.
+- ~~**The fixture family is Capella-only.**~~ **CLOSED 2026-09-14.** The question
+  it turned on was answered — both planes — so `handlers/fixture.py` ships
+  `admin_fixture_export`, `admin_fixture_import`, `admin_fixture_list` and
+  `admin_fixture_verify`, sharing `handlers/fixture_core.py` with the Capella
+  family so neither plane can drift on what a manifest means. Round-tripped
+  clean the same day, twice: within one bucket, then into a fresh bucket, which
+  is the run that exercised index creation.
+- ~~**Nobody has confirmed the `capella_fixture_*` tools are absent from an
+  EE-mode container's tool list.**~~ **ANSWERED 2026-09-14, then SETTLED
+  2026-09-15.** Measured first by loading the registry with `CB_DEPLOYMENT`
+  pinned — `self_managed` loads no fixture tools, `capella` loads all four —
+  which established the gating logic and not the shipped image. The image was
+  settled the next day by the real-IdP lab run, which drove `tools/list` through
+  the container over HTTP and read the advertised set back.
+- **The FTS-rendered-as-`CREATE INDEX` fix is still untested on both planes.**
+  `system:indexes` carries Search indexes with no `index_key`, and the exporter
+  used to assemble one into a statement the query service rejects. The fix
+  filters to `gsi`. Neither round trip exercised it: **the only cluster in the
+  project with a Search service group is `Bride-of-Frankenstein`, and it is
+  powered off.** A round trip against a keyspace on a Search-enabled cluster is
+  what closes this — until then the fix is reasoned and tested in isolation, not
+  measured against the shape that produced the defect.

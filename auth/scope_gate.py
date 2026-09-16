@@ -216,14 +216,45 @@ def principal_of(claims: dict[str, Any] | None) -> dict[str, Any]:
     answer, and for an autonomous workflow it is the ONLY identity available —
     there is no human at the keyboard by design. Pulled from the validated token
     only; never from anything the caller can set alongside the tool arguments.
+
+    OKTA PUTS THE CLIENT ID IN `cid`, AND NOTHING HERE READ IT. Found 2026-09-16
+    by reading Okta's documented access-token shape against this function, before
+    a token was ever minted -- the same class of gap the Keycloak run found in
+    the GRANT, one field over and in the audit record instead of the gate.
+
+    Okta's own reference describes `cid` as "Client ID of the client that
+    requested the access token", and says `uid` "isn't included in the access
+    token if there is no user bound to it" -- which is every client-credentials
+    token, because a service app has no user. So against an Okta service
+    principal this returned:
+
+        principal = None        client_id = None
+
+    on a call that was authenticated, authorized and executed. For an unattended
+    deployment the token IS the identity; there is no human at the keyboard by
+    design, and an audit record naming nobody is the one failure that cannot be
+    reconstructed afterwards.
+
+    `cid` is therefore read for both fields. It is placed LAST in each chain so
+    no provider already working changes shape: it is consulted only when the
+    claims this used to read are absent.
+
+    Not yet confirmed against a live Okta tenant: whether Okta additionally sets
+    `sub` to the client id on a client-credentials token. If it does, only the
+    `client_id` field was empty; if it does not, both were. The fix covers both
+    and does not depend on which.
     """
     if not claims:
         return {"principal": None, "auth": "none"}
     return {
-        "principal": claims.get("sub") or claims.get("oid") or claims.get("client_id"),
+        "principal": claims.get("sub")
+        or claims.get("oid")
+        or claims.get("client_id")
+        or claims.get("cid"),
         "client_id": claims.get("client_id")
         or claims.get("azp")
-        or claims.get("appid"),
+        or claims.get("appid")
+        or claims.get("cid"),
         "issuer": claims.get("iss"),
         "scopes": sorted(_claims_scopes(claims)),
         "automation": _scope_automation() in _claims_scopes(claims),

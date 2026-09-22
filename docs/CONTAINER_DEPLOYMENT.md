@@ -562,9 +562,10 @@ know when it fails.
 |---|---|
 | The image build, including the TLS preflight | Built and run repeatedly |
 | `docker run` with stdio transport | Exercised; this is how the tool surface was verified |
-| `deploy/docker-compose.*.yml` | **Never brought up.** Container verification uses `docker run` probes, which exercise the image but not the compose files |
+| `deploy/docker-compose.ee.yml`, `deploy/docker-compose.ee.idp-lab.yml`, `deploy/docker-compose.keycloak.yml` | **Brought up 2026-09-15**, for the first time, by the real-IdP lab run recorded in `README.md` § "Verified against a real identity provider" |
+| `deploy/docker-compose.capella.yml`, `deploy/docker-compose.ee.lab.yml` | **Never brought up.** The `docker run` probes exercise the image, not these files |
 | `deploy/k8s/*.yaml` | **Written and asserted by tests, never applied to a cluster** |
-| The HTTP transport | **Never exercised.** Everything has been driven over stdio |
+| The HTTP transport | **Exercised end to end 2026-09-15** against a real Keycloak 26.7.3 with client-credentials tokens: authentication refusals before routing, audience validation, a scoped `tools/list`, the confirmation gate, an unattended automation write, and a per-decision audit record — on the host and then repeated inside `cb-admin-mcp:ee`. One provider only; see `README.md` for what that does and does not establish |
 | The AWS and GCP shapes in §7 and §8 | **Not deployed by this project.** The environment configurations in them are asserted to start by `tests/test_container_deployment_guide.py`; the cloud resources around them are conventional and unverified |
 
 The environment blocks above are not aspirational — they are run through the
@@ -572,4 +573,6 @@ server's real startup validation on every test run, so a configuration in this
 document that would refuse to start fails CI. What is untested is the
 infrastructure wrapped around them, and that is exactly where to be careful.
 
-Last reviewed: 2026-09-14.
+Last reviewed: 2026-09-22. The HTTP-transport and compose rows above were
+corrected on that date: both were written on 2026-09-14 and the run that
+settled them happened on 2026-09-15, after this section was last read.

@@ -238,15 +238,24 @@ def test_the_guide_states_what_has_not_been_exercised():
     """CLAUDE.md rule 1.7, applied to a document: a guide that reads as though
     every path in it had been run is making a claim it cannot support.
 
-    The HTTP transport has never been exercised and the cloud shapes have never
-    been deployed by this project. A customer debugging one of them deserves to
-    know that before they start, not after.
+    Two of the k8s and cloud shapes have still never been run by this project.
+    A customer debugging one of them deserves to know that before they start,
+    not after.
+
+    CORRECTED 2026-09-22. This list used to require the literal phrase
+    "Never exercised", which the guide carried about the HTTP transport. The
+    HTTP transport was in fact exercised end to end on 2026-09-15 by the
+    Keycloak lab, a day after the guide and this test were written, so the
+    test was pinning a FALSE admission in place and would have failed the
+    correction. A test that enforces honesty must not enforce a specific
+    sentence about a specific path, only that the unexercised paths are still
+    named. The phrase was replaced with the ones that remain true.
     """
     text = GUIDE.read_text(encoding="utf-8")
     for required in (
-        "Never exercised",
         "never applied",
         "Never brought up",
+        "Not deployed by this project",
     ):
         assert required.lower() in text.lower(), (
             f"the deployment guide no longer states {required!r}. If a path has "

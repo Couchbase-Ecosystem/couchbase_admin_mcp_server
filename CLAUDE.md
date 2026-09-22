@@ -513,7 +513,16 @@ This registry had already shipped three wrong bodies behind verified paths —
 
 ### Never exercised at all
 
-  * the HTTP transport. Everything has been driven over stdio.
+  * ~~the HTTP transport. Everything has been driven over stdio.~~
+    **WRONG, CORRECTED 2026-09-22.** This bullet was written 2026-09-14 and the
+    run that falsified it happened 2026-09-15: the Keycloak 26.7.3 lab drove the
+    authorization model end to end OVER THE HTTP TRANSPORT, on the host and then
+    again inside `cb-admin-mcp:ee`, and `README.md` records it in full. The claim
+    survived a week in this file and in `docs/CONTAINER_DEPLOYMENT.md` §10 — the
+    guide a customer reads — where it understated the one transport a container
+    deployment actually uses. Kept struck through rather than deleted, because a
+    stale "never exercised" is the same failure shape as section 1.7 and deleting
+    it hides that this file was the source.
   * the GUI's `POST /api/call` parity with MCP dispatch. NARROWED 2026-09-14:
     the two surfaces are now asserted to advertise an IDENTICAL tool set, in
     both directions, by tests/test_gui_authorization.py — which was added after

@@ -199,9 +199,20 @@ def test_an_unregistered_tool_is_audited(dispatch):
 def test_a_registered_but_unloaded_tool_names_the_reason(dispatch, monkeypatch):
     """The distinction that matters to whoever has to fix it: this tool EXISTS, and is not
     loaded because of configuration. Saying "unknown tool" would send them looking for a
-    typo."""
+    typo.
+
+    _GATING is pinned OFF because this test is about the READ-ONLY refusal, and the
+    dispatch checks deployment gating first. Without the pin the test inherits whatever
+    mode deployment.detect_mode() infers from the AMBIENT environment: on a machine with
+    Capella credentials exported it resolves to 'capella', admin_bucket_list is genuinely
+    unavailable there, and the deployment branch answers instead -- so the test failed on
+    a developer's workstation on 2026-09-22 while passing in CI and in a clean sandbox.
+    The gating branch has its own test below; this one must not depend on the ambient
+    deployment.
+    """
     call, _records = dispatch
     name = _a_registered_tool_name()
+    monkeypatch.setattr(server, "_GATING", False, raising=False)
     monkeypatch.setattr(server, "_TOOLS", [], raising=False)
 
     body = json.loads(call(name)[0].text)
@@ -211,8 +222,12 @@ def test_a_registered_but_unloaded_tool_names_the_reason(dispatch, monkeypatch):
 
 
 def test_an_unloaded_tool_refusal_is_audited(dispatch, monkeypatch):
+    # _GATING pinned off for the same reason as the test above: this asserts the
+    # read-only refusal is AUDITED, and an ambient 'capella' deployment would audit
+    # denied_deployment instead.
     call, records = dispatch
     name = _a_registered_tool_name()
+    monkeypatch.setattr(server, "_GATING", False, raising=False)
     monkeypatch.setattr(server, "_TOOLS", [], raising=False)
     call(name)
     assert [r for r in records if r["decision"] == "denied_read_only"]

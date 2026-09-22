@@ -1095,7 +1095,7 @@ def _redact_credential_in_value(text: str) -> str:
         # "Basic authentication required" became "Basic ***REDACTED*** required", and a
         # proxy's text/plain 401 page passes through admin_request into ok(). A real
         # bearer token is long and not purely alphabetic, so require one or the other.
-        if len(token) >= 20 or not token.isalpha():
+        if _looks_like_credential(token):
             return f"{match.group(1)} {REDACTED}"
         return match.group(0)
 
@@ -1396,10 +1396,42 @@ def redact_text(text: str) -> str:
     # above sees it. It is the single most common way a token reaches a log.
     return re.sub(
         r"\b(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/=-]{8,})",
-        lambda m: f"{m.group(1)} {REDACTED}",
+        lambda m: (
+            f"{m.group(1)} {REDACTED}"
+            if _looks_like_credential(m.group(2))
+            else m.group(0)
+        ),
         text,
         flags=re.IGNORECASE,
     )
+
+
+def _looks_like_credential(token: str) -> bool:
+    r"""Whether a token following an auth scheme is a SECRET or the next English word.
+
+    ONE DEFINITION, USED BY BOTH RULES. There are two byte-identical
+    `(Bearer|Basic|Digest)\s+([A-Za-z0-9._~+/=-]{8,})` regexes in this module --
+    one in `_mask_if_credential` and one at the end of `redact_text` -- and until
+    2026-09-22 only the first carried this test. The second redacted
+    unconditionally, so `redact_text("Basic authentication required")` returned
+    "Basic ***REDACTED*** required": the precise example the first rule's own
+    comment cites as the bug it was written to fix. Because `redact_text` runs
+    FIRST on every string leaf, the guarded rule never saw the text and the fix
+    was inert for this shape.
+
+    That is not a leak -- it is the opposite, and it is still a defect. A proxy's
+    text/plain 401 page reaches a caller through admin_request into ok(), and an
+    operator reading "Basic ***REDACTED*** required" learns nothing and reasonably
+    concludes a secret was involved.
+
+    THE TRADE-OFF, STATED RATHER THAN INHERITED: a purely alphabetic secret of
+    8-19 characters is not redacted by this test. That was already the behaviour
+    of `_mask_if_credential`; what changes here is that the two rules now agree
+    instead of one silently overriding the other. Every real bearer token, Basic
+    blob and API key is base64 or longer than 20 characters, so both conditions
+    catch them.
+    """
+    return len(token) >= 20 or not token.isalpha()
 
 
 def _redact_context_value(key: str, value: Any) -> Any:

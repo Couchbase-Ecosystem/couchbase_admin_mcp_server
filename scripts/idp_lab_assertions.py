@@ -455,7 +455,7 @@ def main() -> int:
         default=os.environ.get("IDP_LAB_PROVIDER", "keycloak"),
         choices=("keycloak", "okta"),
         help="which identity provider mints the tokens. The assertions are the "
-             "same either way; only the token request differs.",
+        "same either way; only the token request differs.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 

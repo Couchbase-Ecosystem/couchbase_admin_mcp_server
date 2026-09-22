@@ -25,7 +25,9 @@ import pathlib
 
 import pytest
 
-_SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "idp_lab_assertions.py"
+_SCRIPT = (
+    pathlib.Path(__file__).resolve().parent.parent / "scripts" / "idp_lab_assertions.py"
+)
 
 
 def _module():
@@ -137,8 +139,11 @@ def test_the_claims_command_exists_and_reports_an_unread_grant():
     assert hasattr(LAB, "cmd_claims")
     source = ast.get_source_segment(
         _SCRIPT.read_text(encoding="utf-8"),
-        next(n for n in TREE.body
-             if isinstance(n, ast.FunctionDef) and n.name == "cmd_claims"),
+        next(
+            n
+            for n in TREE.body
+            if isinstance(n, ast.FunctionDef) and n.name == "cmd_claims"
+        ),
     )
     assert "READ NO GRANTS" in source
     assert "NAME NOBODY" in source

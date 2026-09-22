@@ -1281,7 +1281,18 @@ def call_tool():
     # Captured HERE, before any refusal can return. It used to be read further down,
     # so the seven refusal records and the dry-run record -- the one an operator keeps
     # as the proposal artifact -- all lost the provenance the MCP path records.
-    _correlation = arguments.get("correlation_id")
+    #
+    # SANITISED, as server.py sanitises it. This read the value RAW until
+    # 2026-09-22, so audit.sanitize_correlation -- which exists because CR/LF in a
+    # caller-supplied id lets whoever drives the agent fabricate entire audit
+    # records and hide a real operation inside a forged one -- guarded the MCP
+    # dispatch and not this one. Same shape as every other defect the second
+    # dispatch path has produced, and this one was on the audit trail itself.
+    # Found by tests/test_dispatch_parity.py on the run that introduced it.
+    #
+    # audit.CORRELATION_ARG rather than the literal, so the two paths cannot
+    # disagree about which argument carries provenance.
+    _correlation = audit.sanitize_correlation(arguments.get(audit.CORRELATION_ARG))
 
     if not tool_name:
         return jsonify({"error": "Missing 'tool' field"}), 400

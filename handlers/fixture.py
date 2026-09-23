@@ -110,7 +110,7 @@ from handlers.fixture_core import (
     strip_index_nodes,
     with_defer_build,
 )
-from handlers.shared import admin_request, err, get_sdk_connection, ok
+from handlers.shared import admin_request, err, get_sdk_cluster, ok
 from logging_config import get_logger
 
 _log = get_logger("handlers.fixture")
@@ -365,7 +365,7 @@ def _query(statement: str, parameters: dict | None = None) -> list[dict]:
     """
     from couchbase.options import QueryOptions
 
-    cluster, _bucket, _collection = get_sdk_connection()
+    cluster = get_sdk_cluster()
     options = (
         QueryOptions(named_parameters=parameters) if parameters else QueryOptions()
     )
@@ -1133,7 +1133,7 @@ def _import_documents(
     """
     from couchbase.options import UpsertOptions
 
-    cluster, _bucket, _collection = get_sdk_connection()
+    cluster = get_sdk_cluster()
     per_keyspace: list[dict] = []
     total = 0
 

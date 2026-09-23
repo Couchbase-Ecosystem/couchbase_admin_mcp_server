@@ -65,12 +65,12 @@ def sql(monkeypatch):
     monkeypatch.setitem(sys.modules, "couchbase.options", options_module)
 
     for module in (indexes, diagnostics):
-        monkeypatch.setattr(
-            module,
-            "get_sdk_connection",
-            lambda: (capture, object(), object()),
-            raising=False,
-        )
+        # NOT raising=False. These modules call `get_sdk_cluster`, and patching a name
+        # they do not have used to succeed silently: on 2026-09-23 the seam was renamed
+        # and every test here kept "passing" against an empty capture until the
+        # assertions on captured statements failed with IndexError. A patch that cannot
+        # bind is a broken test, so let it raise.
+        monkeypatch.setattr(module, "get_sdk_cluster", lambda: capture)
         if hasattr(module, "admin_request"):
             monkeypatch.setattr(
                 module,

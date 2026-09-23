@@ -257,7 +257,7 @@ def no_cluster(monkeypatch, sdk_available):
     are patched: the module-level bindings for the handlers, and `shared`'s own for the
     helpers inside it (`get_cluster_version` calls it).
 
-    `get_sdk_connection` is STUBBED, NOT REFUSED. Making it raise seemed safer, and it made
+    The SDK seams are STUBBED, NOT REFUSED. Making them raise seemed safer, and it made
     three modules' tests meaningless: `diagnostics`, `indexes` and `eight_x` call it at the
     top of `handle()`, before the routing switch, so every tool returned "Couchbase
     connection failed" and `test_every_declared_tool_is_routed_by_its_handler` passed
@@ -291,6 +291,7 @@ def no_cluster(monkeypatch, sdk_available):
         "admin_request": _fake_admin_request,
         "admin_request_json": _fake_admin_request,
         "get_sdk_connection": _fake_sdk_connection,
+        "get_sdk_cluster": lambda: cluster,
         "get_cluster_version": lambda: "8.0.0",
         "is_version_at_least": lambda *a, **k: True,
         "is_8x": lambda: True,
@@ -383,7 +384,7 @@ def test_the_sql_modules_are_actually_reached_not_short_circuited(
 ):
     """Proves the routing test above is not vacuous for these three.
 
-    They call `get_sdk_connection()` before the routing switch, so a fixture that made it
+    They call `get_sdk_cluster()` before the routing switch, so a fixture that made it
     raise produced "Couchbase connection failed" for every tool — and the routing assertion,
     which only looks for the "unknown tool" message, passed without a single route being
     exercised. This asserts the handler got past that point and ran a statement.
@@ -441,13 +442,12 @@ def test_a_missing_sdk_becomes_an_error_response_not_a_traceback(
     module = MODULES[module_name]
     cluster = _FakeCluster()
     for target in (shared, module):
-        if hasattr(target, "get_sdk_connection"):
-            monkeypatch.setattr(
-                target,
-                "get_sdk_connection",
-                lambda: (cluster, object(), object()),
-                raising=False,
-            )
+        for name, replacement in (
+            ("get_sdk_connection", lambda: (cluster, object(), object())),
+            ("get_sdk_cluster", lambda: cluster),
+        ):
+            if hasattr(target, name):
+                monkeypatch.setattr(target, name, replacement, raising=False)
 
     for tool in module.TOOLS:
         # Must not raise. That is the whole assertion.

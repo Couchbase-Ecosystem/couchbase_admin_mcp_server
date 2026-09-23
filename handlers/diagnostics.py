@@ -33,7 +33,7 @@ from logging_config import get_logger
 from .shared import (
     assert_read_only_statement,
     err,
-    get_sdk_connection,
+    get_sdk_cluster,
     ok,
 )
 
@@ -370,7 +370,7 @@ TOOLS: list[Tool] = [
 def _validate_statement_args(name: str, args: dict) -> list[TextContent] | None:
     """Validate caller-supplied SQL++ BEFORE any connection is made.
 
-    Ordering matters. These checks previously ran after ``get_sdk_connection()``,
+    Ordering matters. These checks previously ran after the SDK connection was opened,
     so a mutating or chained statement got as far as the cluster's doorstep before
     being refused, and a refusal required a working cluster to produce. Validation
     that costs nothing belongs before the step that costs a connection.
@@ -423,7 +423,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
         return refusal
 
     try:
-        cluster, _, _ = get_sdk_connection()
+        cluster = get_sdk_cluster()
     except Exception as exc:
         return err(f"Couchbase connection failed: {exc}", tool=name)
 

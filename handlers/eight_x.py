@@ -37,7 +37,7 @@ from .shared import (
     admin_request,
     arg_truthy,
     err,
-    get_sdk_connection,
+    get_sdk_cluster,
     is_8x,
     ok,
     quote_path,
@@ -365,7 +365,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
 def _run_n1ql(statement: str) -> list[TextContent]:
     from couchbase.options import QueryOptions
 
-    cluster, _, _ = get_sdk_connection()
+    cluster = get_sdk_cluster()
     result = cluster.query(statement, QueryOptions())
     rows = list(result)
     return ok({"rows": rows, "count": len(rows), "statement": statement})
@@ -475,7 +475,7 @@ def _user_temp(args: dict) -> list[TextContent]:
 def _conflict_query(args: dict) -> list[TextContent]:
     from couchbase.options import QueryOptions
 
-    cluster, _, _ = get_sdk_connection()
+    cluster = get_sdk_cluster()
     limit = int(args.get("limit", 50))
     keyspace = _keyspace(
         args["bucket_name"],

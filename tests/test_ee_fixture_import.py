@@ -74,7 +74,7 @@ class _FakeCluster:
 def sdk(monkeypatch):
     collection = _FakeCollection()
     cluster = _FakeCluster(collection)
-    monkeypatch.setattr(fixture, "get_sdk_connection", lambda: (cluster, None, None))
+    monkeypatch.setattr(fixture, "get_sdk_cluster", lambda: cluster)
     return cluster, collection
 
 
@@ -371,7 +371,7 @@ def test_a_past_expiry_is_dropped_and_reported_rather_than_written_dead(tmp_path
 def test_an_upsert_that_raises_is_recorded_against_its_key(tmp_path, monkeypatch):
     collection = _FakeCollection(fail_on={"k2"}, fail_with="durability failure")
     cluster = _FakeCluster(collection)
-    monkeypatch.setattr(fixture, "get_sdk_connection", lambda: (cluster, None, None))
+    monkeypatch.setattr(fixture, "get_sdk_cluster", lambda: cluster)
     _data(
         tmp_path,
         [
@@ -390,7 +390,7 @@ def test_it_stops_after_twenty_failures_rather_than_hammering_the_cluster(
 ):
     collection = _FakeCollection(fail_on="all")
     cluster = _FakeCluster(collection)
-    monkeypatch.setattr(fixture, "get_sdk_connection", lambda: (cluster, None, None))
+    monkeypatch.setattr(fixture, "get_sdk_cluster", lambda: cluster)
     _data(tmp_path, [json.dumps({"id": f"k{n}", "doc": {}}) for n in range(50)])
     result = fixture._import_documents(tmp_path, _manifest(count=50), {})
     assert result["documents_written"] == 0
@@ -403,7 +403,7 @@ def test_a_collection_that_cannot_be_opened_is_reported_not_raised(
     tmp_path, monkeypatch
 ):
     cluster = _FakeCluster(open_error="bucket not ready")
-    monkeypatch.setattr(fixture, "get_sdk_connection", lambda: (cluster, None, None))
+    monkeypatch.setattr(fixture, "get_sdk_cluster", lambda: cluster)
     _data(tmp_path, [json.dumps({"id": "k1", "doc": {}})])
     result = fixture._import_documents(tmp_path, _manifest(), {})
     assert result["ok"] is False
@@ -440,7 +440,7 @@ def test_a_manifest_with_no_files_is_vacuously_ok(tmp_path, sdk):
 def test_documents_follow_the_keyspace_map(tmp_path, monkeypatch):
     collection = _FakeCollection()
     cluster = _FakeCluster(collection)
-    monkeypatch.setattr(fixture, "get_sdk_connection", lambda: (cluster, None, None))
+    monkeypatch.setattr(fixture, "get_sdk_cluster", lambda: cluster)
     _data(tmp_path, [json.dumps({"id": "k1", "doc": {}})])
     result = fixture._import_documents(
         tmp_path, _manifest(), {"b.s.c": "other.scope2.coll2"}

@@ -57,12 +57,9 @@ def vector(monkeypatch):
     monkeypatch.setitem(sys.modules, "couchbase", package)
     monkeypatch.setitem(sys.modules, "couchbase.options", options)
 
-    monkeypatch.setattr(
-        eight_x,
-        "get_sdk_connection",
-        lambda: (capture, object(), object()),
-        raising=False,
-    )
+    # NOT raising=False -- see the note in test_sql_builders.py: a patch that cannot
+    # bind silently produced an empty capture rather than an error.
+    monkeypatch.setattr(eight_x, "get_sdk_cluster", lambda: capture)
     monkeypatch.setattr(eight_x, "is_8x", lambda: True, raising=False)
     return capture
 

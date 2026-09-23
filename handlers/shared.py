@@ -210,11 +210,39 @@ _bucket = None
 _collection = None
 
 
-def get_sdk_connection():
-    """Return (cluster, bucket, collection) — lazily initialised."""
-    global _cluster, _bucket, _collection
+def get_sdk_cluster():
+    """Return a ready Cluster, WITHOUT opening any bucket.
+
+    Cluster-level SQL++ — `system:indexes`, `system:keyspaces`, anything a query
+    node answers about the whole cluster — needs a Cluster and nothing else. It
+    does not need a bucket, and requiring one was not a harmless extra step.
+
+    MEASURED 2026-09-23. `get_sdk_connection` opened `CB_BUCKET` (defaulting to
+    `default`, which most clusters do not have) inside the same try block as
+    `wait_until_ready`, so a bucket that does not exist surfaced as the TOOL's
+    failure. With `CB_BUCKET` unset, `admin_index_list` — a query against
+    `system:indexes` that never touches a bucket — returned
+
+        BucketNotFoundException: ... Failed to open_bucket ...
+
+    which names no bucket at all, so the operator cannot tell which bucket was
+    wanted, that it came from an environment variable, or that the tool did not
+    need one. RUNBOOK.md recorded the symptom as an environment-variable problem
+    for over a week; it is not, it is this function doing work no caller asked
+    for.
+
+    All seven call sites of `get_sdk_connection` discard the bucket and the
+    collection (`cluster, _, _ = ...`), and nothing in this repository reads the
+    cached `_bucket` or `_collection`. The fixture importer opens its own bucket
+    per keyspace at `handlers/fixture.py:1154`. So the open was serving nobody.
+
+    `get_sdk_connection` is kept, opening the bucket only when it is actually
+    called, because a future KV caller will want it and its three-tuple is what
+    existing tests monkeypatch.
+    """
+    global _cluster
     if _cluster is not None:
-        return _cluster, _bucket, _collection
+        return _cluster
 
     try:
         from datetime import timedelta
@@ -251,32 +279,58 @@ def get_sdk_connection():
     # WAN profile relaxes timeouts for remote / Capella connections.
     opts.apply_profile("wan_development")
 
-    # Build into LOCALS and publish only once every step has succeeded.
+    # Build into a LOCAL and publish only once readiness has succeeded.
     #
     # `_cluster` was assigned before wait_until_ready, so one transient startup
     # failure cached a cluster that had never readied: the guard at the top of this
-    # function then returned it forever with _bucket and _collection still None,
-    # constructed no new Cluster and never retried readiness. Every SQL++ tool stayed
-    # broken for the process lifetime even after the cluster recovered, and any
-    # consumer of _collection got None.
+    # function then returned it forever, constructed no new Cluster and never
+    # retried readiness. Every SQL++ tool stayed broken for the process lifetime
+    # even after the cluster recovered.
     cluster = Cluster(conn_str, opts)
     try:
         cluster.wait_until_ready(timedelta(seconds=10))
-
-        bucket_name = get_env("CB_BUCKET", "default")
-        scope_name = get_env("CB_SCOPE", "_default")
-        coll_name = get_env("CB_COLLECTION", "_default")
-
-        bucket = cluster.bucket(bucket_name)
-        collection = bucket.scope(scope_name).collection(coll_name)
     except Exception:
         # Leave the cache empty so the next call genuinely retries.
         with contextlib.suppress(Exception):
             cluster.close()
         raise
 
-    _cluster, _bucket, _collection = cluster, bucket, collection
-    return _cluster, _bucket, _collection
+    _cluster = cluster
+    return _cluster
+
+
+def get_sdk_connection():
+    """Return (cluster, bucket, collection) — lazily initialised.
+
+    Only for callers that genuinely need a bucket or a collection. Anything
+    running cluster-level SQL++ should call `get_sdk_cluster()`, which does not
+    require `CB_BUCKET` to name a bucket that exists — see its docstring for the
+    measured failure that separating these two fixed.
+    """
+    global _bucket, _collection
+
+    cluster = get_sdk_cluster()
+    if _collection is not None:
+        return cluster, _bucket, _collection
+
+    bucket_name = get_env("CB_BUCKET", "default")
+    scope_name = get_env("CB_SCOPE", "_default")
+    coll_name = get_env("CB_COLLECTION", "_default")
+
+    try:
+        bucket = cluster.bucket(bucket_name)
+        collection = bucket.scope(scope_name).collection(coll_name)
+    except Exception as exc:
+        # Name the bucket and where it came from. The SDK's own message does
+        # not, which is what made this failure read as a tool defect.
+        raise RuntimeError(
+            f"could not open bucket {bucket_name!r} "
+            f"(scope {scope_name!r}, collection {coll_name!r}), named by "
+            f"CB_BUCKET/CB_SCOPE/CB_COLLECTION: {exc}"
+        ) from exc
+
+    _bucket, _collection = bucket, collection
+    return cluster, _bucket, _collection
 
 
 # ── HTTP admin client ────────────────────────────────────────────────────────

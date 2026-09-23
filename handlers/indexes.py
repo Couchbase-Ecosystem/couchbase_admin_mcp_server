@@ -22,7 +22,7 @@ from .shared import (
     block_dml_if_readonly,
     err,
     form_data_declared,
-    get_sdk_connection,
+    get_sdk_cluster,
     ok,
     refuse_undeclared,
 )
@@ -197,7 +197,7 @@ def _safe_ident(s: str) -> str:
 def _run_n1ql(statement: str) -> list[TextContent]:
     from couchbase.options import QueryOptions
 
-    cluster, _, _ = get_sdk_connection()
+    cluster = get_sdk_cluster()
     result = cluster.query(statement, QueryOptions())
     rows = list(result)
     return ok({"rows": rows, "count": len(rows), "statement": statement})
@@ -210,7 +210,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # bucket/scope/collection name fields.
             from couchbase.options import QueryOptions
 
-            cluster, _, _ = get_sdk_connection()
+            cluster = get_sdk_cluster()
             wheres = []
             params: dict = {}
             # system:indexes names the bucket in DIFFERENT columns depending on where

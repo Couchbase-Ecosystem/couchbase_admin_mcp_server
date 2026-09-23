@@ -78,8 +78,22 @@ def _restore_environ():
 #: which stops it when the variable is UNSET; it cannot stop it when a developer
 #: has exported one, and "the suite writes files on your machine but not in CI" is
 #: exactly the class of difference the block above exists to remove.
+#: CAPELLA_PROJECT_ID and CAPELLA_CLUSTER_ID were added on 2026-09-23, for the
+#: reason this block already describes, one variable later. `phase_discovery`
+#: pins all THREE ids from the environment (scripts/verify_mcp_surface.py:1308);
+#: only the organization was listed here, because the other two did not exist
+#: when this was written. `test_discovery_walks_the_object_graph_in_dependency_order`
+#: therefore failed on the machine of the person who had just used the tools --
+#:
+#:     assert '715ca1af-7a2f-4d12-8eab-262f93fe8c2d' == 'proj-1'
+#:
+#: -- a real project id where the fake session's answer belonged, green in CI and
+#: red on a workstation. When a script learns to read a new environment variable,
+#: it belongs in this tuple in the same change.
 AMBIENT_CREDENTIALS = (
     "CAPELLA_ORG_ID",
+    "CAPELLA_PROJECT_ID",
+    "CAPELLA_CLUSTER_ID",
     "CAPELLA_API_KEY_SECRET",
     "CAPELLA_ACCESS_KEY_ID",
     "CB_CAPELLA_ORG_ID",

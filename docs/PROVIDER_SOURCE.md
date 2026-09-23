@@ -9,7 +9,11 @@ so this records it.
 
 ## What the source is
 
-**`couchbase/terraform-provider-couchbase-capella`.**
+**`couchbasecloud/terraform-provider-couchbase-capella`.**
+
+This used to read `couchbase/...`, which does not exist — a clone of it prompts
+for credentials, which reads as "you need access" rather than "wrong path". The
+organization is `couchbasecloud`.
 
 The copy this repository's findings were read from was supplied as a zip archive
 on 2026-09-14. It has **not** been vendored into this repository, deliberately:
@@ -17,11 +21,69 @@ it is a large Go codebase that this project does not build or link against, and
 a stale vendored copy would be worse than none — the whole value of the source is
 that it tracks Couchbase's own API document.
 
-> **Open item.** The exact upstream commit was not recorded when the archive was
-> read. That is a gap: a finding attributed to "the provider" without a revision
-> cannot be re-checked against the same bytes later. The next person to consult
-> it should record the commit SHA here, and from then on every finding citing the
-> provider should cite the revision too.
+## The revision these findings were re-verified against
+
+> **Open item CLOSED 2026-09-23.** The commit behind the 2026-09-14 zip was never
+> recorded, and it cannot be recovered now. Rather than leave the findings
+> unanchored, they were **re-checked against a fresh clone** and this revision
+> records what was actually read:
+
+| | |
+|---|---|
+| Repository | `https://github.com/couchbasecloud/terraform-provider-couchbase-capella.git` |
+| Branch | `main` |
+| Commit | `a3765c099bfe98d529c8c825a01fbfdc324cee78` |
+| Authored | 2026-09-22 10:16:46 -0700 |
+| Subject | `[AV-143946] Fix App Services OIDC Create (#795)` |
+| Nearest release at the time | `v1.11.1`, tagged 2026-09-02 |
+| Read on | 2026-09-23 |
+
+Still **not vendored**, for the reason given above. Re-clone when you need it:
+
+```bash
+git clone https://github.com/couchbasecloud/terraform-provider-couchbase-capella.git
+git -C terraform-provider-couchbase-capella checkout a3765c099bfe98d529c8c825a01fbfdc324cee78
+```
+
+**From here on, a finding that cites the provider cites the revision too.** A
+claim attributed to "the provider" with no SHA is a claim nobody can re-check,
+which is how the 2026-09-14 archive left this repository.
+
+### What was re-verified at `a3765c0`, and how
+
+Every finding below that could be checked by reading a file was checked. This is
+not a claim that the findings are *still true of Capella* — only that the source
+they were drawn from says what this document says it says, at a revision anyone
+can fetch.
+
+| Finding | Check at `a3765c0` | Result |
+|---|---|---|
+| `loadBalancerCidr` is hand-written only | present in `internal/api/appservice/appservice.go`; 0 occurrences in `openapi.gen.go` | **confirmed** |
+| `capella_bucket_flush` is PUT expecting 200 | `internal/resources/flush_bucket.go:57` — `Method: http.MethodPut, SuccessStatus: http.StatusOK` | **confirmed** |
+| The Data API base is read, not derived | `internal/api/data_api/data_api.go:30` declares `ConnectionString`, tagged to the JSON field `connectionString` — read from the response, not assembled | **confirmed** |
+| Index definitions live at `.../queryService/indexes` | `openapi.gen.go:32321`, `:32430`, `:32487` | **confirmed** |
+| Restore names both ends in one call | `internal/api/backup/backup.go:126-127` — `sourceClusterID`, `targetClusterID` | **confirmed** |
+
+The `application/javascript` content-type finding and the 202-not-204 status
+findings were not re-checked here; they are recorded in the registers with their
+own evidence tags and a live control plane confirmed them, which is stronger than
+a source read.
+
+### One number to stop trusting
+
+`docs/CAPELLA_SURFACE_TODO.md` opens with *"We cover 92 of the 289 v4 operations
+the provider knows about."* Counting client methods in `openapi.gen.go` at
+`a3765c0` gives **382**, from a 64,871-line file:
+
+```bash
+grep -c "^func (c \*Client) " internal/generated/api/openapi.gen.go
+```
+
+**That is not evidence the surface grew by 93 operations in eight days.** The 289
+was counted by a method nobody wrote down, so the two numbers are not comparable
+and the difference says nothing. The point is narrower: the denominator in that
+sentence cannot be reproduced, so the coverage fraction should be re-derived —
+with the counting method stated — before anyone quotes it again.
 
 ## The files that carry the answers
 

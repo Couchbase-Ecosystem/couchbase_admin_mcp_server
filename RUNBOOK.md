@@ -622,12 +622,54 @@ design — and `confirm=true` is not optional on the create, because the server
 treats a destructive operation as two-step and `--perform` does not satisfy that
 gate.
 
-**What that run still does not cover.** The source collection carried one GSI
-definition, a primary index, and the exporter does not capture Search
-definitions at all (`fidelity.search_definitions` is false). So the
-FTS-row-rendered-as-`CREATE INDEX` fix was not exercised by it. A source
-collection with a real secondary index, and a cluster with a Search service,
-would test more — of the two Capella clusters only Bride-of-Frankenstein has one.
+**What that run did not cover — CLOSED 2026-09-23.** The source collection
+carried one GSI definition, a primary index, and the exporter does not capture
+Search definitions at all (`fidelity.search_definitions` is false), so the
+FTS-row-rendered-as-`CREATE INDEX` fix was not exercised by it.
+
+This paragraph used to end *"of the two Capella clusters only
+Bride-of-Frankenstein has one"*, and that sentence sent the next person to a
+powered-off Capella cluster for a week. **It was wrong twice over.** The EE
+container has a Search service — an FTS index was created on it on 2026-09-23 in
+about a minute — and the defect is EE-only in the first place: `handlers/fixture.py`
+assembles GSI definitions from `system:indexes`, which carries Search rows, while
+the Capella exporter reads `capella_query_index_definitions_list`, a control-plane
+endpoint that returns GSI and nothing else. There is no FTS row on the Capella
+path to mishandle.
+
+**Measured 2026-09-23 on the EE container.** `fts_events_probe` created on
+`mcptest.ops.events`, confirmed present in `system:indexes` with `using: "fts"`,
+no `metadata` and an empty `index_key`. Round trip `mcptest.ops.events` ->
+`mcptest.ops.rt_fts`:
+
+    "gsi_definitions": 3,
+    "warnings": ["index not captured: fts_events_probe on mcptest.ops.events
+                  is a fts index, not GSI"],
+    indexes created: idx_events_asset, idx_events_status_time, #primary
+
+The export records the three GSI definitions, skips the Search row with a stated
+reason, and the import builds only the GSI indexes. That is the pass condition,
+and it is met.
+
+To reproduce, with `fts.json` holding a `fulltext-index` definition whose
+`sourceName` is the bucket:
+
+```powershell
+uv run python scripts\dump_tool.py admin_fts_index_create --args-json fts.json `
+    --perform --allow-destructive
+uv run python scripts\dump_tool.py admin_fts_index_list   # expect the index, not indexDefs: null
+
+uv run python scripts\fixture_round_trip.py --plane ee `
+    --keyspace mcptest.ops.events `
+    --scratch  mcptest.ops.rt_fts `
+    --work     C:\Work\rt_fts --perform
+```
+
+`admin_fts_index_create` is annotated destructive, so `--perform` alone refuses
+it — the first attempt at this silently produced a run with no FTS index and a
+CLEAN banner, which is the failure mode worth knowing about: the round trip
+compares documents, and a missing index is not a document. Read
+`gsi_definitions` and `warnings`, not the banner.
 
 ### The environment is four variables, and they die with the window
 
@@ -638,10 +680,39 @@ variable missing from the shell:
 |---|---|
 | `CB_DEPLOYMENT` | `'admin_bucket_create' is not advertised in this posture` — the mode inferred `capella` and unloaded every `admin_*` tool |
 | `CB_PASSWORD` | `HTTP 401 on GET /pools/default/buckets` — pinning the deployment does not fix which credential it uses. `deploy/.env.ee` holds the real pair |
-| `CB_BUCKET` | `BucketNotFoundException` naming the keyspace you asked for, raised while opening the bucket named by `CB_BUCKET`, which defaults to `default` |
+| `CB_BUCKET` | Bucket-scoped tools only, since 2026-09-23. A `BucketNotFoundException` from a CLUSTER-level tool used to mean this variable; it no longer can — see the note below the table |
 | `CAPELLA_ALLOWED_PROJECTS` | `Refused by guardrail policy ... no defined sandbox` — fail-closed, working as intended |
 
 `CB_DEPLOYMENT` pins which tools load. It says nothing about which credentials
 they use, and those are two separate failure modes that look identical from the
 prompt. Set the whole set together, in one script, rather than one at a time as
 each refusal arrives.
+
+**`CB_BUCKET` was half a defect, fixed 2026-09-23.** A cluster-level query —
+`admin_index_list` reading `system:indexes`, which a query node answers about the
+whole cluster — raised
+
+    BucketNotFoundException: ... Failed to open_bucket ...
+
+naming no bucket at all. `get_sdk_connection` opened `CB_BUCKET` (defaulting to
+`default`, which most clusters do not have) inside the same try block that
+readied the cluster, so a bucket nobody had asked for could fail the call. Every
+one of its seven callers discarded the bucket. `handlers/shared.py` now offers
+`get_sdk_cluster()`, which readies a Cluster and opens nothing, and
+`get_sdk_connection()` names the bucket and the variable when an open genuinely
+fails. Cluster-level tools no longer need `CB_BUCKET`; bucket-scoped ones still
+do, and that is what the row above now says.
+
+### Docker for Windows: the SDK needs `?network=external`
+
+Not optional, and nothing in the error says so. A single-node cluster in a
+container advertises its internal address (`172.18.0.2`) with `127.0.0.1` only as
+an *alternate*, so the SDK bootstraps against an address the host cannot route to
+and sits in retry until it times out — no refusal, no message, just a hang that
+reads as a slow cluster:
+
+    CB_CONNECTION_STRING=couchbase://127.0.0.1?network=external
+
+Set `CB_BUCKET` to a bucket that exists on that container as well if you are
+calling a bucket-scoped tool (`mcptest` on this one). Cost an hour on 2026-09-22
+before the alternate-address list was read.

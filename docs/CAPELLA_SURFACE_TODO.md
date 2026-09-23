@@ -345,11 +345,32 @@ knows less than its name suggests, each with what would close it.
   which established the gating logic and not the shipped image. The image was
   settled the next day by the real-IdP lab run, which drove `tools/list` through
   the container over HTTP and read the advertised set back.
-- **The FTS-rendered-as-`CREATE INDEX` fix is still untested on both planes.**
-  `system:indexes` carries Search indexes with no `index_key`, and the exporter
-  used to assemble one into a statement the query service rejects. The fix
-  filters to `gsi`. Neither round trip exercised it: **the only cluster in the
-  project with a Search service group is `Bride-of-Frankenstein`, and it is
-  powered off.** A round trip against a keyspace on a Search-enabled cluster is
-  what closes this — until then the fix is reasoned and tested in isolation, not
-  measured against the shape that produced the defect.
+- ~~**The FTS-rendered-as-`CREATE INDEX` fix is still untested on both planes.**~~
+  **CLOSED 2026-09-23, and the entry was wrong about where to test it.**
+
+  What it said: the fix filters `system:indexes` rows to `gsi`, neither round trip
+  exercised it, and *"the only cluster in the project with a Search service group
+  is `Bride-of-Frankenstein`, and it is powered off."* That sentence cost a week
+  of waiting on a Capella cluster, and it was wrong in both halves.
+
+  **The EE container has a Search service.** `fts_events_probe` was created on
+  `mcptest.ops.events` on 2026-09-23 and appears in `system:indexes` with
+  `using: "fts"`, no `metadata` key at all and an empty `index_key` — the exact
+  shape the fix exists for. The round trip into a fresh scratch collection
+  reported `gsi_definitions: 3`, the warning `index not captured: fts_events_probe
+  on mcptest.ops.events is a fts index, not GSI`, and an import that created only
+  `idx_events_asset`, `idx_events_status_time` and `#primary`. Export records the
+  GSI, skips the Search row with a stated reason, import builds only GSI. Measured,
+  not reasoned.
+
+  **There is nothing to test on the Capella plane**, which is why "untested on
+  both planes" was the wrong frame. `handlers/fixture.py` assembles definitions
+  from `system:indexes`, which carries Search rows. `handlers/capella/fixture.py`
+  reads `capella_query_index_definitions_list` (line 805), a control-plane
+  endpoint that returns GSI and nothing else — there is no `using` field and no
+  Search row to mishandle. The defect shape cannot occur there.
+
+  Search definitions remain uncaptured by fixtures on both planes
+  (`fidelity.search_definitions: false`, stated in the manifest). That is a
+  disclosed limitation, not this defect: a fixture of a Search-enabled cluster
+  restores without its Search indexes, and the tool says so.

@@ -46,6 +46,17 @@ at once, and both failed.
 
 ### The allowlist as it actually stands
 
+> **Addresses in this document are RFC 5737 stand-ins, scrubbed 2026-09-23.**
+> `198.51.100.x` stands for the corporate VPN egress pool and `203.0.113.118`
+> for a residential egress. The cluster, organization and project ids were
+> replaced with the `CAPELLA_*` environment variables the rest of the repository
+> already uses. **Do not allowlist any address on this page literally** — it
+> grants nothing and reads as a real entry to the next person. Run step 3 of the
+> triage block below to get the address that actually applies to you. The
+> STRUCTURE of the evidence is unchanged: the same three states, the same /24,
+> the same conclusion.
+
+
 Read live on 2026-09-12, with the audit timestamps:
 
 | CIDR | Status | Created | By | Comment |
@@ -171,7 +182,7 @@ Test-NetConnection portquiz.net -Port 11207 -InformationLevel Quiet   # True = p
 
 # 4. What is currently allowlisted?
 $H = @{ Authorization = "Bearer $env:CAPELLA_API_KEY_SECRET"; 'Content-Type' = 'application/json' }
-$U = 'https://cloudapi.cloud.couchbase.com/v4/organizations/cb89726a-f6c5-452e-b92c-2c72ff292d6d/projects/715ca1af-7a2f-4d12-8eab-262f93fe8c2d/clusters/322df7dd-650e-4b12-b77c-4df1ba792100/allowedcidrs'
+$U = "https://cloudapi.cloud.couchbase.com/v4/organizations/$env:CAPELLA_ORG_ID/projects/$env:CAPELLA_PROJECT_ID/clusters/$env:CAPELLA_CLUSTER_ID/allowedcidrs"
 (Invoke-RestMethod -Uri "$U`?perPage=100" -Headers $H).data | Select-Object cidr, status, comment
 ```
 

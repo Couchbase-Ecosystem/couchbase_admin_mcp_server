@@ -63,9 +63,9 @@ param(
     [string]$Csv = 'egress-samples.csv',
 
     [string]$ClusterId = 'cpvbgft3fwgwy3eu',
-    [string]$OrgId = 'cb89726a-f6c5-452e-b92c-2c72ff292d6d',
-    [string]$ProjectId = '715ca1af-7a2f-4d12-8eab-262f93fe8c2d',
-    [string]$ClusterUuid = '322df7dd-650e-4b12-b77c-4df1ba792100'
+    [string]$OrgId = $env:CAPELLA_ORG_ID,
+    [string]$ProjectId = $env:CAPELLA_PROJECT_ID,
+    [string]$ClusterUuid = $env:CAPELLA_CLUSTER_ID
 )
 
 $ErrorActionPreference = 'Stop'

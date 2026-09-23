@@ -79,9 +79,9 @@ the provider knows about."* Counting client methods in `openapi.gen.go` at
 grep -c "^func (c \*Client) " internal/generated/api/openapi.gen.go
 ```
 
-**That is not evidence the surface grew by 93 operations in eight days.** The 289
-was counted by a method nobody wrote down, so the two numbers are not comparable
-and the difference says nothing. The point is narrower: the denominator in that
+**That is not evidence the surface grew by 93 operations between 2026-09-14 and
+2026-09-23.** The 289 was counted on 2026-09-14 by a method nobody wrote down, so
+the two numbers are not comparable and the difference says nothing. The point is narrower: the denominator in that
 sentence cannot be reproduced, so the coverage fraction should be re-derived —
 with the counting method stated — before anyone quotes it again.
 

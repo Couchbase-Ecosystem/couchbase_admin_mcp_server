@@ -785,8 +785,42 @@ def _export(args: dict) -> list[TextContent]:
             )
         structure.append(record)
 
-    indexes: list[dict] = []
+    # ONE REQUEST PER COLLECTION, not one per bucket. MEASURED 2026-09-29 on a
+    # live cluster: with `bucket` alone this operation returns the indexes on
+    # that bucket's DEFAULT collection and nothing else. travel-sample answered
+    # with the four sg_* indexes on _default._default, while the same call with
+    # scope=inventory&collection=airline returned twelve definitions on
+    # inventory.airline, a primary index among them. So every export of a named
+    # collection wrote gsi_definitions: 0 and reported full index fidelity. The
+    # 2026-09-14 reading of this call -- "every index in the bucket" -- was
+    # wrong: the four definitions it saw were all the default collection's.
+    #
+    # The default collection keeps the bucket-only form, because that is the
+    # form measured to return it. A bucket whose scopes could not be read also
+    # falls back to it, so a partial structure still records what it can.
+    wanted_index_keyspaces = {k for k in (args.get("keyspaces") or []) if k}
+    index_requests: list[tuple[str, dict[str, str]]] = []
     for bucket in structure:
+        bucket_name = str(bucket["name"])
+        pairs = [
+            (str(scope.get("name")), str(collection.get("name")))
+            for scope in bucket.get("scopes") or []
+            for collection in scope.get("collections") or []
+        ]
+        if not pairs:
+            index_requests.append((bucket_name, {"bucket": bucket_name}))
+            continue
+        for scope_name, collection_name in pairs:
+            keyspace = f"{bucket_name}.{scope_name}.{collection_name}"
+            if wanted_index_keyspaces and keyspace not in wanted_index_keyspaces:
+                continue
+            params = {"bucket": bucket_name}
+            if (scope_name, collection_name) != ("_default", "_default"):
+                params.update(scope=scope_name, collection=collection_name)
+            index_requests.append((keyspace, params))
+
+    indexes: list[dict] = []
+    for label, params in index_requests:
         try:
             # NOT _invoke: `bucket` IS A QUERY PARAMETER, NOT A PATH SEGMENT.
             #
@@ -806,12 +840,10 @@ def _export(args: dict) -> list[TextContent]:
             payload = capella_request(
                 op.method,
                 build_path(op.path, ids),
-                params={"bucket": bucket["name"]},
+                params=params,
             )
         except Exception as exc:
-            warnings.append(
-                f"GSI definitions for {bucket['name']} could not be read: {exc}"
-            )
+            warnings.append(f"GSI definitions for {label} could not be read: {exc}")
             continue
         found = payload.get("definitions") if isinstance(payload, dict) else None
         indexes.extend(found or [])
@@ -1011,9 +1043,14 @@ def _export(args: dict) -> list[TextContent]:
 
     # ── GSI definitions are scoped to what this fixture CARRIES ──────────
     #
-    # capella_query_index_definitions_list takes bucket, scope and collection as
-    # query parameters, and this export sends only `bucket`. So a fixture
-    # covering ONE collection came back carrying every index in the bucket.
+    # CORRECTED 2026-09-29. This block used to say the export sent only
+    # `bucket` and therefore got "every index in the bucket". The second half
+    # was a misreading: bucket-only returns the DEFAULT collection's indexes,
+    # which is what the four sg_* definitions below were (see the request loop
+    # above, which now asks per collection). The filter is still needed: a
+    # request can return a definition this fixture does not carry, and a stub
+    # or a future API change that widens the answer must not leak into the
+    # manifest.
     #
     # MEASURED 2026-09-14 on a live Capella round trip: a fixture of
     # travel-sample.inventory.airline recorded 4 GSI definitions, of which the

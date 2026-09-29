@@ -1128,6 +1128,124 @@ def test_index_definitions_are_scoped_to_the_keyspaces_the_fixture_carries(
     assert "warnings" not in payload
 
 
+def _answer_index_definitions_like_capella(monkeypatch, by_keyspace):
+    """Answer capella_query_index_definitions_list the way the live API does.
+
+    MEASURED 2026-09-29: `bucket` alone returns the DEFAULT collection's
+    definitions only; `bucket` + `scope` + `collection` returns that
+    collection's. The module-level stub above answers every call with the same
+    list, which is why it could not see the export asking the wrong question.
+    """
+    calls: list[dict] = []
+
+    def request(method, path, *, params=None, body=None, content_type=None):
+        params = dict(params or {})
+        calls.append(params)
+        scope = params.get("scope", "_default")
+        collection = params.get("collection", "_default")
+        keyspace = f"{params.get('bucket')}.{scope}.{collection}"
+        return {"definitions": list(by_keyspace.get(keyspace, []))}
+
+    monkeypatch.setattr(fixture, "capella_request", request)
+    return calls
+
+
+def _definition(name: str, keyspace: str) -> dict:
+    b, s, c = keyspace.split(".")
+    return {
+        "indexName": name,
+        "definition": f"CREATE INDEX `{name}` ON `{b}`.`{s}`.`{c}`(`x`)",
+    }
+
+
+def test_an_export_of_a_named_collection_records_that_collections_indexes(
+    tmp_path, monkeypatch
+):
+    """MEASURED 2026-09-29: exporting travel-sample.inventory.airline wrote
+    gsi_definitions: 0 and reported index fidelity TRUE, while the collection
+    carried twelve definitions including a primary index. The export asked with
+    `bucket` alone, which answers for the default collection only."""
+    _stub_export_cluster(
+        monkeypatch,
+        collections=["airline", "hotel"],
+        rows_by_keyspace={"b.s.airline": [{"id": "airline_10", "x": 1}]},
+    )
+    calls = _answer_index_definitions_like_capella(
+        monkeypatch,
+        {
+            "b._default._default": [_definition("sg_users_x1", "b._default._default")],
+            "b.s.airline": [
+                _definition("pidx_airline", "b.s.airline"),
+                _definition("sg_access_x1", "b.s.airline"),
+            ],
+            "b.s.hotel": [_definition("ix_hotel", "b.s.hotel")],
+        },
+    )
+    result = fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": True,
+            "keyspaces": ["b.s.airline"],
+        }
+    )
+    payload = json.loads("".join(block.text for block in result))
+
+    assert payload["gsi_definitions"] == 2, payload
+    manifest = json.loads(
+        (tmp_path / "fx" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert sorted(d["indexName"] for d in manifest["gsi_definitions"]) == [
+        "pidx_airline",
+        "sg_access_x1",
+    ]
+    # Asked for the carried collection, by name, and for nothing else.
+    assert calls == [{"bucket": "b", "scope": "s", "collection": "airline"}]
+
+
+def test_the_default_collection_is_asked_for_with_the_bucket_alone(
+    tmp_path, monkeypatch
+):
+    """The bucket-only form is the one measured to return the default
+    collection's indexes, so that is the form used for it."""
+    _stub_export_cluster(monkeypatch, collections=["_default"], rows_by_keyspace={})
+    calls = _answer_index_definitions_like_capella(
+        monkeypatch,
+        {"b._default._default": [_definition("ix_default", "b._default._default")]},
+    )
+    # The stub cluster's one scope is named "s"; rename it to _default here.
+    from handlers.capella import environment as env
+
+    real_invoke = env._invoke
+
+    def _invoke(op_name, args, body=None, composite=""):
+        if op_name == "capella_scopes_list":
+            return {
+                "scopes": [{"name": "_default", "collections": [{"name": "_default"}]}]
+            }
+        return real_invoke(op_name, args, body=body, composite=composite)
+
+    monkeypatch.setattr(env, "_invoke", _invoke)
+    fixture._export(
+        {
+            "fixture_id": "fx",
+            "fixture_path": str(tmp_path / "fx"),
+            "cluster_id": "c",
+            "organization_id": "o",
+            "project_id": "p",
+            "include_data": False,
+        }
+    )
+    assert calls == [{"bucket": "b"}]
+    manifest = json.loads(
+        (tmp_path / "fx" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert [d["indexName"] for d in manifest["gsi_definitions"]] == ["ix_default"]
+
+
 def test_a_definition_whose_target_cannot_be_read_is_kept_not_dropped(
     tmp_path, monkeypatch
 ):

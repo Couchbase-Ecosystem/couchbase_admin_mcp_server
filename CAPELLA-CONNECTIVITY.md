@@ -117,6 +117,69 @@ connection, the Data API, the fixture tools, the quickstart samples. It is the
 remedy that is known to work. It costs Supportal reachability in the same
 session, which is the thing worth fixing once the tunnel question is settled.
 
+For the Data API that remedy is now measured, not only known, and it holds with
+Netskope still running. See the next section.
+
+### Measured 2026-09-29: VPN off, Netskope still on
+
+A different cluster from Bride-of-Frankenstein: the test cluster named by
+`$env:CAPELLA_CLUSTER_ID`, reached over its **Data API** on 443, not the SDK on
+11207. What was running:
+
+- **GlobalProtect** (`PanGPA`, `PanGPS`) is the VPN. It was disconnected.
+- **Netskope** (`stAgentSvc`, `stAgentUI`) is a separate corporate client. It
+  steers web traffic through Netskope's cloud and intercepts TLS. It stays on
+  when the VPN is off, and it is a corporate control: it cannot be turned off,
+  and nothing here should try to work around it.
+
+What was measured, cheapest first:
+
+| Step | Result | What it proves |
+|---|---|---|
+| `Invoke-RestMethod https://api.ipify.org` | a Netskope egress (stand-in `192.0.2.31`), not the residential address | traffic leaves through Netskope even with the VPN down |
+| `Test-NetConnection <data-api-host> -Port 443` | `True` | **nothing on its own.** An intercepting agent can complete the TCP handshake itself |
+| HTTPS request from Python (below) | `HTTP 404` from Capella at `/` | the request reached Capella and Capella answered. Any status counts |
+| `capella_fixture_export` over the Data API | 188 documents, `airline_10` on line 2 | the real workload, end to end |
+
+So with the VPN off, **the Data API is reachable through Netskope.** Earlier
+data-plane timeouts on this cluster were not recorded with the VPN state beside
+them, so they are not compared here. Record the VPN state next to the next
+failure.
+
+The probe. It uses the same stack as the exporter, and its failure mode is the
+diagnosis: a timeout means dropped (ask IT for a steering exception for
+`*.data.cloud.couchbase.com`); a certificate error means Python does not trust
+Netskope's interception certificate, a different problem.
+
+```powershell
+$py = @'
+import sys, urllib.request, urllib.error
+url = "https://" + sys.argv[1] + "/"
+try:
+    r = urllib.request.urlopen(url, timeout=20)
+    print("REACHABLE: HTTP", r.status)
+except urllib.error.HTTPError as e:
+    print("REACHABLE: HTTP", e.code, "(Capella answered; an error status is fine here)")
+except Exception as e:
+    print("NOT REACHABLE:", type(e).__name__, "-", getattr(e, "reason", e))
+'@
+[IO.File]::WriteAllText("$env:TEMP\dataapi_probe.py", $py, (New-Object Text.UTF8Encoding $false))
+uv run --system-certs python "$env:TEMP\dataapi_probe.py" <data-api-host>
+```
+
+`--system-certs` is required behind Netskope. It makes Python use the Windows
+certificate store, which trusts Netskope's interception CA. Python's bundled
+store does not, and fails with an unknown-issuer error.
+
+**Not measured, so do not build on it:**
+
+- **The SDK on 11207 under Netskope.** Only the Data API on 443 was tested.
+- **Whether the IP allowlist gated this request.** The egress ipify reported was
+  not one of the cluster's literal `/32` entries, and the request succeeded
+  anyway. Either the Data API is not gated by the allowlist, or the connection
+  to Capella left from a different Netskope address than the one ipify saw.
+  Nothing here separates the two.
+
 **The VPN state does not matter for the admin MCP server's Capella tools.** Those
 reach the v4 control plane at `cloudapi.cloud.couchbase.com` over 443 with the
 organization API key, which is not gated by the per-cluster IP allowlist at all.

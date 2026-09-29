@@ -184,7 +184,24 @@ def _find_by_name(collection: list[dict], name: str) -> dict | None:
     return None
 
 
-_PASSWORD_SYMBOLS = "!@#$%^&*-_=+"
+#: Characters Capella refuses in a database-credential password. MEASURED
+#: 2026-09-29, capella_database_credential_update on a live cluster:
+#:
+#:   422 "Can not create application user. The password provided contains an
+#:        invalid character, '*'. Please revise the password and try again."
+#:
+#: '*' used to be in _PASSWORD_SYMBOLS. With 21 positions drawing from a
+#: 74-character alphabet plus one required symbol, roughly 30% of generated
+#: passwords contained it, so about one capella_env_ensure credential in three
+#: failed with that 422. Only '*' is measured: a 24-character password drawn from
+#: the remaining symbols was accepted on the retry, which shows the set is usable,
+#: not that every symbol in it has been tried individually. Add a character here
+#: when Capella names one, and it drops out of the generator.
+_CAPELLA_REJECTED_PASSWORD_CHARS = "*"
+
+_PASSWORD_SYMBOLS = "".join(
+    c for c in "!@#$%^&*-_=+" if c not in _CAPELLA_REJECTED_PASSWORD_CHARS
+)
 
 
 def _generate_password(length: int = 24) -> str:

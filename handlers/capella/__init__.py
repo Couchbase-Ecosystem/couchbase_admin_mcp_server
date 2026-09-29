@@ -427,6 +427,32 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
         )
 
 
+#: What to tell the caller after a sensitive response has been redacted, PER TOOL.
+#:
+#: There used to be one note for every sensitive op: "Use capella_env_ensure to
+#: provision a credential and receive its password once". Measured 2026-09-29 it
+#: was wrong twice over. After a credential CREATE it pointed at a tool that
+#: provisions a whole environment, cluster included, when the caller wanted one
+#: credential on an existing cluster. After an UPDATE, which returns no secret at
+#: all, it implied a password had been withheld. The redaction itself is right;
+#: the advice has to match the operation.
+_REDACTION_NOTE_DEFAULT = "Credential material in this response was redacted."
+_REDACTION_NOTES: dict[str, str] = {
+    "capella_database_credential_create": (
+        "Credential material in this response was redacted. If Capella "
+        "generated the password, it is now unrecoverable and this credential "
+        "cannot be used until capella_database_credential_update sets a "
+        "password generated OUTSIDE the conversation. capella_env_ensure "
+        "returns a generated password once, but only when it is provisioning "
+        "a whole environment."
+    ),
+    "capella_database_credential_update": (
+        "Credential material in this response was redacted. An update returns "
+        "no secret: the password you supplied is the one now in effect."
+    ),
+}
+
+
 def _handle_primitive(name: str, args: dict) -> list[TextContent]:
     op = OPS_BY_NAME[name]
     policy = guardrails.load_policy()
@@ -486,11 +512,7 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
         # and it does so once, at the point of use.
         result = redact_response(result)
         if isinstance(result, dict):
-            result["_note"] = (
-                "Credential material in this response was redacted. Use "
-                "capella_env_ensure to provision a credential and receive its "
-                "password once, at creation."
-            )
+            result["_note"] = _REDACTION_NOTES.get(name, _REDACTION_NOTE_DEFAULT)
 
     return ok(result)
 

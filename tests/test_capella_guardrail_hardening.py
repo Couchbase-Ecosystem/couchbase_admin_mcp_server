@@ -25,6 +25,10 @@ The findings, in the order they appear here:
   F7  CAPELLA_PROTECTED_CLUSTERS matched only ids, so listing a cluster by name
       protected nothing while reading as configured.
   F8  Deletion protection expressed as the string "true" was not honored.
+  F9  The database-credential path (2026-09-29): a create schema that advised
+      a password this server then redacts, a redaction note pointing at the
+      wrong tool, a generator that could emit a character Capella rejects, and
+      a 422 hint that contradicted Capella's own message.
 """
 
 from __future__ import annotations
@@ -1383,3 +1387,148 @@ def test_there_is_something_to_test():
         "no guarded cluster operations; the unmanaged-cluster and allowlist "
         "refusals are both parametrising over an empty list"
     )
+
+
+# ── F9: the credential path, measured live 2026-09-29 ────────────────────────
+#
+# Four defects found in one session of creating a Data API credential for a
+# fixture export. Each cost a round trip against a live cluster:
+#
+#   * the create schema recommended letting Capella generate the password, and
+#     this server then redacted it, so following the schema's own advice made an
+#     unusable credential;
+#   * the redaction note sent the caller to capella_env_ensure, which provisions
+#     a whole environment, and printed the same advice after an update;
+#   * Capella refused a password containing '*', which the generator could emit;
+#   * the 422 hint blamed a service group or bucket memory on a credential call.
+
+
+MEASURED_STAR_422 = {
+    "code": 422,
+    "hint": "Please review your request and ensure that all required parameters are correctly provided.",
+    "httpStatusCode": 422,
+    "message": (
+        "Can not create application user. The password provided contains an "
+        "invalid character, '*'. Please revise the password and try again."
+    ),
+}
+
+
+def test_f9_the_generator_never_emits_a_character_capella_rejects():
+    """Measured 2026-09-29: Capella answers 422 to a password containing '*'. With
+    '*' in the symbol set about 30% of generated passwords carried one, so roughly
+    every third capella_env_ensure credential create failed."""
+    assert "*" in environment._CAPELLA_REJECTED_PASSWORD_CHARS
+    assert not set(environment._PASSWORD_SYMBOLS) & set(
+        environment._CAPELLA_REJECTED_PASSWORD_CHARS
+    )
+    for _ in range(2000):
+        p = environment._generate_password()
+        bad = set(p) & set(environment._CAPELLA_REJECTED_PASSWORD_CHARS)
+        assert not bad, f"generated a password containing {sorted(bad)}"
+
+
+def test_f9_the_symbol_set_is_still_a_symbol_set():
+    """Removing a rejected character must not quietly empty the class Capella
+    REQUIRES one of. A generator with no symbols fails every create instead."""
+    assert len(environment._PASSWORD_SYMBOLS) >= 4
+    assert not any(c.isalnum() for c in environment._PASSWORD_SYMBOLS)
+
+
+def _password_field_description() -> str:
+    from handlers.capella import spec
+
+    tools = {t.name: t for t in spec.build_tools()}
+    schema = tools["capella_database_credential_create"].inputSchema
+    return schema["properties"]["body"]["properties"]["password"]["description"]
+
+
+def test_f9_the_create_schema_no_longer_recommends_a_password_it_will_redact():
+    """The old text said 'Generated is preferred: it is returned once in the create
+    response'. True of Capella, false of this tool, which redacts that response.
+    A caller who followed it got a credential nobody could log in with."""
+    text = _password_field_description()
+    assert "preferred" not in text.lower()
+    assert "REDACTS" in text
+    assert "capella_database_credential_update" in text
+
+
+def test_f9_the_create_schema_records_the_rejected_character():
+    assert "'*'" in _password_field_description()
+
+
+def _stub_write(monkeypatch, response):
+    def request(
+        method, path, *, params=None, body=None, content_type="application/json"
+    ):
+        if method == "GET":
+            return MANAGED
+        return response
+
+    monkeypatch.setattr(capella, "capella_request", request)
+
+
+def test_f9_the_create_note_says_how_to_recover_a_redacted_password(monkeypatch):
+    """The note used to send the caller to capella_env_ensure, which would stand up
+    a second environment. The recovery on an existing cluster is a rotation."""
+    _stub_write(monkeypatch, {"id": "cred-1", "password": "Generated1!x"})
+    payload = _call(
+        "capella_database_credential_create",
+        project_id="test-proj",
+        cluster_id="test-cluster-1",
+        body={"name": "app", "access": [{"privileges": ["data_reader"]}]},
+    )
+    assert "Generated1!x" not in json.dumps(payload)
+    note = payload["_note"]
+    assert "capella_database_credential_update" in note
+    assert "whole environment" in note
+
+
+def test_f9_the_update_note_does_not_claim_a_secret_was_withheld(monkeypatch):
+    """Measured 2026-09-29: an update answered 204 with no body, and the note beside
+    it still said to use capella_env_ensure to receive a password."""
+    _stub_write(monkeypatch, {"status": "ok", "http_status": 204})
+    payload = _call(
+        "capella_database_credential_update",
+        project_id="test-proj",
+        cluster_id="test-cluster-1",
+        user_id="cred-1",
+        body={"password": "Supplied1!x", "access": [{"privileges": ["data_reader"]}]},
+    )
+    assert "Supplied1!x" not in json.dumps(payload)
+    note = payload["_note"]
+    assert "capella_env_ensure" not in note
+    assert "no secret" in note
+
+
+def test_f9_other_sensitive_ops_keep_a_plain_redaction_note():
+    """The per-tool notes must not leave any sensitive op without one."""
+    from handlers.capella import spec
+
+    sensitive = [op.name for op in spec.OPS if op.sensitive_response]
+    assert "capella_database_credential_create" in sensitive
+    assert set(capella._REDACTION_NOTES) <= set(sensitive), (
+        "a redaction note is keyed to a tool that is not sensitive_response"
+    )
+    for name in sensitive:
+        note = capella._REDACTION_NOTES.get(name, capella._REDACTION_NOTE_DEFAULT)
+        assert note.startswith("Credential material in this response was redacted")
+
+
+def test_f9_a_422_with_a_reason_does_not_print_a_second_diagnosis():
+    """Measured 2026-09-29: beside Capella's own 'invalid character' message, the
+    hint blamed a service group or bucket memory, on a call that had neither."""
+    from handlers.capella import client
+
+    hint = client._hint_for_status(422, MEASURED_STAR_422)
+    assert "service" not in hint.lower()
+    assert "bucket" not in hint.lower()
+    assert "quoted above" in hint
+
+
+def test_f9_a_422_with_no_reason_keeps_the_general_hint():
+    from handlers.capella import client
+
+    for detail in (None, "", {}, {"message": "   "}):
+        hint = client._hint_for_status(422, detail)
+        assert "service" in hint.lower(), detail

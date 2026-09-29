@@ -234,6 +234,16 @@ def _hint_for_status(status: int, detail: Any = None) -> str:
                 "logging with capella_cluster_audit_log_config_set, let the cluster "
                 "record some activity, then export a window that contains it."
             )
+    if status == 422 and _message_of(detail).strip():
+        # MEASURED 2026-09-29: a credential update answered 422 "The password
+        # provided contains an invalid character, '*'", and the general hint
+        # printed beside it blamed a service group or bucket memory, on a call
+        # that had neither. Capella's message named the field; a guess next to it
+        # is a second, wrong diagnosis.
+        return (
+            "Capella's own message, quoted above, names what it refused. Fix that "
+            "field and retry."
+        )
     return _hint_body(status)
 
 

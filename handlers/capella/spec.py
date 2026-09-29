@@ -883,9 +883,15 @@ _DB_CREDENTIAL_BODY: dict[str, Any] = {
     "password": {
         "type": "string",
         "description": (
-            "Omit to have Capella generate one. Generated is preferred: it is "
-            "returned once in the create response and never has to appear in a "
-            "prompt, a pipeline definition, or this server's log."
+            "If omitted, Capella generates one and returns it once in the create "
+            "response, BUT THIS TOOL REDACTS THAT RESPONSE, so the generated "
+            "password is lost and the credential cannot be used until it is "
+            "rotated. Measured 2026-09-29. To get a usable credential: provision "
+            "through capella_env_ensure (new environments only, it returns the "
+            "password once), or create here and then set a password generated "
+            "OUTSIDE the conversation with capella_database_credential_update. "
+            "A supplied password is redacted from this server's audit log. "
+            "Capella rejects '*' (measured 2026-09-29, 422)."
         ),
     },
     "access": {
@@ -2455,8 +2461,12 @@ OPS: tuple[Op, ...] = (
             "Create a database credential for the app under test. If password is "
             "omitted Capella generates one and returns it in this response ONLY "
             "— it cannot be retrieved later. This server redacts it from logs and "
-            "from the tool result; use capella_env_ensure, which returns "
-            "it once, deliberately, at the point of use. [TF database_credential.go]"
+            "from the tool result, so a credential created here WITHOUT a "
+            "password is unusable until capella_database_credential_update sets "
+            "one. capella_env_ensure returns a generated password once, "
+            "deliberately, but it provisions a whole environment (cluster "
+            "included) and is not a way to add a credential to an existing "
+            "cluster. [TF database_credential.go]"
         ),
         group="credentials",
         body=_DB_CREDENTIAL_BODY,
@@ -2488,9 +2498,12 @@ OPS: tuple[Op, ...] = (
             "UNLIKE THE CREATE OP, omitting `password` does not have Capella "
             "generate one: create returns a generated password in its response "
             "and this operation has no such response to carry one. "
-            "UNVERIFIED PATH: from the provider's generated client "
-            "(openapi.gen.go:33681), not yet exercised live. A 404 here "
-            "may be the path rather than the id. [TF]"
+            "Capella rejects '*' in a password (422). [TF openapi.gen.go:33681. "
+            "LIVE 405 + METHOD additionally confirmed on 2026-09-29 by a "
+            "deliberate operator PUT rotating a disposable credential's password, "
+            "which returned 204; the same PUT with a '*' in the password returned "
+            "422 naming the character. Recorded here, not in LIVE_VERIFIED: the "
+            "probe OPTIONS-probed this and did not perform it.]"
         ),
         group="credentials",
         guarded=True,

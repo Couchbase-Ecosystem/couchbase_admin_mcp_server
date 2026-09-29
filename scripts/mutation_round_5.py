@@ -29,7 +29,7 @@ CONTRACT = "tests/test_handler_contract.py"
 CAPELLA = "tests/test_capella.py tests/test_verify_capella_paths.py"
 TOKEN = "tests/test_token_validation.py"
 SHARED = "tests/test_shared_http.py tests/test_shared_helpers.py"
-GUI_OAUTH = "tests/test_gui_oauth_routes.py"
+GUI_OAUTH = "tests/test_gui_oauth_routes.py tests/test_gui_oauth_login_store.py"
 GUI_AUTHZ = "tests/test_gui_authorization.py"
 SQLB = "tests/test_sql_builders.py"
 DISPATCH = "tests/test_server_dispatch.py"
@@ -352,8 +352,19 @@ MUTATIONS = [
     (
         "contract: the fixture short-circuits the SQL++ handlers again",
         "tests/test_handler_contract.py",
-        "    def _fake_sdk_connection():\n        return cluster, object(), object()",
-        "    def _fake_sdk_connection():\n        raise AssertionError('no cluster')",
+        # BOTH seams. Since 2026-09-23 the SQL++ handlers call get_sdk_cluster(), not
+        # get_sdk_connection(), so breaking only _fake_sdk_connection broke a function
+        # nothing called and this mutant survived while the guard was intact. The second
+        # edit points get_sdk_cluster at the broken fake, which is the fixture actually
+        # short-circuiting the handlers.
+        [
+            "    def _fake_sdk_connection():\n        return cluster, object(), object()",
+            '        "get_sdk_cluster": lambda: cluster,',
+        ],
+        [
+            "    def _fake_sdk_connection():\n        raise AssertionError('no cluster')",
+            '        "get_sdk_cluster": _fake_sdk_connection,',
+        ],
         CONTRACT,
     ),
     # ── The App Service node count, found by a live 422 ─────────────────────
@@ -1232,8 +1243,12 @@ MUTATIONS = [
     (
         "capella: a 404 no longer explains the project-id trap",
         "handlers/capella/client.py",
-        "    if status == 404:",
-        "    if False:",
+        # The anchor carries the next two lines because client.py now has TWO
+        # `if status == 404:` branches, and the harness replaces the first. The first is
+        # the self-explaining-404 wrapper; the project-id trap is the second. Anchored on
+        # the bare condition, this mutant disabled the wrong branch and survived.
+        '    if status == 404:\n        return (\n            "Resource not found.',
+        '    if False:\n        return (\n            "Resource not found.',
         INFRA,
     ),
     (
@@ -1473,7 +1488,11 @@ def main() -> int:
                 else [(old, new)]
             )
             path = work / relpath
-            text = path.read_text()
+            # UTF-8 explicitly. Bare read_text() uses the locale code page, which is
+            # cp1252 on Windows: every anchor containing an em-dash then matched zero
+            # times and reported ANCHOR-GONE there while matching once in CI. Measured
+            # 2026-09-29 -- five of them.
+            text = path.read_text(encoding="utf-8")
             missing = [o for o, _ in edits if o not in text]
             if missing:
                 # Not a pass. An anchor that no longer matches means this mutation tested
@@ -1481,12 +1500,31 @@ def main() -> int:
                 print(f"  ANCHOR-GONE  {label} ({relpath})", flush=True)
                 survivors.append((label, "anchor not found"))
                 continue
+            orig_counts = {o: text.count(o) for o, _ in edits}
             for one_old, one_new in edits:
                 text = text.replace(one_old, one_new, 1)
-            path.write_text(text)
+            path.write_text(text, encoding="utf-8")
+            # How many times each anchor occurs, against how many times the mutant lists
+            # it. A mismatch is often deliberate -- "mutate any inputSchema" is served by
+            # the first of seven -- so it is not a failure on its own. It matters when the
+            # mutant SURVIVES, because then the edit may have landed on a different site
+            # from the one the label describes: on 2026-09-29 the 404 mutant disabled the
+            # first of two `if status == 404:` branches and survived for exactly that reason.
+            listed = {o: sum(1 for x, _ in edits if x == o) for o, _ in edits}
             if run(target, work):
                 print(f"  SURVIVED     {label}", flush=True)
-                survivors.append((label, "no test caught it"))
+                drift = [
+                    f"{o[:40]!r} found {orig_counts[o]}x, listed {k}x"
+                    for o, k in listed.items()
+                    if orig_counts[o] != k
+                ]
+                why = "no test caught it"
+                if drift:
+                    why += (
+                        " -- ANCHOR COUNT MISMATCH, the edit may have hit the wrong site: "
+                        + "; ".join(drift)
+                    )
+                survivors.append((label, why))
             else:
                 print(f"  caught       {label}", flush=True)
 

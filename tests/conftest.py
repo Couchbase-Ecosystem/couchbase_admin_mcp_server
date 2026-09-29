@@ -101,6 +101,14 @@ AMBIENT_CREDENTIALS = (
     "CB_CAPELLA_API_URL",
     "CB_BUCKET",
     "CB_ADMIN_CATALOG_ROOT",
+    # Added 2026-09-29, on evidence: with CB_DEPLOYMENT=capella exported (the
+    # Capella setup step), 20 tests failed on the developer's machine and passed in
+    # CI. Every one was a security-gate test -- confirmation, hard ceiling, scope,
+    # redaction -- aimed at an admin_* tool, and every one was answered instead by
+    # "not available in 'capella' deployment mode", the deployment gate that runs
+    # first. Reproduced with that single variable; the same 20 fail on the
+    # previous commit, so it was never the code under test.
+    "CB_DEPLOYMENT",
 )
 
 

@@ -363,6 +363,102 @@ def test_a_replica_shortfall_is_reported_when_the_column_exists(cluster):
     assert "cop(ies) on the cluster" in " ".join(checks["problems"])
 
 
+#: A system:indexes row as Capella returned it on 2026-09-29, trimmed only of
+#: timestamps. No replica_id; num_replica under both `with` and `metadata`.
+CAPELLA_PRIMARY_ROW = {
+    "bucket_id": "travel-sample",
+    "datastore_id": "http://127.0.0.1:8091",
+    "id": "7a1f55bb484e72ea",
+    "index_key": [],
+    "is_primary": True,
+    "keyspace_id": "airline",
+    "metadata": {
+        "definition": "CREATE PRIMARY INDEX `mcptest_pidx_airline` ON "
+        '`travel-sample`.`inventory`.`airline` WITH {  "num_replica":1 }',
+        "num_replica": 1,
+    },
+    "name": "mcptest_pidx_airline",
+    "namespace": "default",
+    "namespace_id": "default",
+    "scope_id": "inventory",
+    "state": "online",
+    "using": "gsi",
+    "with": {"num_partition": 1, "num_replica": 1, "retain_deleted_xattr": False},
+}
+
+PRIMARY_AND_ONE_REPLICA = [
+    {"indexName": "mcptest_pidx_airline"},
+    {"indexName": "mcptest_pidx_airline (replica 1)"},
+]
+
+
+def test_capellas_configured_replica_count_is_compared(cluster):
+    """MEASURED 2026-09-29: Capella's system:indexes has no replica_id column and
+    system:indexes_all does not exist, but each row carries num_replica. The
+    fixture recorded the index plus one replica; the cluster is configured for
+    the same, so this verifies, and says which count it compared."""
+    cluster["index_rows"] = [dict(CAPELLA_PRIMARY_ROW)]
+    manifest = {"files": [], "gsi_definitions": PRIMARY_AND_ONE_REPLICA}
+    checks = fixture._cluster_checks(manifest, {"cluster_id": "c1"})
+    assert checks["verified"] is True, checks["problems"]
+    assert checks["indexes"]["replicas_checked"] is True
+    assert checks["indexes"]["replica_source"] == "num_replica (configured count)"
+    assert checks["indexes"]["replica_mismatches"] == []
+    assert "CONFIGURED" in checks["indexes"]["replicas_note"]
+
+
+def test_a_cluster_configured_for_fewer_replicas_fails(cluster):
+    """The case the gap existed for: a fixture whose source carried a replica,
+    satisfied by a cluster with none."""
+    row = dict(CAPELLA_PRIMARY_ROW)
+    row["with"] = {"num_partition": 1, "num_replica": 0}
+    row["metadata"] = {"num_replica": 0}
+    cluster["index_rows"] = [row]
+    manifest = {"files": [], "gsi_definitions": PRIMARY_AND_ONE_REPLICA}
+    checks = fixture._cluster_checks(manifest, {"cluster_id": "c1"})
+    assert checks["verified"] is False
+    assert checks["indexes"]["replica_mismatches"] == [
+        {
+            "name": "mcptest_pidx_airline",
+            "expected_copies": 2,
+            "copies_on_cluster": 1,
+        }
+    ]
+    assert "configured for 1 cop(ies)" in " ".join(checks["problems"])
+
+
+def test_metadata_num_replica_is_the_fallback(cluster):
+    row = dict(CAPELLA_PRIMARY_ROW)
+    row.pop("with")
+    cluster["index_rows"] = [row]
+    manifest = {"files": [], "gsi_definitions": PRIMARY_AND_ONE_REPLICA}
+    checks = fixture._cluster_checks(manifest, {"cluster_id": "c1"})
+    assert checks["verified"] is True, checks["problems"]
+    assert checks["indexes"]["replicas_checked"] is True
+
+
+def test_an_index_whose_count_is_missing_is_reported_not_passed(cluster):
+    """Some rows carry a count and this one does not: its replica count was not
+    compared, and the report says so."""
+    counted = dict(CAPELLA_PRIMARY_ROW)
+    uncounted = _index_row("ix_other")
+    cluster["index_rows"] = [counted, uncounted]
+    manifest = {
+        "files": [],
+        "gsi_definitions": [*PRIMARY_AND_ONE_REPLICA, {"indexName": "ix_other"}],
+    }
+    checks = fixture._cluster_checks(manifest, {"cluster_id": "c1"})
+    assert checks["verified"] is False
+    assert checks["indexes"]["replicas_unreadable"] == ["ix_other"]
+    assert "NOT compared" in " ".join(checks["problems"])
+
+
+def test_a_boolean_is_not_a_replica_count():
+    assert fixture._configured_replica_count({"with": {"num_replica": True}}) is None
+    assert fixture._configured_replica_count({"with": {"num_replica": -1}}) is None
+    assert fixture._configured_replica_count({"metadata": {"num_replica": 2}}) == 2
+
+
 def test_a_definition_with_no_recognisable_name_is_reported_not_skipped(cluster):
     """A coverage gap reported as a pass is the failure this module exists to
     avoid."""

@@ -306,22 +306,22 @@ A check that silently does not cover something is worse than a missing check,
 because it reports a pass. These are the places where a shipped verification
 knows less than its name suggests, each with what would close it.
 
-- **`capella_fixture_verify` does not verify index REPLICA counts.** Measured
-  2026-09-14: `system:indexes` on Capella 7.x carries no replica column, so the
-  cluster check can confirm that each recorded index exists and is online but
-  not how many copies of it there are. The fixture side knows the answer —
-  `capella_query_index_definitions_list` enumerates each replica as its own
-  entry with `" (replica N)"` appended to `indexName`, so the entry count per
-  base name IS the expected copy count — and the code already compares them
-  whenever a replica column is present. The output says `replicas_checked:
-  false` and why, so the gap is never reported as a pass.
-  *What closes it:* establishing whether this server exposes replica identity
-  under another keyspace (`system:indexes_all` is the candidate to check, NOT
-  to assume) and, if so, adding it as the replica source. Until somebody
-  measures that, a fixture whose source carried replicas can be satisfied by a
-  cluster with fewer — which changes failover behaviour and read throughput,
-  quietly, in exactly the kind of environment a fixture exists to reproduce
-  faithfully.
+- ~~**`capella_fixture_verify` does not verify index REPLICA counts.**~~
+  **CLOSED 2026-09-29, from the configured count.** The entry said
+  `system:indexes` on Capella 7.x "carries no replica column" and named
+  `system:indexes_all` as the candidate. Measured on a live cluster:
+  `system:indexes_all` does not exist (`11002 Keyspace not found indexes_all`),
+  and `system:indexes` has no per-copy `replica_id` column. But every row
+  carries `num_replica`, under `with` and again under `metadata`, so "no replica
+  column" was true only of per-copy identity.
+
+  `capella_fixture_verify` now compares `num_replica + 1` against the fixture's
+  entry count per base name, reports `replica_source: "num_replica (configured
+  count)"`, and fails on a shortfall. The limit is stated in its output: this is
+  the CONFIGURED count, not the copies online right now, so a replica on a
+  failed node still counts. An index whose row carries no count is reported as
+  not compared, never passed. Tests: `test_capella_fixture_verify.py`, built
+  from the row the cluster returned.
 - **`capella_fixture_export` is annotated `readOnlyHint=True` and writes files.**
   **DECIDED 2026-09-14: the hint stays True.** In this server `readOnlyHint` is
   not documentation — `server.py` uses it to decide which tools LOAD in read-only

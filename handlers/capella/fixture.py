@@ -2141,6 +2141,22 @@ def _list(args: dict) -> list[TextContent]:
     return ok(result)
 
 
+def _configured_replica_count(row: dict) -> int | None:
+    """num_replica from a system:indexes row, or None if it carries none.
+
+    Read from `with` first and `metadata` second: Capella carries it in both
+    (measured 2026-09-29). A bool is refused because bool is an int in Python
+    and `True` is not a replica count.
+    """
+    for section in ("with", "metadata"):
+        block = row.get(section)
+        if isinstance(block, dict):
+            value = block.get("num_replica")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+    return None
+
+
 def _cluster_checks(manifest: dict, args: dict) -> dict:
     """Compare a live cluster against the fixture that claims to describe it.
 
@@ -2300,6 +2316,7 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
     if index_rows is not None:
         on_cluster: dict[str, list[str]] = {}
         keyspace_of: dict[str, str] = {}
+        configured: dict[str, int] = {}
         replica_field = ""
         for row in index_rows:
             if not isinstance(row, dict):
@@ -2330,6 +2347,9 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                     if candidate in row:
                         replica_field = candidate
                         break
+            configured_replicas = _configured_replica_count(row)
+            if configured_replicas is not None:
+                configured.setdefault(name, configured_replicas)
 
         not_online = [
             {
@@ -2400,6 +2420,58 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                     f"index {entry['name']} has {entry['copies_on_cluster']} "
                     f"cop(ies) on the cluster, the fixture recorded "
                     f"{entry['expected_copies']} (the index plus its replicas)"
+                )
+        elif configured:
+            # THE CONFIGURED COUNT, when there is no per-copy column. MEASURED
+            # 2026-09-29 on Capella: system:indexes has no replica_id, and
+            # system:indexes_all does not exist (11002 "Keyspace not found") --
+            # but every row carries num_replica, under `with` and again under
+            # `metadata`. num_replica + 1 is the number of copies the index is
+            # configured for, which is what the fixture's per-base entry count
+            # records. It is the CONFIGURED count, not the copies online right
+            # now: a replica on a failed node still counts here. The state check
+            # above covers the index itself; the note below says what this does
+            # not cover, so it is never read as more than it is.
+            mismatched = []
+            unreadable = []
+            for name, copies in sorted(recorded.items()):
+                if not on_cluster.get(name):
+                    continue  # already reported as missing
+                if name not in configured:
+                    unreadable.append(name)
+                    continue
+                cluster_copies = configured[name] + 1
+                if cluster_copies != copies:
+                    mismatched.append(
+                        {
+                            "name": name,
+                            "expected_copies": copies,
+                            "copies_on_cluster": cluster_copies,
+                        }
+                    )
+            details["replicas_checked"] = True
+            details["replica_source"] = "num_replica (configured count)"
+            details["replica_mismatches"] = mismatched
+            details["replicas_note"] = (
+                "Replica counts were compared using num_replica from "
+                "system:indexes: the number of copies each index is CONFIGURED "
+                "for. It does not show whether every replica is online now."
+            )
+            for entry in mismatched:
+                problems.append(
+                    f"index {entry['name']} is configured for "
+                    f"{entry['copies_on_cluster']} cop(ies) on the cluster, the "
+                    f"fixture recorded {entry['expected_copies']} (the index "
+                    f"plus its replicas)"
+                )
+            if unreadable:
+                # NOT SILENTLY PASSED. Some rows carried a count and these did
+                # not, so their replica count was not compared.
+                details["replicas_unreadable"] = unreadable
+                problems.append(
+                    f"replica count could not be read for {len(unreadable)} "
+                    f"recorded index(es), so it was NOT compared: "
+                    f"{', '.join(unreadable)}"
                 )
         else:
             details["replicas_checked"] = False

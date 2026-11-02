@@ -230,6 +230,10 @@ packages = ["handlers", "auth", "gui"]
 "profile_config.py" = "profile_config.py"
 "tls_config.py" = "tls_config.py"
 
+# The changelog ships in every package (documentation rule D11). It sits beside the
+# top-level modules, the same place as the files above.
+"CHANGELOG.md" = "CHANGELOG.md"
+
 [tool.uv]
 package = true
 

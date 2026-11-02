@@ -189,7 +189,7 @@ COPY --from=builder /install /usr/local
 # test at tests/test_packaging.py fails if a module server.py imports is missing here.
 # Apache 2.0 section 4(d) requires the NOTICE file to travel with redistributions,
 # and a container image is a redistribution.
-COPY --chown=mcp:mcp LICENSE NOTICE /app/
+COPY --chown=mcp:mcp LICENSE NOTICE CHANGELOG.md /app/
 COPY --chown=mcp:mcp server.py /app/server.py
 COPY --chown=mcp:mcp audit.py /app/audit.py
 COPY --chown=mcp:mcp authz.py /app/authz.py

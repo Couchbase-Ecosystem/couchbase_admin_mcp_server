@@ -373,6 +373,23 @@ TOOLS: list[Tool] = [
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one Backup service tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    The repository, plan, backup and restore tools reach the Backup service through
+    ns_server's proxy (`_BACKUP`), not directly on the service port.
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     try:
         if name == "admin_backup_repository_list":
             state = (args.get("state") or "active").strip().lower()

@@ -1616,6 +1616,20 @@ _HANDLERS = {
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one test-environment tool (`capella_env_*`) or `capella_guardrails_status`.
+
+    Args:
+        name: the tool name. An unknown name returns an error payload.
+        args: the tool arguments.
+
+    Returns:
+        A one-item list of `TextContent`. A refusal by the guardrails comes back as an error
+        payload marked `guardrail=True`, with the policy attached, and nothing was sent to
+        Capella. `capella_env_ensure` is the one tool allowed to return a secret (a new
+        database-credential password), because Capella never returns it again.
+
+    Threading: called on a worker thread. See docs/THREADING_MODEL.md.
+    """
     if name == "capella_guardrails_status":
         return ok(g.describe_policy())
 
@@ -1652,4 +1666,10 @@ __all__ = ["TOOLS", "handle"]
 # Kept for the status tool's convenience: a compact JSON rendering of the policy
 # suitable for the startup banner.
 def policy_banner() -> str:
+    """Return the active guardrail policy as one compact JSON line, with sorted keys.
+
+    Found by search on 2026-11-02: nothing else in the repository calls this function. The
+    output is stable for a given policy (sorted keys, no spaces), so two results can be
+    compared as text.
+    """
     return json.dumps(g.describe_policy(), separators=(",", ":"), sort_keys=True)

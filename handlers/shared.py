@@ -148,6 +148,11 @@ def arg_truthy(value: Any) -> bool:
 
 
 def get_env_bool(key: str, default: bool) -> bool:
+    """Read a boolean from an environment variable.
+
+    Returns `default` when the variable is unset or empty. Otherwise returns True only when the
+    lowercased, stripped value is in `TRUTHY_VALUES`; any other text is False.
+    """
     raw = os.environ.get(key)
     if raw is None or raw == "":
         return default
@@ -155,6 +160,11 @@ def get_env_bool(key: str, default: bool) -> bool:
 
 
 def get_env_int(key: str, default: int) -> int:
+    """Read an integer from an environment variable.
+
+    Returns `default` when the variable is unset, empty or not a valid integer. A bad value is
+    not raised, so a typo in a tuning variable cannot stop the server from starting.
+    """
     raw = os.environ.get(key)
     if raw is None or raw == "":
         return default
@@ -576,10 +586,18 @@ def is_version_at_least(major: int, minor: int = 0) -> bool:
 
 
 def is_8x() -> bool:
+    """True when the connected cluster reports Couchbase Server 8.0 or newer.
+
+    False when the version cannot be read, so a version gate refuses rather than guesses.
+    """
     return is_version_at_least(8, 0)
 
 
 def is_7x() -> bool:
+    """True when the connected cluster reports a 7.x version.
+
+    False when the version is unknown or does not start with a number.
+    """
     v = get_cluster_version()
     if not v:
         return False
@@ -869,6 +887,12 @@ def assert_index_create_ddl(stmt: str) -> str | None:
 
 
 def assert_index_drop_ddl(stmt: str) -> str | None:
+    """Check that `stmt` is a single DROP INDEX, DROP PRIMARY INDEX or DROP VECTOR INDEX.
+
+    Returns:
+        An error message string when the statement is chained or is anything else, and `None`
+        when it is acceptable. This keeps `admin_index_drop` from running other SQL++.
+    """
     chained = assert_single_statement(stmt)
     if chained:
         return chained

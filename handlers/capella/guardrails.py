@@ -149,6 +149,14 @@ class Policy:
 
 
 def load_policy() -> Policy:
+    """Build the guardrail `Policy` from the environment, fresh on every call.
+
+    Reads `CAPELLA_ORG_ID`, `CAPELLA_ALLOWED_PROJECTS`, `CAPELLA_ENV_NAME_PREFIX`,
+    `CAPELLA_MAX_ENVIRONMENTS` (default 10), `CAPELLA_ENV_TTL_HOURS` (default 8),
+    `CAPELLA_ALLOW_UNSCOPED_DESTRUCTIVE` (true only for 1, true, yes, on) and
+    `CAPELLA_PROTECTED_CLUSTERS`. Nothing is cached, so a test can change the environment
+    without fighting a cache.
+    """
     return Policy(
         organization_id=_env("CAPELLA_ORG_ID"),
         allowed_projects=_env_list("CAPELLA_ALLOWED_PROJECTS"),
@@ -725,6 +733,17 @@ def marker_expiry(marker: dict) -> datetime | None:
 
 
 def is_expired(marker: dict, *, now: datetime | None = None) -> bool:
+    """Say whether an environment marker has passed its expiry.
+
+    Args:
+        marker: the parsed `mcp-env` marker from a cluster description.
+        now: the time to compare against, in UTC. Defaults to the current time. Tests pass it.
+
+    Returns:
+        True only when the marker has an expiry and `now` is at or past it. A marker with no
+        usable expiry (pinned, or one that cannot be read) is never expired, so a bad marker
+        cannot cause a cluster to be reaped.
+    """
     expiry = marker_expiry(marker)
     if expiry is None:
         return False

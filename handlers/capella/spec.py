@@ -674,6 +674,12 @@ class Op:
 
     @property
     def annotations(self) -> ToolAnnotations:
+        """The MCP safety annotations for this operation.
+
+        Built from the operation's own flags: `readOnlyHint`, `destructiveHint` and
+        `idempotentHint`. The read-only catalog, the confirmation gate and the hard ceiling are all
+        derived from these, so an operation declared here is classified the same way everywhere.
+        """
         return ToolAnnotations(
             readOnlyHint=self.read_only,
             destructiveHint=self.destructive,
@@ -4136,6 +4142,14 @@ _UNVERIFIED_NOTICE = (
 
 
 def build_tools() -> list[Tool]:
+    """Build the MCP `Tool` list from the operation registry (`OPS`).
+
+    Returns:
+        One `Tool` per registered operation, with its schema from `build_input_schema` and its
+        annotations. An operation listed in `SHIPPED_UNVERIFIED` has a notice put in front of
+        its description, so the model and the operator can see it was not confirmed by a live
+        call.
+    """
     return [
         Tool(
             name=op.name,

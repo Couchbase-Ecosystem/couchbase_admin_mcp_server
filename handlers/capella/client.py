@@ -58,6 +58,12 @@ _MAX_PER_PAGE = 100
 
 
 def base_url() -> str:
+    """Return the Capella v4 API base URL, without a trailing slash.
+
+    Reads `CAPELLA_BASE_URL` on each call and falls back to the default public endpoint
+    (`_DEFAULT_BASE`). Reading it each time lets a test or an operator point at another host
+    without a restart of the module.
+    """
     return (os.environ.get("CAPELLA_BASE_URL") or _DEFAULT_BASE).rstrip("/")
 
 

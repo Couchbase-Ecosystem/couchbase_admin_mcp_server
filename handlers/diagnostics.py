@@ -418,6 +418,24 @@ def _validate_statement_args(name: str, args: dict) -> list[TextContent] | None:
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one diagnostics (`cb_*`) tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    These tools run SQL++ through the SDK cluster connection. Statement arguments are
+    checked first (`_validate_statement_args`), and a connection failure comes back as an
+    error payload.
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     refusal = _validate_statement_args(name, args)
     if refusal is not None:
         return refusal

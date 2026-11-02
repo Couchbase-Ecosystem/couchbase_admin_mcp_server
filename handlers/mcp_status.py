@@ -225,6 +225,23 @@ def _category_of(t: Tool) -> str:
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one server-introspection (`cb_mcp_*`) tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    These report on this server process, not on the cluster. `server` is imported inside
+    the function to avoid a circular import at load time (docs/MODULE_MAP.md).
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     try:
         # Import server here (lazily) to avoid a circular import at module load.
         import server as server_module

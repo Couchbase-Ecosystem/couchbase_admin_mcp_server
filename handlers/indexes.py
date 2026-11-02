@@ -204,6 +204,23 @@ def _run_n1ql(statement: str) -> list[TextContent]:
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one index-management tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    Index DDL passed in `statement` is checked first (single statement, CREATE or DROP INDEX
+    only), so these tools cannot be used to run other SQL++.
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     try:
         if name == "admin_index_list":
             # Use parameterized N1QL where possible to avoid injection through

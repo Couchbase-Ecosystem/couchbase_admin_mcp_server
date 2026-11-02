@@ -330,6 +330,23 @@ TOOLS: list[Tool] = [
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one Couchbase 8.x tool tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    Every tool here first calls `_require_8x`, so on an older or unknown version the result
+    is an error payload and nothing is sent.
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     gate = _require_8x(name)
     if gate is not None:
         return gate

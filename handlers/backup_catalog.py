@@ -756,6 +756,18 @@ HANDLERS = {
 
 
 def handle(name: str, args: dict[str, Any]):
+    """Run one backup-catalogue tool (`cb_backup_catalog_*`).
+
+    Args:
+        name: the tool name. An unknown name returns an error payload.
+        args: the tool arguments. `None` is treated as empty.
+
+    Returns:
+        The tool's result, built by the handler registered for `name` in `HANDLERS`.
+
+    Threading: called on a worker thread. Entries are files under `CB_ADMIN_CATALOG_ROOT`, one
+    per entry, so two calls touch different files unless they name the same entry.
+    """
     handler = HANDLERS.get(name)
     if handler is None:
         return err(f"Unknown backup catalog tool: {name}", tool=name)

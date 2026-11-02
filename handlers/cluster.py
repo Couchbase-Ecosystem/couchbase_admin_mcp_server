@@ -506,6 +506,20 @@ TOOLS: list[Tool] = [
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one cluster, node, rebalance, failover or server-group tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     try:
         if name == "admin_cluster_info":
             return ok(admin_request("GET", "/pools"))

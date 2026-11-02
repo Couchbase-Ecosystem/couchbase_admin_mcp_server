@@ -239,6 +239,11 @@ def resolve_under_root(raw: str, *, field: str, tool: str) -> pathlib.Path:
 
 
 def sha256_file(path: pathlib.Path) -> str:
+    """Return the SHA-256 of a file as lowercase hex.
+
+    Reads in 1 MiB chunks, so a fixture file larger than memory is hashed without loading it.
+    Raises `OSError` if the file cannot be read; callers decide how to report that.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):

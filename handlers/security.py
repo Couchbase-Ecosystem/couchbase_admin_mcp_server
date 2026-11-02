@@ -446,6 +446,23 @@ def _roles_to_form(user: dict) -> str:
 
 
 def handle(name: str, args: dict) -> list[TextContent]:
+    """Run one user, group, role, certificate or security-settings tool.
+
+    Args:
+        name: the tool name, one of this module's `TOOLS`.
+        args: the arguments the caller supplied, as validated by the tool's input schema.
+
+    Returns:
+        A one-item list holding the JSON result as `TextContent`. A failure comes back as an
+        error payload from `err()` and is never raised, because the dispatch in `server.py`
+        and the console both rely on that (checked for every group by
+        `tests/test_handler_contract.py`).
+
+    The `domain` argument is checked against `local` and `external` before anything is
+    sent, because schema enums are advisory.
+
+    Threading: called on a worker thread, possibly several at once. See docs/THREADING_MODEL.md.
+    """
     try:
         # Validate domain against allowed values — defense-in-depth, since schema
         # enums are advisory and not server-enforced.

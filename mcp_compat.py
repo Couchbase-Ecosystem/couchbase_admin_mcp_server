@@ -98,10 +98,12 @@ def is_read_only(tool: Any) -> bool:
 
 
 def is_destructive(tool: Any) -> bool:
+    """True when the tool is annotated `destructiveHint`, on MCP library 1.x or 2.x."""
     return annotation(tool, "destructiveHint")
 
 
 def is_idempotent(tool: Any) -> bool:
+    """True when the tool is annotated `idempotentHint`, on MCP library 1.x or 2.x."""
     return annotation(tool, "idempotentHint")
 
 

@@ -789,6 +789,17 @@ def _client_is_local() -> bool:
 # Apply auth check to all routes via before_request
 @app.before_request
 def global_auth_check():
+    """Run before every console request: clear stale claims, then apply the console's access rules.
+
+    Registered with `before_request`. It clears token claims first, because Flask reuses pooled
+    threads and a claim left on a thread would be inherited by the next request. It then rejects a
+    cross-site request, and a non-loopback request while `CB_GUI_INSECURE_NO_AUTH` is set (the
+    second is audited). Then it applies authentication for the configured mode (OAuth, or the
+    acknowledged insecure mode). It fails closed when neither is set (see the module header).
+
+    Returns:
+        None to let the request continue, or a Flask response that refuses it.
+    """
     # Claims must not leak between requests. Flask serves requests on pooled
     # threads, and a contextvar set in a thread persists for that thread's life —
     # so without this, request N+1 on the same worker thread could inherit request
@@ -1197,6 +1208,12 @@ def auth_me():
 
 @app.route("/api/tools", methods=["GET"])
 def list_tools():
+    """GET /api/tools: list the tools visible to this caller.
+
+    Each entry has the name, description, input schema (with the same control fields the MCP
+    transport advertises: `dry_run`, `correlation_id` and `confirm` where they apply), and the
+    `readOnly` and `destructive` flags.
+    """
     result = []
     for tool in _visible_tools():
         result.append(
@@ -1261,6 +1278,15 @@ def _audit_gui(
 
 @app.route("/api/call", methods=["POST"])
 def call_tool():
+    """POST /api/call: run one tool for the console, with the same policy as the MCP server.
+
+    The body is JSON `{"tool": ..., "arguments": {...}}`. The policy is decided by `authz`, the
+    same module the MCP dispatch uses, and every outcome writes an audit record. A body whose
+    `arguments` is not an object is refused with 400.
+
+    Returns:
+        A Flask JSON response.
+    """
     # force=False: the Content-Type requirement above is load-bearing, and
     # force=True would parse a text/plain body and reinstate the CSRF path.
     body = request.get_json(silent=True) or {}
@@ -1552,6 +1578,12 @@ def call_tool():
 
 @app.route("/api/config", methods=["GET", "POST"])
 def config():
+    """GET /api/config: show the connection settings, with secrets redacted.
+
+    POST is refused with 405. Changing connection or TLS settings at run time would let an HTTP
+    client redirect the cluster credentials to a host it chose, so settings come only from the
+    environment at start-up.
+    """
     if request.method == "POST":
         # REMOVED — this endpoint was a credential-exfiltration primitive.
         #
@@ -1612,6 +1644,11 @@ def config():
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_frontend(path):
+    """Serve the console's single-page front end.
+
+    Returns the requested file from `static/` when it exists there, and `index.html` otherwise, so
+    client-side routes load the app.
+    """
     if path and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
     return send_from_directory(app.static_folder, "index.html")

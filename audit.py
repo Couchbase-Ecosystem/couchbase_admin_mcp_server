@@ -432,6 +432,20 @@ def emit_tool_call(
     source: str = "",
     correlation_id: str | None = None,
 ) -> None:
+    """Build and write one audit record for a tool-call decision.
+
+    Args:
+        tool: the tool name.
+        arguments: the call's arguments. They are redacted when the record is built.
+        decision: one of the decision labels in docs/spec.md S4.
+        principal: who made the call, or None when no identity is known.
+        reason: why, for a refusal.
+        duration_ms: how long the handler ran, when it ran.
+        source: where the request came from (client address or transport).
+        correlation_id: the caller's run id, provenance only.
+
+    Never raises: `emit` writes a reduced record if the full one cannot be built.
+    """
     emit(
         build_record(
             tool=tool,

@@ -70,6 +70,12 @@ class ResolvedLoggingConfig:
     errors: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
+        """Return the resolved logging configuration as a plain dict.
+
+        Keys: `level`, `sinks`, `log_files` (None when none), `max_bytes` and `errors`. Found by
+        search on 2026-11-02: only the scripts call a method of this name on their own result
+        classes, and no server code calls this one, so it is available for reporting.
+        """
         return {
             "level": self.level,
             "sinks": list(self.sinks),
@@ -123,6 +129,12 @@ class SafeRecordFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Mask credentials in the record's arguments, then escape CR and LF in the message.
+
+        Returns True always, so a record is never dropped. If masking fails the record is still
+        emitted, because an unmasked record is better than a lost one and the flattening still
+        applies. See the class docstring for why this must be attached to handlers, not loggers.
+        """
         try:
             from handlers.shared import redact as _redact
 

@@ -82,6 +82,7 @@ class TlsSettings:
 
     @property
     def require_client_cert(self) -> bool:
+        """True when this process terminates TLS and a client CA file is set, so clients must present a certificate (mutual TLS)."""
         return bool(self.direct and self.client_ca_file)
 
     def uvicorn_kwargs(self) -> dict:
@@ -106,6 +107,11 @@ class TlsSettings:
         return kwargs
 
     def describe(self) -> str:
+        """Return a one-line description of the TLS posture for the start-up banner.
+
+        Says whether this process terminates TLS (and whether it requires client certificates),
+        whether the operator asserts TLS is terminated in front, or that there is no TLS.
+        """
         if self.direct:
             mode = "direct (this process terminates TLS)"
             if self.require_client_cert:
@@ -117,6 +123,12 @@ class TlsSettings:
 
 
 def from_env() -> TlsSettings:
+    """Read the TLS settings from the environment.
+
+    Reads `CB_ADMIN_TLS_CERT_FILE`, `CB_ADMIN_TLS_KEY_FILE`, `CB_ADMIN_TLS_KEY_PASSWORD`,
+    `CB_ADMIN_TLS_CLIENT_CA_FILE` and `CB_ADMIN_TLS_TERMINATED_EXTERNALLY`. Nothing is validated
+    here; the caller checks the combination at start-up.
+    """
     return TlsSettings(
         cert_file=_env("CB_ADMIN_TLS_CERT_FILE"),
         key_file=_env("CB_ADMIN_TLS_KEY_FILE"),

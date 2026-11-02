@@ -421,6 +421,23 @@ def _classify_result(result: object) -> tuple[str, str]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    """Decide and run one MCP tool call, and write the audit record for the decision.
+
+    Applies the steps in docs/spec.md S3 in order: unknown tool, not loaded (deployment, read-only
+    or disabled), scope, hard ceiling and automation (`authz.evaluate`), confirmation, removal of
+    the control fields, dry run, then the handler on a worker thread.
+
+    Args:
+        name: the tool name.
+        arguments: the caller's arguments. A copy is made, so the caller's dict is not changed.
+
+    Returns:
+        A list of `TextContent`. A refusal is a normal return value built by `err()`, never an
+        exception. `_call_tool_with_is_error` sets the protocol `isError` flag from it.
+
+    Threading: runs on the event loop. Token validation and the handler run on worker threads
+    (docs/THREADING_MODEL.md).
+    """
     arguments = dict(arguments or {})
 
     # Capture the caller-supplied correlation id BEFORE any decision path runs.

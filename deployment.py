@@ -268,6 +268,11 @@ def declared_mode_error(resolved: str) -> str | None:
 
 
 def gating_enabled() -> bool:
+    """Whether tools that cannot work on the detected control plane are left out.
+
+    Reads `CB_DEPLOYMENT_GATE`; the default is True. Setting it to false keeps every tool
+    loaded, which removes the one-container-one-control-plane containment (docs/spec.md S2).
+    """
     return _env_bool("CB_DEPLOYMENT_GATE", True)
 
 

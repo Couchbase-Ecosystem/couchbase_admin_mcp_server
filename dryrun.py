@@ -117,6 +117,12 @@ def register_handler_owned(tools: Any) -> set[str]:
 
 
 def handler_owned_tools() -> set[str]:
+    """Return the names of tools that implement `dry_run` themselves.
+
+    The dispatch does not intercept the flag for these, and does not strip it, because only the
+    handler can produce a useful preview (docs/spec.md S3 step 7). Returns a copy, so the caller
+    cannot change the registry.
+    """
     return set(_HANDLER_OWNED)
 
 

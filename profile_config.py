@@ -80,6 +80,12 @@ def _truthy(value: str) -> bool:
 
 @dataclass(frozen=True)
 class Profile:
+    """A deployment profile: its name and the environment defaults it supplies.
+
+    The profile fills in only variables the operator left unset; an explicit variable always
+    wins (see the module docstring). Immutable by convention: the two instances are built once.
+    """
+
     name: str
     #: Defaults the profile supplies for env vars the operator left unset.
     defaults: dict[str, str] = field(default_factory=dict)
@@ -124,6 +130,11 @@ _ENTERPRISE_DEFAULTS = {
 
 
 def profile_name() -> str | None:
+    """Return the profile named by `CB_ADMIN_PROFILE`, or None.
+
+    None means the variable is unset or not `workstation` or `enterprise`. There is deliberately
+    no default, so the caller must refuse to start (docs/spec.md S5).
+    """
     raw = _env("CB_ADMIN_PROFILE").lower()
     return raw if raw in _VALID else None
 
@@ -447,6 +458,15 @@ def local_identity() -> dict[str, str]:
 
 
 def describe(name: str | None) -> str:
+    """Return a one-line description of a profile for the start-up banner and messages.
+
+    Args:
+        name: `workstation`, `enterprise`, or None.
+
+    Returns:
+        The description. For None it says no profile was stated and that the posture is the sum of
+        individual variables, which is the situation the profile exists to prevent.
+    """
     if name == WORKSTATION:
         return (
             "workstation (human present at the client; stdio; loopback only; "

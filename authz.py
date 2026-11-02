@@ -145,6 +145,7 @@ class Decision:
 
     @property
     def allowed(self) -> bool:
+        """True when the decision is `allowed`, meaning the call may proceed."""
         return self.decision == "allowed"
 
 

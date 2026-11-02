@@ -97,6 +97,10 @@ def check(url: str | None = None, timeout: float = 5.0) -> tuple[int, str]:
 
 
 def main() -> int:
+    """Probe once, print the reason to stderr, and return the exit code.
+
+    Returns 0 when healthy and 1 when not, for use as a container health check.
+    """
     code, reason = check()
     print(reason, file=sys.stderr)
     return code

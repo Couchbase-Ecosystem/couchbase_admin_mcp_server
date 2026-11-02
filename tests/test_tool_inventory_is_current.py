@@ -22,7 +22,7 @@ Set equality between the inventory and the registry, in BOTH directions, plus
 agreement on every measured count the document renders from. Not a pinned
 number anywhere -- each assertion compares two measured values, so it fails when
 the code moves and names what to regenerate, rather than failing for a reason
-unrelated to the property under test (CLAUDE.md rule 1.2).
+unrelated to the property under test (AGENTS.md rule 1.2).
 
 Regenerate with, from the repository root:
 
@@ -67,7 +67,7 @@ def _registry() -> dict:
 
     `server` and `handlers.shared` snapshot their configuration at import, so an
     inherited CB_DEPLOYMENT would inventory half the registry and this file would
-    report the difference as drift. CLAUDE.md section 2.2.
+    report the difference as drift. AGENTS.md section 2.2.
     """
     result = subprocess.run(
         [sys.executable, "-c", _MEASURE],

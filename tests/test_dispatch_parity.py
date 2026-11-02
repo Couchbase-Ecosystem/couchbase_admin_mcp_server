@@ -5,7 +5,7 @@ tests/test_gui_authorization.py already asserts that both surfaces expose an
 IDENTICAL tool set, in both directions. That test exists because
 handlers/backup_catalog.py was absent from the console for its entire life and
 nothing compared the two lists. But membership parity is the weaker half.
-CLAUDE.md put it plainly: "Membership is guarded; behaviour is not."
+AGENTS.md put it plainly: "Membership is guarded; behaviour is not."
 
 Behaviour is where this codebase has actually been bitten, repeatedly, and always
 the same way -- a policy fixed in one dispatch path and not the other:

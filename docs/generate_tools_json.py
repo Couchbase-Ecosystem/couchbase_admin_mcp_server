@@ -30,7 +30,7 @@ WHY THE MODE IS PINNED
 `both` is the only mode in which the whole registry loads, and the document
 inventories the whole registry — its total is deliberately larger than the count
 any single running instance loads, because a deployment loads one surface. This
-is a MEASUREMENT of the code, not a deployment: see CLAUDE.md section 2.1, which
+is a MEASUREMENT of the code, not a deployment: see AGENTS.md section 2.1, which
 is about what gets configured and shipped, not about what a build script counts.
 """
 
@@ -42,7 +42,7 @@ import sys
 
 # Pinned before `server` is imported: server and handlers.shared snapshot their
 # configuration at import time, so an inherited CB_DEPLOYMENT from the developer's
-# shell would silently inventory half the registry (CLAUDE.md section 2.2).
+# shell would silently inventory half the registry (AGENTS.md section 2.2).
 os.environ["CB_DEPLOYMENT"] = "both"
 os.environ.setdefault("CB_ADMIN_PROFILE", "workstation")
 os.environ.setdefault("CB_ADMIN_READ_ONLY_MODE", "false")

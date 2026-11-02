@@ -19,7 +19,7 @@ fact: nobody diffs a PNG, and a reader trusts a diagram more than prose.
 
 WHAT THIS ASSERTS
 =================
-Not the numbers themselves -- that would be CLAUDE.md rule 1.2's exact failure,
+Not the numbers themselves -- that would be AGENTS.md rule 1.2's exact failure,
 a magic number in a test that fails on every legitimate change and trains the
 next person to edit it without reading why.
 
@@ -54,7 +54,7 @@ ARCHITECTURE = ROOT / "docs" / "ARCHITECTURE.md"
 # In a SUBPROCESS with CB_DEPLOYMENT pinned. `server` and `handlers.shared`
 # snapshot their configuration at import, so importing the registry here would
 # both take whatever mode the developer's shell implies and leak that import
-# into every test that runs after it -- CLAUDE.md section 2.2.
+# into every test that runs after it -- AGENTS.md section 2.2.
 
 _MEASURE = """
 import json
@@ -90,7 +90,7 @@ def _measured() -> dict[str, int]:
             "PYTHONPATH": str(ROOT),
             # Pinned, not inferred. `both` is the only mode in which the WHOLE
             # registry loads, which is what a diagram of the whole system counts.
-            # It is a measurement, not a deployment -- see CLAUDE.md 2.1.
+            # It is a measurement, not a deployment -- see AGENTS.md 2.1.
             "CB_DEPLOYMENT": "both",
             "CB_ADMIN_PROFILE": "workstation",
             "CB_CONNECTION_STRING": "couchbase://localhost",
@@ -186,7 +186,7 @@ def test_the_architecture_documents_inline_diagram_agrees():
 
 @pytest.mark.parametrize("source", sorted(p.name for p in SRC.glob("*.mmd")))
 def test_no_diagram_presents_both_as_a_deployment(source):
-    """CLAUDE.md 2.1. A diagram is documentation, and `both` is the one mode no
+    """AGENTS.md 2.1. A diagram is documentation, and `both` is the one mode no
     documentation demonstrates.
 
     Naming the mode while DESCRIBING deployment.py is description, not a
@@ -239,7 +239,7 @@ def _per_mode_totals() -> dict[str, int]:
 
     A subprocess per mode because `server` and `handlers.shared` snapshot their
     configuration at import: reloading in-process would leak the last mode into
-    every test that ran afterwards. CLAUDE.md section 2.2.
+    every test that ran afterwards. AGENTS.md section 2.2.
     """
     totals = {}
     for mode in ("self_managed", "capella", "both"):
@@ -253,7 +253,7 @@ def _per_mode_totals() -> dict[str, int]:
             # This used to hand the child a POSIX PATH -- /usr/bin:/bin -- beside a
             # Windows SYSTEMROOT, on a Windows-only machine. It worked only because
             # sys.executable is absolute, so nothing needed resolving through PATH;
-            # anything the child shelled out to would have found nothing. CLAUDE.md
+            # anything the child shelled out to would have found nothing. AGENTS.md
             # section 4 says not to hand this machine POSIX paths.
             #
             # CB_ and CAPELLA_ are stripped instead, which is the thing that actually

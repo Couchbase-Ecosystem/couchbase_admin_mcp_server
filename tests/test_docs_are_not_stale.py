@@ -5,11 +5,11 @@ WHY THIS FILE EXISTS
 On 2026-09-14 a sweep of this repository's own documentation found seven claims
 that had quietly become false, all of them in the present tense:
 
-    CLAUDE.md  "The registry holds 97."                  It held 125.
-    CLAUDE.md  "SKIPPED 95"                              Surface skips were 0.
-    CLAUDE.md  "One write of roughly 45 has been         Most writes were
+    AGENTS.md  "The registry holds 97."                  It held 125.
+    AGENTS.md  "SKIPPED 95"                              Surface skips were 0.
+    AGENTS.md  "One write of roughly 45 has been         Most writes were
                 performed"                                verified.
-    CLAUDE.md  "The 244/244 target was set and not met"  It had been met.
+    AGENTS.md  "The 244/244 target was set and not met"  It had been met.
 
 None of those were wrong when written. Every one became wrong because the code
 moved and the sentence did not, and a reader — a customer, or the next person
@@ -19,14 +19,14 @@ WHAT THIS ASSERTS, AND WHAT IT DELIBERATELY DOES NOT
 ====================================================
 Pinning the numbers themselves would be worse than useless: the test would fail
 on every legitimate change and train people to edit the number without reading
-why it was there, which is the exact failure CLAUDE.md rule 1.2 records.
+why it was there, which is the exact failure AGENTS.md rule 1.2 records.
 
 So this asserts something weaker and far more durable: **a sentence that quotes
 a count of operations, tools or skips must carry a DATE in the same paragraph.**
 A dated claim that goes out of date is still honest — it says when it was true.
 An undated one silently becomes a lie.
 
-That is CLAUDE.md's own instruction, written the same day:
+That is AGENTS.md's own instruction, written the same day:
 
     Counts move. Do not quote one here without a date beside it.
 """
@@ -97,7 +97,7 @@ def _docs() -> list[pathlib.Path]:
 
 def test_there_are_documents_to_check():
     """A scan over an empty set is a green tick that checked nothing — see
-    CLAUDE.md section 3 and tests/test_no_vacuous_coverage.py."""
+    AGENTS.md section 3 and tests/test_no_vacuous_coverage.py."""
     assert len(_docs()) >= 8, "expected the repository's markdown docs to be found"
 
 
@@ -123,5 +123,5 @@ def test_a_count_claim_carries_a_date(doc: pathlib.Path):
         + "\n\nAdd the date the count was measured. Do NOT pin the number in a "
         "test -- that fails on every legitimate change and trains the next "
         "person to edit the number rather than read why it is there, which is "
-        "the failure CLAUDE.md rule 1.2 records."
+        "the failure AGENTS.md rule 1.2 records."
     )

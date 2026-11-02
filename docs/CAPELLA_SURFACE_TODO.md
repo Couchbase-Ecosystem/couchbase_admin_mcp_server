@@ -128,7 +128,7 @@ parked for exactly the same reason.
 `scripts/verify_capella_paths.py --method-probe` read
 `capella_data_api_set`'s `body_required`, inferred an empty body would be
 refused, sent one, and got 202 — **disabling the Data API on the cluster it was
-measuring**. `Op.empty_body_accepted` now guards it. See CLAUDE.md rule 1.6.
+measuring**. `Op.empty_body_accepted` now guards it. See AGENTS.md rule 1.6.
 
 **The probe called a correct path wrong.** `capella_app_endpoint_cors_get` was
 reported under PATHS THAT NEED FIXING on a 404 whose body read *"App Endpoint

@@ -256,7 +256,7 @@ PENDING_OPS: tuple[Op, ...] = (
             "path and method were taken from "
             "openapi.gen.go:24736; no body schema is declared, so this record is "
             "NOT promotable on a path probe alone. Shipping it with an invented "
-            "body would repeat exactly the failure CLAUDE.md records: three wrong "
+            "body would repeat exactly the failure AGENTS.md records: three wrong "
             "request bodies sat behind verified paths, and a path probe cannot "
             "catch that because it never sends a body.\n"
             "Note the App Service level equivalent is entitlement-gated in this "

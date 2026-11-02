@@ -465,7 +465,7 @@ def test_the_importer_writes_over_kv_rather_than_sql(tmp_path):
 
 
 def test_the_module_records_what_was_measured_and_what_was_not():
-    """CLAUDE.md rule 1.7 applied to a module: code that reads as verified when
+    """AGENTS.md rule 1.7 applied to a module: code that reads as verified when
     it is not is the claim this repository most wants to avoid making.
 
     This test used to assert the module said it had NOT been run. It has now

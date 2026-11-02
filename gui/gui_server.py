@@ -195,7 +195,7 @@ def create_app():
     invalid enterprise configuration left PROFILE_ERRORS populated, and the next
     test to import this module died during collection with SystemExit(2), naming
     an OAuth control that had nothing to do with it. Under randomised order that
-    is a coin flip, which CLAUDE.md section 4 says is not a pass.
+    is a coin flip, which AGENTS.md section 4 says is not a pass.
 
     `server.py` does not have this problem: it calls _enforce_profile() from
     _async_main(), at RUN time. This brings the console into line.

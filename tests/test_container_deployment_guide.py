@@ -235,7 +235,7 @@ def test_every_pasteable_example_declares_its_surface():
 
 
 def test_the_guide_states_what_has_not_been_exercised():
-    """CLAUDE.md rule 1.7, applied to a document: a guide that reads as though
+    """AGENTS.md rule 1.7, applied to a document: a guide that reads as though
     every path in it had been run is making a claim it cannot support.
 
     Two of the k8s and cloud shapes have still never been run by this project.

@@ -67,7 +67,7 @@ def _enforce(env: dict, _monkeypatch=None) -> list[str]:
     console died during COLLECTION, naming an OAuth control unrelated to it.
     MEASURED 2026-09-15 under randomised order.
 
-    CLAUDE.md section 2.2 already prescribed this: "pin it in a subprocess if
+    AGENTS.md section 2.2 already prescribed this: "pin it in a subprocess if
     `server` has to be re-imported -- `server` and `handlers.shared` snapshot
     their configuration at import, so `importlib.reload` leaks into every test
     that runs afterwards." A teardown that reloads afterwards is a cleanup that

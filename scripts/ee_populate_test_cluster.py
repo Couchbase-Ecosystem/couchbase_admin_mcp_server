@@ -528,7 +528,7 @@ class Populate:
             self.say("   404 'Service backup not running' -> the service is absent;")
             self.say("   500 -> it is present but not ready, wait and re-run;")
             self.say("   check /pools/default/nodeServices for backupAPI before")
-            self.say("   suspecting admin_backup_*. See CLAUDE.md.")
+            self.say("   suspecting admin_backup_*. See AGENTS.md.")
         else:
             plan = self.args.plan if self.args.plan in plan_names else plan_names[0]
             self.say(f"\n   using plan {plan!r} of {plan_names}")

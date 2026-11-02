@@ -367,7 +367,7 @@ def _run_gui_posture(env: dict) -> list[str]:
         # import side effect it replaces.
         #
         # This file-order run is what caught the change: under randomised order
-        # the test happened to pass twice. CLAUDE.md section 4.
+        # the test happened to pass twice. AGENTS.md section 4.
         sys.modules.pop("gui.gui_server", None)
         import gui.gui_server
 

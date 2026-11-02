@@ -195,7 +195,7 @@ addresses (`172.x.x.x`) in its cluster map, which are unroutable from the host
 but exactly right from a container on the same network. Reaching the same
 cluster from the host instead needs alternate addresses configured on every
 node — and if you configure an external alternate address, the Backup service
-will pick it as its own endpoint and die in a restart loop. `CLAUDE.md` §4.1
+will pick it as its own endpoint and die in a restart loop. `AGENTS.md` §4.1
 records that diagnosis; do not re-derive it.
 
 ### 3c. Either surface, HTTP, via the shipped compose files

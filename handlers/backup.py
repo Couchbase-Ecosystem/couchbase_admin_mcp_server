@@ -39,7 +39,7 @@ alongside. The schema is corrected above from the shape that was accepted.
 
 Still never run: CROSS-cluster restore. The body carries source and target
 separately, so it is one call rather than an export/import -- but there is one
-Capella cluster and nowhere to restore into. See CLAUDE.md section 6.
+Capella cluster and nowhere to restore into. See AGENTS.md section 6.
 
 CROSS-CLUSTER IS DOCUMENTED, AND IT IS NOT XDCR
 -----------------------------------------------

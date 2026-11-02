@@ -2,7 +2,7 @@
 
 ## Why this document exists
 
-`CLAUDE.md` rule 1.5 says the Terraform provider's generated client outranks the
+`AGENTS.md` rule 1.5 says the Terraform provider's generated client outranks the
 rendered documentation pages when establishing a v4 request shape. A rule that
 names a source without saying *which checkout* is an instruction to go looking,
 so this records it.

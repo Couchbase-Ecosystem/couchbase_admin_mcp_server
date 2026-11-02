@@ -1068,7 +1068,7 @@ def _export(args: dict) -> list[TextContent]:
     # scope and collection fields is deliberate: the statement is the one part
     # of this payload whose shape is already relied on -- the import reads it --
     # whereas the field spellings have not been read from the provider's
-    # generated client, and CLAUDE.md section 1.5 puts that source above a guess.
+    # generated client, and AGENTS.md section 1.5 puts that source above a guess.
     # Narrowing the request itself is the better fix and needs that source.
     carried_keyspaces = {str(f["keyspace"]) for f in data_files}
     definitions_skipped: list[str] = []

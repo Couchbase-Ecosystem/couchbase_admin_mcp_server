@@ -388,7 +388,7 @@ def denial_for(tool: Any, claims: dict[str, Any] | None) -> str | None:
     if not granted:
         # "I FOUND NO GRANT" AND "THERE IS NO GRANT" ARE DIFFERENT CLAIMS, and a
         # generic denial states the second while only the first was observed.
-        # CLAUDE.md section 1.7.
+        # AGENTS.md section 1.7.
         #
         # A token that validated -- signature, issuer, audience and expiry all
         # checked -- and carries nothing this function recognises is far more

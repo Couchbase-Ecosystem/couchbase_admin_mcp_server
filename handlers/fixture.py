@@ -121,7 +121,7 @@ _log = get_logger("handlers.fixture")
 _PLANE = "enterprise"
 
 #: Eventing lives behind the cluster manager's proxy prefix, like Search and
-#: Backup. See CLAUDE.md section 2.3: nine Search tools once shipped with bare
+#: Backup. See AGENTS.md section 2.3: nine Search tools once shipped with bare
 #: paths and 404'd against every cluster.
 _EVENTING_BASE = "/_p/event/api/v1"
 
@@ -567,7 +567,7 @@ def _index_definitions(keyspaces: set[str]) -> tuple[list[dict], list[str]]:
     if skipped:
         # Reported, not dropped in silence. An index the fixture does not carry
         # is a gap in what it can reproduce, and the operator needs to know
-        # which -- CLAUDE.md rule 1.7.
+        # which -- AGENTS.md rule 1.7.
         warnings.extend(f"index not captured: {reason}" for reason in skipped)
     return definitions, warnings
 

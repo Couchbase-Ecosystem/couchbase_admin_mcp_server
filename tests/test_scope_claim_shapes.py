@@ -192,7 +192,7 @@ def test_every_provider_shape_names_a_principal_and_a_client(label, claims):
 
 
 def test_the_principal_shape_table_is_not_empty():
-    """Guards the parametrisation above -- see CLAUDE.md section 3."""
+    """Guards the parametrisation above -- see AGENTS.md section 3."""
     assert len(_PRINCIPAL_SHAPES) >= 4, _PRINCIPAL_SHAPES
 
 

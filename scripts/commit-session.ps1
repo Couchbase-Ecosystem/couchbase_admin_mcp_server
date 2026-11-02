@@ -432,7 +432,7 @@ has. The manifest's fidelity block records what actually happened.
     },
     @{
         Name  = 'Verification tooling'
-        Paths = @('scripts', 'CLAUDE.md', 'CAPELLA-CONNECTIVITY.md', 'RUNBOOK.md', 'docs')
+        Paths = @('scripts', 'AGENTS.md', 'CLAUDE.md', 'CAPELLA-CONNECTIVITY.md', 'RUNBOOK.md', 'docs')
         Message = @'
 chore: scripts and runbooks for verifying against real clusters
 
@@ -470,7 +470,7 @@ one specific cluster), credentials come from the environment rather than
 being hard-coded, and it no longer ECHOES THE PASSWORD -- it is normally
 run inside a transcript destined for a ticket.
 
-CLAUDE.md records the rules this session established, including that a
+AGENTS.md records the rules this session established, including that a
 write reporting success is not evidence it landed: read it back.
 '@
     }

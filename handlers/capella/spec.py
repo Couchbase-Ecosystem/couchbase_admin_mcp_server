@@ -334,7 +334,7 @@ SHIPPED_UNVERIFIED: dict[str, str] = {
     #
     # Four PUTs whose absence made every one of these settings a
     # delete-and-recreate. Paths and bodies from the provider's generated client
-    # per CLAUDE.md rule 1.5. Each carries its own promotion path, because they
+    # per AGENTS.md rule 1.5. Each carries its own promotion path, because they
     # are not equally cheap to verify and pretending otherwise is how the easy
     # one gets done and the other three sit here for a year.
     # ── App Endpoint import filter DELETE, shipped 2026-09-14 ────────────────
@@ -2386,7 +2386,7 @@ OPS: tuple[Op, ...] = (
             "from the provider's generated client, answers with a structured "
             "Capella error instead. Same subsystem, different path, opposite "
             "verdict, and the difference is entirely which source it was read "
-            "from -- CLAUDE.md rule 1.5 earning its keep.]"
+            "from -- AGENTS.md rule 1.5 earning its keep.]"
         ),
         group="backup",
         read_only=True,

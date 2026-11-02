@@ -9,6 +9,7 @@ Files that apply across the whole code base:
 | --- | --- |
 | `test_handler_contract.py` | Every tool group meets the same contract: honest annotations, every tool routed, no duplicate names, no handler that raises |
 | `test_no_vacuous_coverage.py` | A test may not pass because it checked nothing |
+| `test_tool_group_examples.py` | One tested, runnable example for each of the 17 tool groups, run against stubs. The gate fails when a group has none |
 | `test_documentation_gate.py` | The documentation standard (D1 to D15). Each rule is in `report` or `fail` mode |
 | `test_docs_are_not_stale.py` | A count quoted in a document carries a date |
 | `test_tool_inventory_is_current.py`, `test_diagrams_match_the_code.py` | Documents that list tools or draw the design match the code |

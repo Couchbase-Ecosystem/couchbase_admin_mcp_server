@@ -53,7 +53,7 @@ GATE = {
     "D6-handover-set": "fail",
     "D10-contributor-guides": "fail",
     "D11-changelog": "fail",
-    "D12-examples": "report",
+    "D12-examples": "fail",
     "D14-folder-readme": "fail",
     "D7-docs-name-live-things": "fail",
 }
@@ -251,7 +251,10 @@ def test_d12_every_tool_group_has_a_tested_example():
     else:
         text = example_file.read_text(encoding="utf-8")
         gaps.extend(
-            f"no example for tool group: {g}" for g in groups if f'"{g}"' not in text
+            f"no example for tool group: {g}"
+            for g in groups
+            if not re.search(rf'\(\s*"{g}",', text)
+            and f"def test_the_{g}_example" not in text
         )
     _enforce("D12-examples", gaps)
 

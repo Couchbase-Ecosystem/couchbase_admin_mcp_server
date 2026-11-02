@@ -19,6 +19,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 - The handover set in `docs/`: `README.md`, `MODULE_MAP.md`, `BUILD_GUIDE.md`,
   `THREADING_MODEL.md`, `spec.md`, `questions.md` and `design-decisions.md`.
 - `AGENTS.md`, the single copy of the working rules. `CLAUDE.md` now points at it.
+- `tests/test_tool_group_examples.py`: one tested example for each of the 17 tool groups (D12).
 - This changelog, shipped in the wheel and the container image.
 - The documentation standard, in `CONTRIBUTING.md`.
 

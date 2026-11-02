@@ -48,14 +48,14 @@ _REPO = pathlib.Path(__file__).resolve().parent.parent
 #: Mode per rule. "fail" breaks the build, "report" lists the gap as a warning.
 #: Moving a rule to "fail" is part of the commit that closes its last gap.
 GATE = {
-    "D1-header": "report",
+    "D1-header": "fail",
     "D2-public-doc-comment": "report",
-    "D6-handover-set": "report",
-    "D10-contributor-guides": "report",
-    "D11-changelog": "report",
+    "D6-handover-set": "fail",
+    "D10-contributor-guides": "fail",
+    "D11-changelog": "fail",
     "D12-examples": "report",
-    "D14-folder-readme": "report",
-    "D7-docs-name-live-things": "report",
+    "D14-folder-readme": "fail",
+    "D7-docs-name-live-things": "fail",
 }
 
 #: The handover set. Every file must exist and be linked from docs/README.md (D6, D9).

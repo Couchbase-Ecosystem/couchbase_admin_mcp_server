@@ -30,7 +30,7 @@ unproven half is the one a customer reaches for on their worst day.
 
 It was run against the `mcptest` repository and answered:
 
-    {"task_name": "RESTORE-dd7647a6-1c4b-4bf9-b04d-dca634b444fe"}
+    {"task_name": "RESTORE-11111111-2222-4333-8444-000000000001"}
 
 That settles the request body, and the two candidate shapes did NOT agree. This
 module's own schema described a filter block; the service wants a flat object

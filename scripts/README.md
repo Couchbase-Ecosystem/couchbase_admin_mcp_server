@@ -74,8 +74,13 @@ is the reference. The one-line descriptions below come from each script's header
 | `fetch-ee-backup.ps1` | Copy a backup archive out of its container (a script, not a tool, on purpose: see its header) |
 | `commit-session.ps1` | Commit a session's work as a sequence of reviewable commits. Shows the plan unless `-Execute` is given |
 
-## Known issue to fix in step 3 (clean room)
+## Lab password
 
-`seed-ee-bucket.ps1`, `probe-alternate-ports.ps1` and `ee-lab.ps1` contain a lab password as
-a literal. It is for a throwaway local container, and it is still a credential in the
-repository. See [Q-006](../docs/questions.md).
+The lab scripts (`ee-lab.ps1`, `seed-ee-bucket.ps1`, `probe-alternate-ports.ps1`, `probe_rest_paths.ps1`) take the lab
+password from the `CB_LAB_PASSWORD` environment variable. Nothing is stored in the repository
+(`docs/questions.md` Q-006, proposal (a), applied 2026-11-02 pending Chris's confirmation).
+
+```powershell
+$env:CB_LAB_PASSWORD = '<choose one>'
+.\scripts\ee-lab.ps1 -Password $env:CB_LAB_PASSWORD -LoadSample
+```

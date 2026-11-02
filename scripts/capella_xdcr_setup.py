@@ -37,8 +37,8 @@ capella_replications_list and capella_replication_delete an id to address.
 
 USAGE
 -----
-    uv run python scripts/capella_xdcr_setup.py --from Bride --to vn1kiibitcyvwrw
-    uv run python scripts/capella_xdcr_setup.py --from Bride --to vn1kiibitcyvwrw --perform
+    uv run python scripts/capella_xdcr_setup.py --from Bride --to examplecluster0002
+    uv run python scripts/capella_xdcr_setup.py --from Bride --to examplecluster0002 --perform
 
 Dry run is the default.
 """

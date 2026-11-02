@@ -68,8 +68,8 @@ top-level modules, so it lands beside them in `site-packages`.
 
 ## Q-006 [OPEN]. How should the lab password be supplied to the three lab scripts?
 
-**Found 2026-11-02** by text search: `seed-ee-bucket.ps1`, `probe-alternate-ports.ps1` and
-`ee-lab.ps1` contain the same lab password as a literal. It belongs to a throwaway local
+**Found 2026-11-02** by text search (and a fourth by the new gate check): `seed-ee-bucket.ps1`,
+`probe-alternate-ports.ps1`, `probe_rest_paths.ps1` and `ee-lab.ps1` contain a lab password as a literal. It belongs to a throwaway local
 container. The standard (D5) says no credentials in the repository, and a literal is also the
 pattern that teaches the next script to hard-code a real one.
 
@@ -78,3 +78,21 @@ pattern that teaches the next script to hard-code a real one.
 - (b) Generate a random password when the lab starts and write it to a git-ignored file the
   other scripts read. Cost: more code, and a state file.
 - Recommendation: (a). It is the smallest change and nothing is stored.
+
+## Q-007 [OPEN]. Should customer names and internal ticket numbers stay in the repository?
+
+**Found 2026-11-02** by text search. A customer name appears in comments and documents
+(`docs/FIXTURE_DESIGN.md`, `docs/OKTA_LAB.md`, `docs/ARCHITECTURE.md`,
+`deploy/keycloak/README.md`, `handlers/capella/spec.py`), a personal email address in
+`docs/FIXTURE_DESIGN.md`, and internal support ticket numbers (`CBSE-` ids) in
+`handlers/capella/spec.py`, `handlers/capella/spec_pending.py` and elsewhere. D5 names
+secrets, real hostnames and credentials. It does not name these, so this is a policy call.
+The repository is public.
+
+- (a) Keep them. They explain why a capability exists. Cost: a customer relationship and
+  internal ticket ids are visible in a public repository.
+- (b) Replace customer names with "a customer" and drop the ticket ids, keeping the reasoning.
+  Cost: a pass over about 40 comments, and a reader loses the pointer to the ticket.
+- (c) Keep ticket ids, remove customer names only.
+- Recommendation: (b), or (c) if the ticket ids are useful to Couchbase staff and not sensitive.
+  Not done until Chris decides.

@@ -62,7 +62,7 @@ param(
 
     [string]$Csv = 'egress-samples.csv',
 
-    [string]$ClusterId = 'cpvbgft3fwgwy3eu',
+    [string]$ClusterId = 'examplecluster0001',
     [string]$OrgId = $env:CAPELLA_ORG_ID,
     [string]$ProjectId = $env:CAPELLA_PROJECT_ID,
     [string]$ClusterUuid = $env:CAPELLA_CLUSTER_ID

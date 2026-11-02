@@ -217,7 +217,7 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
         "2026-09-13, scripts/capella_xdcr_setup.py --perform. PERFORMED: the "
         "body {sourceBucket, target:{bucket, cluster, type}, direction:'oneWay', "
         "priority:'low'} was ACCEPTED and answered {\"jobId\": "
-        '"46b2431d-9821-4a2b-8d10-7a1c891c728e"} — note the response names a '
+        '"11111111-2222-4333-8444-000000000003"} — note the response names a '
         "JOB, not the replication, so the id a caller needs for "
         "capella_replication_get comes from capella_replications_list and not "
         "from this create.\n"
@@ -247,7 +247,7 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
         "A THIRD run, path corrected and both clusters healthy, answered "
         "202 ACCEPTED: a real cross-cluster restore, Bride-of-Frankenstein -> "
         "ashmahadevsatyanarayanan, bucket travel-sample, backup "
-        "bfacf78e-bd29-4bcb-a72a-9e174768c6b1 (full, 63,349 items). The body "
+        "11111111-2222-4333-8444-000000000004 (full, 63,349 items). The body "
         "below is now OBSERVED rather than transcribed, and cross-cluster "
         "restore is no longer a documented capability this server had never "
         "exercised."
@@ -431,7 +431,7 @@ LIVE_VERIFIED: dict[str, str] = {
     # 200, 2026-09-14 -- promoted only AFTER the discovery casing bug was
     # fixed. The step had looked for `cycleId`, found nothing, and reported
     # this bucket as having no cycles; the rows carry `cycleID`. One run
-    # after the fix it discovered 83bfa14c-d0cd-433f-82bc-9599ccbf7aa6.
+    # after the fix it discovered 11111111-2222-4333-8444-000000000005.
     "capella_bucket_backup_cycle_get": "200",
     "capella_app_endpoint_resync_stop": "405",
     # 405 from the OPTIONS probe, 2026-09-14, scripts/verify_capella_paths.py

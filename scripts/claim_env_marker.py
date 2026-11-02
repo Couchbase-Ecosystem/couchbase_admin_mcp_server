@@ -37,8 +37,8 @@ A TTL on a cluster somebody is using is how a fixture disappears overnight. Pass
 USAGE
 =====
     $env:CAPELLA_API_KEY_SECRET = '<the API key SECRET>'
-    uv run python scripts/claim_env_marker.py --cluster vn1kiibitcyvwrw --env mcptest
-    uv run python scripts/claim_env_marker.py --cluster vn1kiibitcyvwrw --env mcptest --perform
+    uv run python scripts/claim_env_marker.py --cluster examplecluster0002 --env mcptest
+    uv run python scripts/claim_env_marker.py --cluster examplecluster0002 --env mcptest --perform
 """
 
 from __future__ import annotations

@@ -311,7 +311,7 @@ TOOLS: list[Tool] = [
                     "type": "string",
                     "description": (
                         "Capella: the opaque backup id from capella_backups_list, "
-                        "e.g. '690fcea4-aeb3-4bd2-8029-b667bb43bcc2'.\n"
+                        "e.g. '11111111-2222-4333-8444-000000000002'.\n"
                         "EE: the backup's DATE STRING from admin_backup_list, e.g. "
                         "'2026-09-14T00_32_02.521030212Z'. Measured 2026-09-14: an "
                         "EE backup has no name of its own. The repository carries a "

@@ -41,8 +41,8 @@ alone and does not create one to replace it.
 USAGE
 =====
     $env:CAPELLA_API_KEY_SECRET = '<the API key SECRET, not its id>'
-    uv run python scripts/probe_onoff_schedule.py --cluster vn1kiibitcyvwrw
-    uv run python scripts/probe_onoff_schedule.py --cluster vn1kiibitcyvwrw --perform
+    uv run python scripts/probe_onoff_schedule.py --cluster examplecluster0002
+    uv run python scripts/probe_onoff_schedule.py --cluster examplecluster0002 --perform
 
 Reading the output:
     200/201/202/204 on a windowed body, 500 on the windowless one

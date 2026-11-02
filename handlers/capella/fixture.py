@@ -37,9 +37,9 @@ DCP over HTTP. A fixture is assembled from:
                   GET  /_p/fts/api/bucket/{b}/scope/{s}/index[/{i}]   Search definitions out
                   PUT  /_p/fts/api/bucket/{b}/scope/{s}/index/{i}     Search definitions in
                   base FROM capella_data_api_get's `connectionString`, e.g.
-                       https://vn1kiibitcyvwrw.data.cloud.couchbase.com
+                       https://examplecluster0002.data.cloud.couchbase.com
                        -- the SHORT connection-string id (the cluster's SDK
-                       string is cb.vn1kiibitcyvwrw.cloud.couchbase.com), NOT
+                       string is cb.examplecluster0002.cloud.couchbase.com), NOT
                        the v4 UUID. Read it; the same call also says whether
                        the Data API is enabled.
                   auth HTTP Basic, CLUSTER ACCESS credential
@@ -687,10 +687,10 @@ def _export(args: dict) -> list[TextContent]:
     # call with "NOT YET IMPLEMENTED"; the documents are implemented below.
     #
     # THE BASE URL, MEASURED ON TWO CLUSTERS 2026-09-14:
-    #     https://cpvbgft3fwgwy3eu.data.cloud.couchbase.com
-    #     https://vn1kiibitcyvwrw.data.cloud.couchbase.com
+    #     https://examplecluster0001.data.cloud.couchbase.com
+    #     https://examplecluster0002.data.cloud.couchbase.com
     # The second cluster's SDK connection string is
-    # cb.vn1kiibitcyvwrw.cloud.couchbase.com, so the id in the Data API host is
+    # cb.examplecluster0002.cloud.couchbase.com, so the id in the Data API host is
     # the SHORT connection-string id -- which is what the public docs mean by
     # "{clusterId}" -- and NOT the v4 UUID (3c5e8191-...) that this module used
     # to interpolate. That old base could never have resolved.

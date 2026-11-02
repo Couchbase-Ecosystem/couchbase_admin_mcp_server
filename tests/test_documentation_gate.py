@@ -56,6 +56,7 @@ GATE = {
     "D12-examples": "fail",
     "D14-folder-readme": "fail",
     "D7-docs-name-live-things": "fail",
+    "D5-clean-room": "fail",
 }
 
 #: The handover set. Every file must exist and be linked from docs/README.md (D6, D9).
@@ -294,3 +295,48 @@ def test_d7_docs_do_not_name_files_that_no_longer_exist():
                     f"{doc.relative_to(_REPO)} names a missing file: {match.group(1)}"
                 )
     _enforce("D7-docs-name-live-things", gaps)
+
+
+#: What a real identifier looks like, as opposed to a stand-in. Stand-ins are the
+#: 11111111-2222-... UUIDs and the "example..." cluster ids used throughout the repository.
+_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+_STAND_IN_UUID = re.compile(r"^(0{8}-|11111111-2222-)")
+#: A Capella cluster host carries a 15 or 16 character generated id. Placeholders such as
+#: `xxxx`, `<id>` and `{clusterId}` and the `example...` stand-ins do not match.
+_REAL_CAPELLA_HOST = re.compile(
+    r"\b(?:cb\.|svc-[a-z]-node-\d+\.)?(?!example)[a-z0-9]{15,16}\.(?:data\.|dp\.)?cloud\.couchbase\.com"
+)
+
+
+def test_d5_no_real_identifiers_or_lab_passwords_in_tracked_files():
+    """D5: no real cluster hosts, no real UUIDs, and no password literal for the lab.
+
+    The `.py` and text files are scanned. Binary documents (.pptx, .docx, images) are not:
+    they are generated from the Markdown sources.
+    """
+    skip_suffix = (".pptx", ".docx", ".png", ".lock", ".crt", ".jpg", ".ico")
+    files = [p for p in _tracked("*") if not p.name.endswith(skip_suffix)]
+    assert files, "found no files, so this scan would check nothing"
+    gaps = []
+    for path in files:
+        if path.name == "test_documentation_gate.py":
+            continue  # holds the patterns themselves
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        rel = path.relative_to(_REPO)
+        for number, line in enumerate(text.splitlines(), 1):
+            if _REAL_CAPELLA_HOST.search(line):
+                gaps.append(f"{rel}:{number} a real-looking Capella host")
+            for match in _UUID.finditer(line):
+                if not _STAND_IN_UUID.match(match.group(0)):
+                    gaps.append(
+                        f"{rel}:{number} a real-looking UUID {match.group(0)[:8]}..."
+                    )
+            if (
+                re.search(r"(?i)(?:password|\$pass)\s*=\s*'[^'<$]{4,}'", line)
+                and path.suffix == ".ps1"
+            ):
+                gaps.append(f"{rel}:{number} a password literal")
+    _enforce("D5-clean-room", gaps)

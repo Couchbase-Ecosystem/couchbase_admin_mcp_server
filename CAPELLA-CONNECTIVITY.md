@@ -3,7 +3,7 @@
 Two parts, because they keep coming up together.
 
 **Part 1** is how to reach **Bride-of-Frankenstein**
-(`cb.cpvbgft3fwgwy3eu.cloud.couchbase.com`) with the Couchbase SDK from this
+(`cb.examplecluster0001.cloud.couchbase.com`) with the Couchbase SDK from this
 laptop, and how to diagnose it when you cannot. It applies to the CRUD MCP PR
 work, the CB Admin MCP, Frankenstein's loaders, and any quickstart sample.
 
@@ -236,7 +236,7 @@ takes two minutes.
 
 ```powershell
 # 1. Is the KV port reachable at all? (True = allowlist and route are fine)
-Test-NetConnection svc-d-node-001.cpvbgft3fwgwy3eu.cloud.couchbase.com -Port 11207 -InformationLevel Quiet
+Test-NetConnection svc-d-node-001.examplecluster0001.cloud.couchbase.com -Port 11207 -InformationLevel Quiet
 
 # 2. Is the port blocked generally, or only to this destination?
 Test-NetConnection portquiz.net -Port 11207 -InformationLevel Quiet   # True = port is open
@@ -277,13 +277,13 @@ investigated because the failure was read as a connectivity problem, and none of
 them was ever the cause.
 
 - **Outbound port filtering.** `portquiz.net:11207` connects fine.
-- **The connection string.** `couchbases://cb.cpvbgft3fwgwy3eu.cloud.couchbase.com`
+- **The connection string.** `couchbases://cb.examplecluster0001.cloud.couchbase.com`
   is what the Capella console gives. Never add a port; the SDK resolves
   `_couchbases._tcp` SRV to `svc-d-node-001/002/003` on 11207 itself.
 - **Private endpoints or VPC peering.** `privateEndpointService` is disabled and
   `networkPeers` is empty. Plain public cluster.
 - **A `.dp.` hostname variant.** Appears in Couchbase docs as a placeholder.
-  `cb.cpvbgft3fwgwy3eu.dp.cloud.couchbase.com` does not resolve.
+  `cb.examplecluster0001.dp.cloud.couchbase.com` does not resolve.
 - **The Data API.** Enabled, but it is a separate HTTPS interface. The SDK does
   not use it, so it cannot substitute for an SDK connection.
 - **The VPN.** *Not* ruled out, and now the leading candidate. See the top of

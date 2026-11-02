@@ -85,7 +85,7 @@ def _restore_environ():
 #: when this was written. `test_discovery_walks_the_object_graph_in_dependency_order`
 #: therefore failed on the machine of the person who had just used the tools --
 #:
-#:     assert '715ca1af-7a2f-4d12-8eab-262f93fe8c2d' == 'proj-1'
+#:     assert '11111111-2222-4333-8444-000000000006' == 'proj-1'
 #:
 #: -- a real project id where the fake session's answer belonged, green in CI and
 #: red on a workstation. When a script learns to read a new environment variable,

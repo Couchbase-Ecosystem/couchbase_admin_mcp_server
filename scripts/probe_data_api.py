@@ -30,8 +30,8 @@ script prints the current state before it asks.
 
 USAGE
 =====
-    uv run python scripts/probe_data_api.py --cluster vn1kiibitcyvwrw
-    uv run python scripts/probe_data_api.py --cluster vn1kiibitcyvwrw --enable
+    uv run python scripts/probe_data_api.py --cluster examplecluster0002
+    uv run python scripts/probe_data_api.py --cluster examplecluster0002 --enable
 """
 
 from __future__ import annotations

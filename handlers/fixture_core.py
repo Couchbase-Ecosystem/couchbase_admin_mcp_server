@@ -317,8 +317,8 @@ def strip_index_nodes(statement: str) -> tuple[str, bool]:
     SOURCE cluster's index nodes by hostname:
 
         WITH { "defer_build":true,
-               "nodes":[ "svc-qi-node-004.vn1kiibitcyvwrw.cloud.couchbase.com:18091",
-                         "svc-qi-node-005.vn1kiibitcyvwrw.cloud.couchbase.com:18091" ],
+               "nodes":[ "svc-qi-node-004.examplecluster0002.cloud.couchbase.com:18091",
+                         "svc-qi-node-005.examplecluster0002.cloud.couchbase.com:18091" ],
                "num_replica":1 }
 
     Replayed verbatim onto a DIFFERENT cluster those hostnames do not exist, and

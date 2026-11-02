@@ -6,7 +6,9 @@
 # key that vanishes is ignored; a key that 400s is rejected outright — three
 # different answers that a single all-at-once PUT collapses into one failure.
 $ErrorActionPreference = 'Continue'
-$auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("Administrator:reticuli"))
+# The lab password comes from the environment, never from this file (docs/questions.md Q-006).
+if (-not $env:CB_LAB_PASSWORD) { Write-Host 'Set CB_LAB_PASSWORD to the lab password first.' -ForegroundColor Red; exit 1 }
+$auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("Administrator:$($env:CB_LAB_PASSWORD)"))
 $h    = @{ Authorization = "Basic $auth" }
 $base = 'http://127.0.0.1:38091'
 $uri  = "$base/node/controller/setupAlternateAddresses/external"

@@ -4,7 +4,7 @@ Status: the plan is approved. Q1 to Q5 were decided by Chris Ahrendt on
 2026-11-02 (see "Decisions" below). The order of work is still [DESIGN] until
 each step is accepted.
 
-Change in this version: v0.2 (2026-11-02), records the decisions on Q1 to Q5.
+Change in this version: v0.3 (2026-11-02), marks step 3 done except Q-007. v0.2 recorded the decisions on Q1 to Q5.
 v0.1 was the first draft, the same day.
 
 Measured against `main` at commit `e57765b` (2026-10-09). The scan script and
@@ -98,7 +98,7 @@ Each step is its own commit, tested, and pushed only after Chris approves it.
 2. **Handover set.** `docs/README.md`, the module map, the build guide, the
    threading model, `docs/design-decisions.md`, `AGENTS.md`, `CHANGELOG.md`,
    and the six folder READMEs.
-3. **Clean room.** Scrub hostnames, names and identifiers. Settle Q3.
+3. **Clean room.** Scrub hostnames, names and identifiers. Settle Q3. *Done 2026-11-02 for real cluster ids, real UUIDs and lab password literals, enforced by the `D5-clean-room` gate rule. Customer names and ticket numbers wait for [Q-007](../questions.md).*
 4. **Headers and doc comments, one module group at a time.** Handlers first, then
    the root modules, auth, the GUI, scripts and tests. Each group's gate check
    moves to fail mode when that group is done.

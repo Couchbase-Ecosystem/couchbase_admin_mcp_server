@@ -37,12 +37,14 @@
 [CmdletBinding()]
 param(
     [string]$User = 'Administrator',
-    [string]$Pass = 'mcptest-password',
+    [string]$Pass = $env:CB_LAB_PASSWORD,
     [string]$Mgmt = 'http://127.0.0.1:9091',
     [string]$Fts  = 'http://127.0.0.1:9094'
 )
 
 $ErrorActionPreference = 'Continue'
+# The lab password comes from the environment, never from this file (docs/questions.md Q-006).
+if (-not $Pass) { Write-Host 'Set CB_LAB_PASSWORD (or pass -Pass) first.' -ForegroundColor Red; exit 1 }
 
 $cred = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${User}:${Pass}"))
 $auth = @{ Authorization = "Basic $cred" }

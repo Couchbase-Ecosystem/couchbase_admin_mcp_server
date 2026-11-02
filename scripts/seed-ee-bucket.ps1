@@ -18,7 +18,9 @@
 $ErrorActionPreference = 'Continue'
 $Container = 'cb-mcp-ee'
 $User      = 'Administrator'
-$Pass      = 'reticuli'
+# The lab password comes from the environment, never from this file (docs/questions.md Q-006).
+$Pass      = $env:CB_LAB_PASSWORD
+if (-not $Pass) { Write-Host 'Set CB_LAB_PASSWORD to the lab password first.' -ForegroundColor Red; exit 1 }
 $Bucket    = 'travel-sample'
 
 function Step($t) { Write-Host "`n== $t" -ForegroundColor Cyan }

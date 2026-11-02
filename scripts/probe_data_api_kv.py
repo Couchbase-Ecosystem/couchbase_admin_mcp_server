@@ -59,9 +59,9 @@ USAGE
     $env:CB_CAPELLA_CLUSTER_USER = 'mcptest-data'
     $env:CB_CAPELLA_CLUSTER_PASSWORD = '<the cluster access password>'
 
-    uv run python scripts/probe_data_api_kv.py --cluster vn1kiibitcyvwrw `
+    uv run python scripts/probe_data_api_kv.py --cluster examplecluster0002 `
         --keyspace travel-sample.inventory.airline
-    uv run python scripts/probe_data_api_kv.py --cluster vn1kiibitcyvwrw `
+    uv run python scripts/probe_data_api_kv.py --cluster examplecluster0002 `
         --keyspace travel-sample.inventory.airline --perform
 """
 

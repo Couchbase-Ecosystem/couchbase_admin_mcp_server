@@ -81,7 +81,7 @@ def test_a_failure_whose_text_merely_contains_7011_is_not_already_off(sandbox):
     request id, so a 500 was reported as `billing: stopped` for a cluster that was
     still running and still billing."""
     sandbox["invoke_error"] = _error(
-        500, None, "internal error on cluster 7011abcd-0000-0000-0000-000000007011"
+        500, None, "internal error on cluster 11111111-2222-4333-8444-000000000007"
     )
     with pytest.raises(CapellaError):
         env._park({"env_name": "fx"})

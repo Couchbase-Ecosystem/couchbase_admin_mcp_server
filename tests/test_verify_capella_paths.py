@@ -651,7 +651,7 @@ def test_a_placeholder_api_key_is_refused(script, monkeypatch, capsys):
 def test_a_real_looking_value_is_not_mistaken_for_a_placeholder(script):
     """The guard must not reject legitimate input: Capella ids are UUIDs and key secrets
     are long base64-ish strings."""
-    assert not script._looks_like_a_placeholder("6af08c0a-8cab-4c1c-b257-b521575c16d0")
+    assert not script._looks_like_a_placeholder("11111111-2222-4333-8444-000000000008")
     assert not script._looks_like_a_placeholder("kZ3xQ8vN2pL9wR4tY7uI1oP5aS6dF0gH")
     assert not script._looks_like_a_placeholder("")
 
@@ -2275,9 +2275,9 @@ def test_a_real_looking_value_is_not_refused(script):
     """Guards the detector from rejecting genuine input — a UUID, or a base64-ish key secret.
     Over-refusing would make the script unusable and is not obviously safer."""
     for real in (
-        "cb89726a-f6c5-452e-b92c-2c72ff292d6d",
+        "11111111-2222-4333-8444-000000000009",
         "aGFydmVzdGVyLXNlY3JldC12YWx1ZQ==",
-        "715ca1af-7a2f-4d12-8eab-262f93fe8c2d",
+        "11111111-2222-4333-8444-000000000006",
     ):
         assert not script._looks_like_a_placeholder(real), real
 

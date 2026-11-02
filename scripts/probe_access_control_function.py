@@ -52,8 +52,8 @@ The script stops at the first 2xx. Candidates after a success are not sent.
 USAGE
 =====
     $env:CAPELLA_API_KEY_SECRET = '<the API key SECRET, not its id>'
-    uv run python scripts\probe_access_control_function.py --cluster vn1kiibitcyvwrw
-    uv run python scripts\probe_access_control_function.py --cluster vn1kiibitcyvwrw --perform
+    uv run python scripts\probe_access_control_function.py --cluster examplecluster0002
+    uv run python scripts\probe_access_control_function.py --cluster examplecluster0002 --perform
 
 Without --perform it resolves the keyspace, prints the current function and lists
 the candidate bodies without sending any of them. With --perform it sends them in

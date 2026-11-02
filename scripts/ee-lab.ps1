@@ -43,7 +43,7 @@
 
 .EXAMPLE
     # the usual pair: one to drive, one to replicate into
-    .\scripts\ee-lab.ps1 -Password 'reticuli' -Names cb-mcp-ee,cb-mcp-peer -LoadSample
+    .\scripts\ee-lab.ps1 -Password $env:CB_LAB_PASSWORD -Names cb-mcp-ee,cb-mcp-peer -LoadSample
 
 .EXAMPLE
     .\scripts\ee-lab.ps1 -Names cb-mcp-ee,cb-mcp-peer -Down

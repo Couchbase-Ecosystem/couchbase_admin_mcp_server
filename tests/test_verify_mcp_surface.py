@@ -2060,7 +2060,7 @@ def test_the_audit_export_id_is_read_from_the_field_the_list_actually_uses():
     run = _run()
     rows = [
         {
-            "auditLogExportId": "8e632720-243e-43d1-9ae1-b3032a9a0676",
+            "auditLogExportId": "11111111-2222-4333-8444-000000000010",
             "status": "no audit log files exist within the requested time frame",
         }
     ]
@@ -2068,7 +2068,7 @@ def test_the_audit_export_id_is_read_from_the_field_the_list_actually_uses():
         e for e in vms._DISCOVERY if e[0] == "capella_cluster_audit_log_exports_list"
     )
     assert run._choose(entry[0], rows, entry[2]) == (
-        "8e632720-243e-43d1-9ae1-b3032a9a0676"
+        "11111111-2222-4333-8444-000000000010"
     )
 
 

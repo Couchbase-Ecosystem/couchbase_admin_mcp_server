@@ -352,6 +352,55 @@ candidates and the tag each has earned, so this is transcription rather than jud
    is what stops an unverified path shipping, and it exists because a commit message once
    claimed all paths were verified while ten were not.
 
+## 📚 The documentation standard
+
+**The goal:** a new engineer, or a new AI session with no history, can understand,
+maintain and change any part of this repository from the repository alone. Nothing
+lives only in a chat.
+
+Chris Ahrendt is the architect and decides the architecture and every design
+decision. AI assists under his direction: it drafts specs that he approves and writes
+code from the specs he approved.
+
+The rules, in plain words. `tests/test_documentation_gate.py` checks them, and
+`docs/plans/documentation-standard-gap.md` shows how far each one has got.
+
+| Rule | What it asks for |
+| --- | --- |
+| D1 | A header at the top of every source file, test and script: its purpose and component, its main types and functions, who calls it and what it calls, and the spec sections and question numbers it follows |
+| D2 | A doc comment on every public item: purpose, parameters, return value, errors, and threading or ownership where it matters |
+| D3 | Why-comments inside functions where the logic is not obvious: error and edge branches, retries, timeouts and limits (with their source), locks, and security checks (naming the rule) |
+| D4 | Every protocol or wire constant says what it means and names its public source. Unsafe or FFI code carries a SAFETY comment |
+| D5 | Clean room: original wording, cite only the spec and public documents, no other product's internal code, no secrets, real hostnames or credentials |
+| D6 | The handover set in `docs/`, linked from `docs/README.md` |
+| D7 | The documentation gate runs with the tests and fails the build on a gap |
+| D8 | A commit that changes behavior updates the comments and documents in the same commit |
+| D9 | The handover set is complete. The gate fails when a file is missing |
+| D10 | `CONTRIBUTING.md` (people) and `AGENTS.md` (AI agents) at the root, updated in the same commit as any change to how we work |
+| D11 | `CHANGELOG.md` in Keep a Changelog form, with the build number, shipped in every package |
+| D12 | A short, runnable, tested example for each public entry point. The gate counts them |
+| D13 | Headers describe the code as it is now. History goes to `docs/design-decisions.md` and the work log, citing the question number only |
+| D14 | A `README.md` in every top-level folder |
+| D15 | No black-hole code. Hard code carries a doc comment with what it does, its invariants, why it is built this way, the alternatives rejected, and the spec and question. Each hard subsystem has a design note at `docs/design/<area>.md` |
+
+Every new script or tool documents its usage in its folder's `README.md` and has a
+dry-run (or `-WhatIf`) mode.
+
+Documents follow these habits:
+
+- Version every spec with a "change in this version" line, and keep a decision log
+  that records the date and who decided.
+- Label decisions honestly: the owner's decisions as his, proposals as `[DESIGN]`
+  until approved, open items as `[OPEN]` or `[VERIFY]`.
+- Do not guess. A choice that a user, customer or operator can see, or that touches
+  the spec, an API, an error code, security, data, performance or design, goes in
+  writing as a question with options, trade-offs and a recommendation.
+- Source every fact. A performance figure names the run, the command and the commit.
+  Something not measured says "not measured".
+- Write in plain language, in short sentences.
+
+---
+
 ## 🏗️ Project layout
 
 ```

@@ -387,6 +387,14 @@ def _capella_domain_error(body: str) -> int | None:
 
 
 class Result:
+    """The outcome of probing one Capella operation.
+
+    Holds the operation, the verdict, the HTTP status, a detail line, and `method_sent`, the HTTP
+    method actually put on the wire. That is not always the operation's own method: a write is
+    usually probed with OPTIONS, so a tag is never claimed on the strength of an OPTIONS probe
+    alone.
+    """
+
     def __init__(self, op, verdict, status=None, detail="", method_sent=None):
         self.op = op
         self.verdict = verdict
@@ -2417,6 +2425,13 @@ def _redirect_human_output_to_stderr() -> None:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    verify_capella_paths.py — confirm every Capella v4 path this server uses is real.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

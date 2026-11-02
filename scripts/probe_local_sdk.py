@@ -30,6 +30,14 @@ from datetime import timedelta
 
 
 def variants(port: int | None) -> list[str]:
+    """Return the connection strings to try against a local cluster.
+
+    Args:
+        port: a non-default port to append, or None.
+
+    Returns:
+        The same host forms (`localhost`, `127.0.0.1`) with and without the `network` option.
+    """
     suffix = f":{port}" if port else ""
     return [
         f"couchbase://localhost{suffix}",
@@ -69,6 +77,13 @@ def probe(connection: str, username: str, password: str, seconds: float) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Find a connection string the SDK can actually use against a local cluster.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=None, help="Non-default KV port.")
     parser.add_argument("--timeout", type=float, default=8.0)

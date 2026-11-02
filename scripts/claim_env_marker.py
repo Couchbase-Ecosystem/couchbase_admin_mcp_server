@@ -78,6 +78,13 @@ def _marker_prefix() -> str:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    claim_env_marker.py - tag an existing cluster as a managed environment.
+
+    Returns:
+        The process exit code.
+    """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

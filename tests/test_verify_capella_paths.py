@@ -765,7 +765,7 @@ def test_the_destructive_guard_refuses_before_making_any_api_call(
     """A refusal must cost nothing and must not print anything implying work happened."""
     calls = []
     monkeypatch.setattr(
-        script, "_request", lambda *a, **k: (calls.append(a) or (200, "{}"))
+        script, "_request", lambda *a, **k: calls.append(a) or (200, "{}")
     )
     monkeypatch.setattr(
         "sys.argv",

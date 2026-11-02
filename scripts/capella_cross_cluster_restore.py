@@ -175,15 +175,32 @@ def _matches(cluster: dict, needle: str) -> bool:
 
 
 class Restore:
+    """State for one run of `capella_cross_cluster_restore.py`.
+
+    Holds the parsed arguments (`args`), the labels of failed checks (`failures`), and `performed`,
+    which is True only when `--perform` was given. Without it the script previews.
+    """
+
     def __init__(self, args) -> None:
         self.args = args
         self.failures: list[str] = []
         self.performed = not args.dry_run
 
     def say(self, text: str = "") -> None:
+        """Print one line to standard output and flush at once, so progress shows while a long step runs."""
         print(text, flush=True)
 
     def check(self, ok: bool, label: str, detail: str = "") -> bool:
+        """Record and print one PASS or FAIL line for a check.
+
+        Args:
+            ok: whether the check passed.
+            label: the check's name, printed and, on failure, remembered in `self.failures`.
+            detail: optional extra text printed under the line.
+
+        Returns:
+            `ok`, so a caller can branch on it.
+        """
         self.say(f"   {'PASS' if ok else 'FAIL'}  {label}")
         if detail:
             self.say(f"         {detail}")
@@ -192,6 +209,19 @@ class Restore:
         return ok
 
     async def call(self, session, tool: str, arguments: dict) -> dict:
+        """Call one tool through the MCP client session and show what happened.
+
+        Prints the tool name and its arguments, waits up to `--timeout` seconds for the reply,
+        prints the decoded response (shortened when long), and returns it.
+
+        Args:
+            session: the connected `ClientSession`.
+            tool: the tool name.
+            arguments: the tool arguments.
+
+        Returns:
+            The decoded response payload as a dict.
+        """
         self.say(f"\n-> {tool}")
         for key, value in arguments.items():
             rendered = repr(value)
@@ -211,6 +241,15 @@ class Restore:
     # ── discovery ────────────────────────────────────────────────────────────
 
     async def scope(self, session) -> dict | None:
+        """Find the organization and project to work in.
+
+        Lists organizations and projects and uses `--org` and `--project` when given, otherwise the
+        first of each.
+
+        Returns:
+            `{"organization_id": ..., "project_id": ...}`, or None (after a failed check) when none is
+            visible.
+        """
         body = await self.call(session, "capella_organizations_list", {})
         orgs = _rows(body)
         if not self.check(bool(orgs), "an organization is visible"):
@@ -227,6 +266,15 @@ class Restore:
         return {"organization_id": org, "project_id": project}
 
     async def clusters(self, session, scope: dict) -> tuple[dict, dict] | None:
+        """Pick the source and target clusters from the project's cluster list.
+
+        Needs at least two clusters. `--target` must match exactly one. The source is the cluster
+        `--source` matches, else the only other cluster; if several remain the check fails and asks
+        for `--source`.
+
+        Returns:
+            `(source, target)` cluster dicts, or None after a failed check.
+        """
         body = await self.call(session, "capella_clusters_list", dict(scope))
         rows = [c for c in _rows(body) if isinstance(c, dict)]
         self.say("\n   clusters in this project:")
@@ -296,6 +344,14 @@ class Restore:
     # ── the five documented constraints ──────────────────────────────────────
 
     def preflight(self, source: dict, target: dict) -> bool:
+        """Check, before anything is sent, the constraints Capella documents on a cross-cluster restore.
+
+        Prints one check per constraint (same organization, source still exists, same cloud provider
+        and so on).
+
+        Returns:
+            True when every constraint holds. When it returns False nothing has been sent.
+        """
         self.say("\n" + "-" * 70)
         self.say(
             "preflight: the constraints Capella documents on a cross-cluster restore"
@@ -371,6 +427,15 @@ class Restore:
     async def ensure_bucket(
         self, session, scope: dict, source: dict, target: dict
     ) -> bool:
+        """Make sure the target cluster has the bucket to restore into.
+
+        Checks that the source holds the bucket, then looks at the target. Creating a missing bucket
+        is a write and happens only with `--perform`: it calls `capella_bucket_create` first without
+        confirm (which must be refused), then with confirm; without `--perform` it only previews.
+
+        Returns:
+            True when the bucket is, or in a preview would be, in place; False after a failed check.
+        """
         name = self.args.bucket
         src_scope = {**scope, "cluster_id": source.get("id")}
         tgt_scope = {**scope, "cluster_id": target.get("id")}
@@ -483,6 +548,12 @@ class Restore:
     # ── the restore itself ───────────────────────────────────────────────────
 
     async def run(self, session) -> None:
+        """Run this script's steps in order and record a check for each.
+
+        Preview only unless `--perform` was given (`self.performed` is False without it). A step that
+        cannot continue returns early, so later steps do not run against a wrong or missing target.
+        The steps and what each proves are in the module header.
+        """
         self.say("=" * 70)
         self.say("capella CROSS-CLUSTER restore")
         self.say(
@@ -626,6 +697,12 @@ class Restore:
 
 
 async def main_async(args) -> int:
+    """Start the server as a child process over stdio, connect a client and run this script.
+
+    Returns 1 with a message when a prerequisite is missing (the `mcp` package, and for the
+    Capella scripts the `CAPELLA_API_KEY_SECRET` variable where the script checks for it).
+    Otherwise runs the steps, prints the failed checks, and returns the exit code.
+    """
     try:
         from mcp import ClientSession, StdioServerParameters, stdio_client
     except ImportError:
@@ -659,6 +736,13 @@ async def main_async(args) -> int:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Restore a Capella managed backup INTO A DIFFERENT CLUSTER, through the MCP tool.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--target",

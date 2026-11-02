@@ -380,6 +380,15 @@ def note(
 
 
 def arrow(axes, start, end, *, color=INK, lw=1.25, dashed=False, rad=0.0, both=False):
+    """Draw an arrow on `axes` from `start` to `end`.
+
+    Args:
+        axes: the matplotlib axes.
+        start, end: (x, y) points in the axes' coordinates.
+        color: line colour. lw: line width.
+        dashed: draw a dashed line. rad: curvature of the connection (0 is straight).
+        both: put an arrowhead at each end.
+    """
     axes.add_patch(
         FancyArrowPatch(
             start,
@@ -760,6 +769,7 @@ def reference_architecture():
 
 
 def responsibilities():
+    """Draw figure 2, "Division of labor", and save it as `fig02_responsibilities.png`."""
     figure, axes = canvas(9.8, 5.4)
     top = title(
         axes,
@@ -900,6 +910,7 @@ def responsibilities():
 
 
 def deployment_gating():
+    """Draw figure 3, how the Admin MCP decides which tools exist, and save it as `fig03_deployment_gating.png`."""
     figure, axes = canvas(9.8, 6.0)
     top = title(
         axes,
@@ -1025,6 +1036,7 @@ def deployment_gating():
 
 
 def authorization_path():
+    """Draw figure 4, the path from an agent's tool call to a cluster, and save it as `fig04_authorization_path.png`."""
     figure, axes = canvas(9.4, 6.0)
     top = title(
         axes,
@@ -1291,6 +1303,7 @@ def lifecycle_sequence():
 
 
 def memory_model():
+    """Draw figure 5, Agent Memory and the pointer rule, and save it as `fig05_memory_model.png`."""
     figure, axes = canvas(9.8, 5.4)
     top = title(
         axes,
@@ -1363,6 +1376,7 @@ def memory_model():
 
 
 def catalog_workflow():
+    """Draw figure 6, the Agent Catalog workflow from a file in git to a findable tool, and save it as `fig06_catalog_workflow.png`."""
     figure, axes = canvas(10.0, 5.0)
     top = title(
         axes,
@@ -1448,6 +1462,7 @@ def catalog_workflow():
 
 
 def tracing():
+    """Draw the Agent Tracer figure, what the agent did after the fact, and save it under its `fig` name."""
     figure, axes = canvas(9.8, 4.8)
     top = title(
         axes,
@@ -1813,6 +1828,7 @@ def topologies():
 
 
 def main() -> None:
+    """Draw every architecture figure in order. Each one is checked for layout when it is saved, so a diagram with overflowing text fails the run."""
     print("generating architecture diagrams")
     for builder in (
         reference_architecture,

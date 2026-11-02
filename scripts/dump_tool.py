@@ -255,6 +255,15 @@ def _collect_args(pairs: list[str]) -> dict[str, Any]:
 
 
 async def run(args) -> int:
+    """Start the server over stdio, connect a client, and list tools or call one.
+
+    With `--list`, prints the names of the advertised tools. Otherwise calls the named tool and
+    prints its whole response. Writes are allowed only with `--write`, and performed only with
+    `--perform`.
+
+    Returns:
+        The process exit code.
+    """
     from mcp import ClientSession, StdioServerParameters, stdio_client
 
     params = StdioServerParameters(
@@ -427,6 +436,13 @@ async def run(args) -> int:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Call ONE tool through a real MCP client and print its WHOLE response.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(
         description="Call one MCP tool and print its entire response."
     )

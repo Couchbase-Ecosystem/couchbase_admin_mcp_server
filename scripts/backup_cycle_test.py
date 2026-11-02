@@ -82,15 +82,32 @@ def _payload(response: Any) -> dict:
 
 
 class Cycle:
+    """State for one run of `backup_cycle_test.py`.
+
+    Holds the parsed arguments (`args`), the labels of failed checks (`failures`), and `performed`,
+    which is True only when `--perform` was given. Without it the script previews.
+    """
+
     def __init__(self, args) -> None:
         self.args = args
         self.failures: list[str] = []
         self.performed = not args.dry_run
 
     def say(self, text: str = "") -> None:
+        """Print one line to standard output and flush at once, so progress shows while a long step runs."""
         print(text, flush=True)
 
     def check(self, ok: bool, label: str, detail: str = "") -> bool:
+        """Record and print one PASS or FAIL line for a check.
+
+        Args:
+            ok: whether the check passed.
+            label: the check's name, printed and, on failure, remembered in `self.failures`.
+            detail: optional extra text printed under the line.
+
+        Returns:
+            `ok`, so a caller can branch on it.
+        """
         self.say(f"   {'PASS' if ok else 'FAIL'}  {label}")
         if detail:
             self.say(f"         {detail}")
@@ -99,6 +116,19 @@ class Cycle:
         return ok
 
     async def call(self, session, tool: str, arguments: dict) -> dict:
+        """Call one tool through the MCP client session and show what happened.
+
+        Prints the tool name and its arguments, waits up to `--timeout` seconds for the reply,
+        prints the decoded response (shortened when long), and returns it.
+
+        Args:
+            session: the connected `ClientSession`.
+            tool: the tool name.
+            arguments: the tool arguments.
+
+        Returns:
+            The decoded response payload as a dict.
+        """
         self.say(f"\n-> {tool}")
         for key, value in arguments.items():
             if key != "confirm":
@@ -116,6 +146,12 @@ class Cycle:
     # ── The cycle ────────────────────────────────────────────────────────────
 
     async def run(self, session) -> None:
+        """Run this script's steps in order and record a check for each.
+
+        Preview only unless `--perform` was given (`self.performed` is False without it). A step that
+        cannot continue returns early, so later steps do not run against a wrong or missing target.
+        The steps and what each proves are in the module header.
+        """
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         repository = self.args.repository or f"mcpcycle-{stamp}"
 
@@ -246,6 +282,12 @@ class Cycle:
 
 
 async def main_async(args) -> int:
+    """Start the server as a child process over stdio, connect a client and run this script.
+
+    Returns 1 with a message when a prerequisite is missing (the `mcp` package, and for the
+    Capella scripts the `CAPELLA_API_KEY_SECRET` variable where the script checks for it).
+    Otherwise runs the steps, prints the failed checks, and returns the exit code.
+    """
     try:
         from mcp import ClientSession, StdioServerParameters, stdio_client
     except ImportError:
@@ -274,6 +316,13 @@ async def main_async(args) -> int:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Drive a whole backup cycle through a real MCP client. Level 3.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--perform",

@@ -204,6 +204,13 @@ def _index(cluster, bucket: str) -> None:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Put real data into `mcptest` so the admin tools have something to act on.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", default=os.environ.get("CB_BUCKET") or "mcptest")
     parser.add_argument("--events", type=int, default=2000)

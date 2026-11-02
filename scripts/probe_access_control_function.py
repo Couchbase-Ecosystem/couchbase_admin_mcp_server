@@ -113,6 +113,15 @@ def _load_dotenv(path: pathlib.Path) -> dict[str, str]:
 
 
 def resolve_credentials(env_file: str | None) -> tuple[str, str, str]:
+    """Find the Capella API key secret and organization id.
+
+    Looks in the environment first, then in an env file (`--env-file`, or the usual locations the
+    function lists).
+
+    Returns:
+        `(secret, organization_id, where_it_was_found)`. The third value names the source and never
+        contains the secret.
+    """
     found = [
         (n, os.environ[n].strip()) for n in _KEY_NAMES if os.environ.get(n, "").strip()
     ]
@@ -542,6 +551,13 @@ def try_name_path_variants(
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    probe_access_control_function.py - what body shape does
+
+    Returns:
+        The process exit code.
+    """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

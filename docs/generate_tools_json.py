@@ -56,6 +56,11 @@ import server
 
 
 def category(tool) -> str:
+    """Classify a tool for the inventory: `read`, `destructive` or `write`.
+
+    Read-only tools are `read`. A tool that is not read-only and is annotated destructive is
+    `destructive`. Everything else is `write`.
+    """
     if mcp_compat.is_read_only(tool):
         return "read"
     if mcp_compat.is_destructive(tool):
@@ -84,6 +89,14 @@ def inventory() -> dict[str, list[list[str]]]:
 #: writes down is a number that goes wrong silently, because nobody re-reads a
 #: generated binary.
 def measured() -> dict[str, object]:
+    """Measure the tool counts of the registry as it is now.
+
+    Returns:
+        A dict with the date measured, the total, the counts per prefix (`capella_`, `admin_`,
+        `cb_`), what one instance loads on each control plane, and how many `admin_*` tools are
+        reachable on Capella. These are measurements of the code, not a deployment, so the module
+        header explains why this may not be run with both control planes configured.
+    """
     import datetime
 
     import deployment
@@ -142,6 +155,11 @@ def _read_only_self_managed_total() -> int:
 
 
 def main() -> None:
+    """Write the tool inventory as JSON to stdout, and a one-line summary to stderr.
+
+    Fails with an assertion when the inventory does not account for every registered tool, so a
+    document can never describe a smaller server than the one that runs.
+    """
     out = inventory()
     counted = sum(len(v) for v in out.values())
 

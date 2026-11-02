@@ -107,6 +107,13 @@ def rows(payload: object) -> list:
 
 
 def main() -> int:
+    """Run this script. It takes no command-line options.
+
+    What would it take to make Capella backup work end to end?
+
+    Returns:
+        The process exit code.
+    """
     if not os.environ.get("CAPELLA_API_KEY_SECRET"):
         print("CAPELLA_API_KEY_SECRET is not set. Run cbenv.bat, then a NEW window.")
         print("It must be the SECRET, not CAPELLA_ACCESS_KEY_ID -- and the 401")

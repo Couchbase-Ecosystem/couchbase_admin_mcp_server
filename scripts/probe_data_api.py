@@ -54,6 +54,13 @@ from probe_access_control_function import (
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    probe_data_api.py - measure the Data API endpoints, and turn the Data API on.
+
+    Returns:
+        The process exit code.
+    """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

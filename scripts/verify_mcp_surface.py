@@ -145,6 +145,10 @@ class Result:
     phase: str = "read"
 
     def as_dict(self) -> dict[str, Any]:
+        """The result as a plain dict for the JSON report.
+
+        Keys: `tool`, `outcome`, `detail`, `arguments` (sorted names), `shape`, `phase`.
+        """
         return {
             "tool": self.tool,
             "outcome": self.outcome,
@@ -872,6 +876,11 @@ class Run:
     # -- output -----------------------------------------------------------
 
     def say(self, line: str = "") -> None:
+        """Write one line to the report stream (`self.out`).
+
+        When the transcript goes to a file with `--out`, the line is mirrored to standard error so the
+        terminal is not left empty.
+        """
         print(line, file=self.out)
         # Mirrored to stderr whenever the transcript is going to a file.
         #
@@ -884,9 +893,15 @@ class Run:
 
     @property
     def out(self):
+        """The text stream the run writes to: standard output, or the `--out` file once opened."""
         return self._out
 
     def open_output(self):
+        """Open the report stream.
+
+        Uses standard output, or the `--out` file with a mirror to standard error. The file is held
+        open for the whole run and closed by `close_output`.
+        """
         self._out = sys.stdout
         self._mirror = sys.stderr if self.args.out else None
         if self.args.out:
@@ -900,6 +915,7 @@ class Run:
         return self._out
 
     def close_output(self) -> None:
+        """Close the `--out` file if one was opened. Standard output is left open."""
         if self.args.out and self._out is not sys.stdout:
             self._out.close()
 
@@ -930,6 +946,11 @@ class Run:
     }
 
     def context_for(self, tool_name: str) -> dict[str, str]:
+        """Return the id context (organization, project, cluster, and so on) to use for a tool.
+
+        For a tool that must target the second cluster, a copy is returned with `cluster_id` pointed
+        there. A copy, because changing the shared context would repoint every later tool.
+        """
         context = self.contexts[side_of(tool_name)]
         key = self._CLUSTER_FROM.get(tool_name)
         if key and context.get(key):
@@ -970,6 +991,11 @@ class Run:
         self._line_open = True
 
     def record(self, result: Result) -> Result:
+        """Store one result and print a one-line marker for it.
+
+        Returns:
+            The same result, so a caller can write `return self.record(Result(...))`.
+        """
         self.results.append(result)
         marker = {
             OK: "ok",
@@ -1093,6 +1119,11 @@ class Run:
     # -- phases -----------------------------------------------------------
 
     async def phase_protocol(self, session) -> None:
+        """Phase 1: check the protocol surface.
+
+        Lists the advertised tools, prints the count, and records a protocol failure if two tools
+        share a name.
+        """
         self.say("== protocol ==")
         listing = await session.list_tools()
         self.advertised = list(listing.tools)
@@ -2063,6 +2094,11 @@ class Run:
     # -- reporting --------------------------------------------------------
 
     def summary(self) -> dict[str, Any]:
+        """Build the report as a dict.
+
+        Contains the start time, correlation id, counts per outcome, the hard failures, the upstream
+        errors and timeouts, notes, and the context used.
+        """
         counts: dict[str, int] = {}
         for result in self.results:
             counts[result.outcome] = counts.get(result.outcome, 0) + 1
@@ -2083,6 +2119,12 @@ class Run:
         }
 
     def report(self) -> int:
+        """Print the summary and decide the exit code.
+
+        Returns:
+            The process exit code: 1 on hard failures; with `--strict`, 2 for upstream errors or
+            timeouts and 3 for skipped or not-reached checks; otherwise 0.
+        """
         summary = self.summary()
         counts = summary["counts"]
         self.say("== summary ==")
@@ -2201,6 +2243,12 @@ async def _drive(run: Run, *, read_only: bool, dry_run: bool, phases) -> None:
 
 
 async def run_all(run: Run) -> int:
+    """Run every phase and return the exit code.
+
+    First a read-only server runs the protocol, discovery and read phases. With `--write-preview`
+    a second server is started in dry-run mode (a caller cannot override it) for the write phases,
+    so a preview can never perform a write.
+    """
     run.say(f"verify_mcp_surface — {run.started.isoformat()}")
     run.say(f"repository     : {REPO_ROOT}")
     run.say(f"python         : {sys.version.split()[0]}")
@@ -2230,6 +2278,7 @@ async def run_all(run: Run) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser. `--write-preview` also exercises the write surface without ever performing a write."""
     parser = argparse.ArgumentParser(
         description=(
             "Drive the Couchbase Admin MCP server over stdio and report which "
@@ -2361,6 +2410,13 @@ def _require_mcp_client() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    scripts/verify_mcp_surface.py — drive this server the way a client does.
+
+    Returns:
+        The process exit code.
+    """
     args = build_parser().parse_args(argv)
     # BEFORE the Run is built and before a line of the header is printed. A
     # diagnostic that arrives after the banner gets read as a failure of the thing

@@ -129,6 +129,13 @@ def _request(
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    probe_data_api_kv.py - measure the Data API's KV DOCUMENT endpoints.
+
+    Returns:
+        The process exit code.
+    """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

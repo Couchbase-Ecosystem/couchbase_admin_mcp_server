@@ -309,9 +309,7 @@ def test_a_keyspace_component_is_escaped_too(monkeypatch):
     monkeypatch.setattr(
         urllib.request,
         "urlopen",
-        lambda request, timeout=None: (
-            seen.update(url=request.full_url) or _Response()
-        ),
+        lambda request, timeout=None: seen.update(url=request.full_url) or _Response(),
     )
 
     fixture._put_document(

@@ -261,6 +261,15 @@ pass""",
 
 
 def run(target: str, cwd: pathlib.Path) -> bool:
+    """Run the named test target in `cwd` and say whether the suite caught the mutation.
+
+    Returns:
+        True when the tests PASSED, which means the mutation survived and the control has no
+        test. False when they failed, which means the mutation was caught.
+
+    Raises:
+        MutationTimeoutError: when pytest times out, because a timeout is not a kill.
+    """
     try:
         result = subprocess.run(
             [
@@ -296,6 +305,15 @@ def run(target: str, cwd: pathlib.Path) -> bool:
 
 
 def main() -> int:
+    """Run every mutation in this round and report which ones the test suite caught.
+
+    Mutation-check the round-4 fixes and the test-quality gaps independent
+
+    This script has no argument parser, so `--help` does not print usage: it starts the round.
+
+    Returns:
+        The process exit code.
+    """
     survivors = []
     for label, relpath, old, new, target in MUTATIONS:
         with tempfile.TemporaryDirectory() as tmp:

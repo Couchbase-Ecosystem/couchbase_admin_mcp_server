@@ -49,7 +49,7 @@ _REPO = pathlib.Path(__file__).resolve().parent.parent
 #: Moving a rule to "fail" is part of the commit that closes its last gap.
 GATE = {
     "D1-header": "fail",
-    "D2-public-doc-comment": "report",
+    "D2-public-doc-comment": "fail",
     "D6-handover-set": "fail",
     "D10-contributor-guides": "fail",
     "D11-changelog": "fail",

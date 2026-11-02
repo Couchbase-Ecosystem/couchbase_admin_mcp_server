@@ -285,6 +285,15 @@ def run(target: str, cwd: pathlib.Path) -> bool:
 
 
 def main() -> int:
+    """Run every mutation in this round and report which ones the test suite caught.
+
+    Re-check the mutations that SURVIVED, plus the round-3 fixes.
+
+    This script has no argument parser, so `--help` does not print usage: it starts the round.
+
+    Returns:
+        The process exit code.
+    """
     survivors = []
     for label, relpath, old, new, target in MUTATIONS:
         with tempfile.TemporaryDirectory() as tmp:

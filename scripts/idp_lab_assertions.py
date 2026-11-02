@@ -267,6 +267,12 @@ class Session:
         return headers
 
     def post(self, payload: dict) -> tuple[int, dict | None, dict[str, str]]:
+        """POST one JSON-RPC message to the server's `/mcp` endpoint.
+
+        Returns:
+            `(status, parsed_body, response_headers)`. An HTTP error status is returned, not raised,
+            so a test can assert on a refusal.
+        """
         req = urllib.request.Request(
             MCP, data=json.dumps(payload).encode(), headers=self._headers()
         )
@@ -285,6 +291,11 @@ class Session:
             return exc.code, parsed, headers
 
     def initialize(self) -> tuple[int, dict | None]:
+        """Send the MCP `initialize` request and remember the session id.
+
+        Returns:
+            `(status, parsed_body)`.
+        """
         status, parsed, headers = self.post(
             {
                 "jsonrpc": "2.0",
@@ -305,6 +316,14 @@ class Session:
 
 
 def cmd_tools(args: argparse.Namespace) -> int:
+    """Subcommand `tools`: list the tools a principal can see over HTTP.
+
+    Initializes a session with a token for `--principal`, calls `tools/list`, and prints the count
+    and the names (filtered by `--grep` when given).
+
+    Returns:
+        0 on success, 1 when initialize does not return HTTP 200.
+    """
     session = Session(token_for(args.principal))
     status, parsed = session.initialize()
     print(f"initialize -> HTTP {status}  session={session.session_id!r}")
@@ -326,6 +345,14 @@ def cmd_tools(args: argparse.Namespace) -> int:
 
 
 def cmd_call(args: argparse.Namespace) -> int:
+    """Subcommand `call`: call one tool over HTTP as a principal.
+
+    Arguments come from `--args` (JSON) and from repeatable `--arg key=value`, which avoids the
+    quoting problem of passing JSON from PowerShell.
+
+    Returns:
+        The process exit code; 1 when initialize does not return HTTP 200.
+    """
     session = Session(token_for(args.principal))
     status, parsed = session.initialize()
     print(f"initialize -> HTTP {status}  session={session.session_id!r}")
@@ -449,6 +476,13 @@ def cmd_claims(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Drive the running MCP server with real IdP-issued tokens.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--idp",

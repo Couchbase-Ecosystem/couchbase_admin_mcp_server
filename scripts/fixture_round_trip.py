@@ -260,6 +260,13 @@ def compare(first: pathlib.Path, second: pathlib.Path) -> dict:
 
 
 async def run(args) -> int:
+    """Export a keyspace, import it into a scratch keyspace, export that, and compare.
+
+    Writes the two exports under `--work` (`first` and `second`) and reports any difference.
+
+    Returns:
+        The process exit code.
+    """
     from mcp import ClientSession, StdioServerParameters, stdio_client
 
     tools = _TOOLS[args.plane]
@@ -375,6 +382,13 @@ async def run(args) -> int:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    Prove a fixture family by round-tripping it: export, import elsewhere, export back, compare.
+
+    Returns:
+        The process exit code.
+    """
     parser = argparse.ArgumentParser(
         description="Export, import elsewhere, export back, compare.",
     )

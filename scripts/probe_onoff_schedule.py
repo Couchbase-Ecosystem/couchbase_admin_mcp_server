@@ -214,6 +214,13 @@ def _all_custom_no_window() -> dict:
 
 
 def main() -> int:
+    """Parse the command line and run this script. `--help` lists the options.
+
+    probe_onoff_schedule.py - why does POST .../onOffSchedule answer 500?
+
+    Returns:
+        The process exit code.
+    """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

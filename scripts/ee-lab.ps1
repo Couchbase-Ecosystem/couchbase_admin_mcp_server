@@ -1,4 +1,12 @@
 ﻿<#
+  Component: stands up or tears down a disposable Enterprise Edition lab: one primary cluster plus
+      any number of peers on one docker network, with one password.
+  Spec: docs/questions.md Q-006 (the lab password); scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `docs/questions.md`, `scripts/README.md`.
+  Callees: scripts it names: `scripts/ee_populate_test_cluster.py`,
+      `scripts/start-ee-cluster.ps1`.
+
 .SYNOPSIS
     Stand up (or tear down) a disposable Enterprise Edition lab: one primary
     cluster plus any number of peers, all on one docker network, one password.

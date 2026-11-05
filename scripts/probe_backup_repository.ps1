@@ -1,4 +1,11 @@
 ﻿<#
+  Component: reads off the cluster what is needed to create a backup repository (plan name,
+      archive path, bucket) instead of assuming it.
+  Spec: no section of the spec; see scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `scripts/README.md`, `scripts/commit-session.ps1`.
+  Callees: scripts it names: none.
+
   probe_backup_repository.ps1
 
   Everything needed to CREATE a backup repository, read off the cluster instead

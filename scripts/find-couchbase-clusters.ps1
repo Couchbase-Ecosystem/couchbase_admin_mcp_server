@@ -1,4 +1,13 @@
 ﻿<#
+  Component: says which of the local Couchbase clusters you are talking to, so a probe is not run
+      against the wrong one.
+  Spec: no section of the spec; see scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `scripts/README.md`, `scripts/add-local-services.ps1`,
+      `scripts/commit-session.ps1`.
+  Callees: scripts it names: `scripts/add-local-services.ps1`, `scripts/load_test_data.py`,
+      `scripts/probe_backup_paths.ps1`.
+
   find-couchbase-clusters.ps1
 
   WHICH CLUSTER AM I TALKING TO?

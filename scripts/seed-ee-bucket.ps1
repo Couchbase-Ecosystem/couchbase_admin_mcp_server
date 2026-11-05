@@ -1,4 +1,11 @@
-﻿# Create a bucket and load travel-sample using the tools inside the container.
+﻿# Component: creates a bucket and loads `travel-sample` with the tools inside the container,
+#     because the sample-bucket install call blocks.
+# Spec: docs/questions.md Q-006 (the lab password); scripts/README.md.
+# Main items: the whole script.
+# Callers: run by hand. Files that name it: `docs/questions.md`, `scripts/README.md`.
+# Callees: scripts it names: `scripts/start-ee-cluster.ps1`.
+#
+# Create a bucket and load travel-sample using the tools inside the container.
 #
 # WHY NOT /sampleBuckets/install
 # ------------------------------

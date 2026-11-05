@@ -1,4 +1,14 @@
 ﻿<#
+  Component: starts and initialises a self-managed Enterprise Edition cluster in Docker with
+      credentials of our choosing, so the `admin_*` surface can be tested.
+  Spec: no section of the spec; see scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `scripts/README.md`, `scripts/ee-lab.ps1`,
+      `scripts/fetch-ee-backup.ps1`, `scripts/probe-alternate-ports.ps1`,
+      `scripts/seed-ee-bucket.ps1`.
+  Callees: scripts it names: `scripts/fetch-ee-backup.ps1`, `scripts/probe-alternate-ports.ps1`,
+      `scripts/verify_mcp_surface.py`.
+
 .SYNOPSIS
     Start and initialise a self-managed Couchbase EE cluster in Docker, with
     credentials we choose, so the admin_* surface becomes testable.

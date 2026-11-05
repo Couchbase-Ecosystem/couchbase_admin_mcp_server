@@ -1,4 +1,12 @@
 <#
+  Component: captures a transcript of the server being driven by a real MCP client: every read
+      tool, and every write tool gated and previewed.
+  Spec: RUNBOOK.md; scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `RUNBOOK.md`, `scripts/README.md`,
+      `scripts/verify_mcp_surface.py`.
+  Callees: scripts it names: `scripts/verify_mcp_surface.py`.
+
   run-mcp-evidence.ps1
 
   Capture a transcript of this server being driven by a real MCP client, the way

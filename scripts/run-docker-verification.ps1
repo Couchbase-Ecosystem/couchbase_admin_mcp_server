@@ -1,4 +1,13 @@
 ﻿<#
+  Component: verifies the shipped container, not the developer's host: runs the image and checks
+      it starts, reaches a cluster and refuses the postures it should refuse.
+  Spec: docs/spec.md S2 (one container); docs/CONTAINER_DEPLOYMENT.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `.gitignore`, `deploy/README.md`,
+      `deploy/docker-compose.ee.yml`, `deploy/env.ee.example`, `docs/CONTAINER_DEPLOYMENT.md`,
+      `docs/FIXTURE_DESIGN.md`, `scripts/README.md`, `scripts/commit-session.ps1`.
+  Callees: scripts it names: none.
+
   run-docker-verification.ps1
 
   Verify the SHIPPED CONTAINER, not the developer's host.

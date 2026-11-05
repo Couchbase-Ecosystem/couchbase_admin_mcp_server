@@ -1,4 +1,12 @@
 ﻿<#
+  Component: adds the Eventing and Backup services to the existing local `cb-mcptest` cluster, so
+      the tools that depend on them can be verified instead of skipped.
+  Spec: no section of the spec; see scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `scripts/README.md`, `scripts/commit-session.ps1`,
+      `scripts/find-couchbase-clusters.ps1`, `scripts/probe_backup_paths.ps1`.
+  Callees: scripts it names: `scripts/find-couchbase-clusters.ps1`.
+
 .SYNOPSIS
   Add the Eventing and Backup services to the existing local cb-mcptest cluster,
   so the tools that depend on them can be verified instead of skipped.

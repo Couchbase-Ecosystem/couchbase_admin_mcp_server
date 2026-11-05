@@ -1,4 +1,12 @@
 ﻿<#
+  Component: settles the `admin_backup_*` 404s by measurement: which Backup service paths the
+      cluster answers on.
+  Spec: no section of the spec; see scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `scripts/README.md`, `scripts/add-local-services.ps1`,
+      `scripts/commit-session.ps1`, `scripts/find-couchbase-clusters.ps1`.
+  Callees: scripts it names: `scripts/add-local-services.ps1`.
+
   probe_backup_paths.ps1
 
   Settle the admin_backup_* 404s by MEASUREMENT, not by reading the docs.

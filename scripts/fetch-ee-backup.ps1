@@ -1,4 +1,11 @@
 ﻿<#
+  Component: copies an Enterprise Edition backup archive out of its container onto a drive. It is
+      a script and not a tool on purpose.
+  Spec: docs/spec.md S1 (purpose and surface); scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `scripts/README.md`, `scripts/start-ee-cluster.ps1`.
+  Callees: scripts it names: none.
+
 .SYNOPSIS
     Copy an Enterprise Edition backup archive out of its container onto a drive.
 

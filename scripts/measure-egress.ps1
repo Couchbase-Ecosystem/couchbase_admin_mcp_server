@@ -1,4 +1,10 @@
 <#
+  Component: probes what the network does to Capella, recording the VPN state on every row.
+  Spec: docs/spec.md S8 (Capella operations); CAPELLA-CONNECTIVITY.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `CAPELLA-CONNECTIVITY.md`, `scripts/README.md`.
+  Callees: scripts it names: none.
+
   measure-egress.ps1
 
   Probe what the network actually does to Capella, with the VPN state recorded on

@@ -1,4 +1,11 @@
-﻿# Which alternate-address port keys does THIS node accept?
+﻿# Component: asks which alternate-address port keys a node accepts, one key at a time.
+# Spec: docs/questions.md Q-006 (the lab password); scripts/README.md.
+# Main items: the whole script.
+# Callers: run by hand. Files that name it: `docs/questions.md`, `scripts/README.md`,
+#     `scripts/start-ee-cluster.ps1`.
+# Callees: scripts it names: none.
+#
+# Which alternate-address port keys does THIS node accept?
 #
 # The full map was refused and a narrowed one silently stored no ports at all.
 # Rather than guess a third time, ask: send hostname plus ONE port key, read the

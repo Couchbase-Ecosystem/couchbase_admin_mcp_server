@@ -1,4 +1,15 @@
 ﻿<#
+  Component: commits one session's work as a sequence of reviewable commits instead of one blob.
+  Spec: no section of the spec; see scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `.gitattributes`, `scripts/README.md`,
+      `scripts/add-local-services.ps1`.
+  Callees: scripts it names: `scripts/add-local-services.ps1`, `scripts/backup_cycle_test.py`,
+      `scripts/capella_backup_readiness.py`, `scripts/find-couchbase-clusters.ps1`,
+      `scripts/load_test_data.py`, `scripts/mutation_round_5.py`,
+      `scripts/probe_backup_paths.ps1`, `scripts/probe_backup_repository.ps1`,
+      `scripts/run-docker-verification.ps1`, `scripts/verify_mcp_surface.py`.
+
   commit-session.ps1
 
   Commit this session's work as a SEQUENCE of reviewable commits rather than one

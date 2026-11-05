@@ -1,4 +1,12 @@
 <#
+  Component: finds which REST path a service answers on, for handlers whose current path returns
+      404 against a cluster that runs the service.
+  Spec: docs/questions.md Q-006 (the lab password); scripts/README.md.
+  Main items: the whole script; the comment block below explains it.
+  Callers: run by hand. Files that name it: `docs/questions.md`, `scripts/README.md`,
+      `tests/test_service_proxy_paths.py`.
+  Callees: scripts it names: `scripts/verify_mcp_surface.py`.
+
 .SYNOPSIS
   Find which REST path a service actually answers on, for the handlers whose
   current path 404s against a cluster that IS running the service.

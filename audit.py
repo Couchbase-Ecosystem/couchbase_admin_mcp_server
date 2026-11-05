@@ -3,10 +3,9 @@ audit.py — the accountability record for an autonomous administration chain.
 
 Component: builds and writes the audit record for every decision, allowed or refused.
 Spec: docs/spec.md S4 (audit record), S7 (the error marker `classify_result` shares with the
-    server); docs/questions.md Q-003 (the `build_record` docstring lists nine of the 14
-    decisions).
-Main items: `build_record`, `emit`, `emit_tool_call`, `emit_auth_failure`, `classify_result`,
-    `sanitize_correlation`, `audit_sink_error`.
+    server); docs/questions.md Q-003 (decided 2026-11-05: the vocabulary is `DECISIONS`).
+Main items: `DECISIONS` (the 14 decision names), `build_record`, `emit`, `emit_tool_call`,
+    `emit_auth_failure`, `classify_result`, `sanitize_correlation`, `audit_sink_error`.
 Callers: `gui/gui_server.py`, `server.py`; 11 test file(s)
 Callees: `handlers.shared`, `logging_config`
 
@@ -66,6 +65,30 @@ from typing import Any
 from logging_config import get_logger
 
 _log = get_logger("audit")
+
+#: The audit decision vocabulary, defined once (docs/questions.md Q-003, decided 2026-11-05).
+#:
+#: Every record carries one of these names in its ``decision`` field, so a SIEM rule can match
+#: on them. The docstring of `build_record` and docs/spec.md S4 list the same names, and
+#: tests/test_audit_vocabulary.py fails when the code, this table, the docstring or the spec
+#: disagree. To add a decision: add it here with its meaning, then to the docstring and the
+#: spec, and the test will say if one is missing.
+DECISIONS: dict[str, str] = {
+    "allowed": "the call ran and its result was not a refusal",
+    "dry_run": "the call was authorized and deliberately not performed; a preview was returned",
+    "error": "the handler raised an exception",
+    "denied_authentication": "a credential was rejected (an `auth_failure` event, no tool call)",
+    "denied_confirmation": "the tool needs `confirm: true` and the call did not carry it",
+    "denied_deployment": "the tool is not loaded in this deployment mode (Capella or self-managed)",
+    "denied_disabled": "the tool is in the disabled list (reported by the console)",
+    "denied_egress": "a handler refused a destination the cluster would have contacted",
+    "denied_guardrail": "a Capella blast-radius guardrail refused the write",
+    "denied_handler": "a handler refused for any other reason (validation, upstream refusal)",
+    "denied_hard_ceiling": "the tool is in CB_ADMIN_ALWAYS_CONFIRM and no human is present",
+    "denied_read_only": "read-only mode or the disabled list kept the tool from loading",
+    "denied_scope": "the token lacks the scope the tool requires",
+    "denied_unknown_tool": "no handler is registered under that tool name",
+}
 
 # The audit trail must not be subject to the operator's verbosity knob.
 #
@@ -297,9 +320,11 @@ def build_record(
 ) -> dict:
     """Assemble one audit record.
 
-    ``decision`` is one of: allowed, denied_scope, denied_read_only,
-    denied_confirmation, denied_hard_ceiling, denied_guardrail, denied_egress,
-    dry_run, error. The vocabulary is closed so a SIEM rule can match on it.
+    ``decision`` is one of the names in `DECISIONS`: allowed, dry_run, error,
+    denied_authentication, denied_confirmation, denied_deployment, denied_disabled,
+    denied_egress, denied_guardrail, denied_handler, denied_hard_ceiling,
+    denied_read_only, denied_scope, denied_unknown_tool. The vocabulary is closed so a SIEM
+    rule can match on it, and `DECISIONS` gives the meaning of each.
 
     ``dry_run`` is not a refusal and not an execution: the call was authorized and then
     deliberately not performed. It has its own value rather than being folded into

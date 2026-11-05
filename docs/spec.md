@@ -72,9 +72,8 @@ One structured JSON line per decision, written through the logging module with t
 `AUDIT ` and, when configured, to a separate audit file. A record never raises: if a record
 cannot be built in full, a reduced record is written (`audit.emit`).
 
-The decision vocabulary found in the code on 2026-11-02 (search: `grep -rhno
-"denied_[a-z_]*" --include=*.py audit.py authz.py server.py handlers auth gui`, plus
-`allowed` and `dry_run`):
+The decision vocabulary is `audit.DECISIONS` (decided 2026-11-05, Q-003). It has fourteen
+names, each with its meaning in that table:
 
 `allowed`, `dry_run`, `error`, `denied_authentication`, `denied_confirmation`,
 `denied_deployment`, `denied_disabled`, `denied_egress`, `denied_guardrail`,
@@ -87,8 +86,9 @@ Where the less obvious ones come from: `denied_authentication` is written by
 result by `audit.classify_result`: a guardrail marker, an egress-denial message, or any
 other refusal.
 
-The docstring of `audit.build_record` lists only nine of these and calls the vocabulary
-closed. See [Q-003](questions.md).
+The docstring of `audit.build_record`, this section and `audit.DECISIONS` list the same
+names, and `tests/test_audit_vocabulary.py` fails when they disagree with each other or
+with the denials the code emits.
 
 ## S5. Profiles
 

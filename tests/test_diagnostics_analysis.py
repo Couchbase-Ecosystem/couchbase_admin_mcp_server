@@ -1,5 +1,12 @@
 """The diagnostic tools' analysis, as distinct from the statements they send.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 12 test function(s). Helpers and fixtures: `payload`, `is_error`, `_Cluster`,
+    `_options`.
+Callers: none; collected by pytest
+Callees: `handlers.diagnostics`, `handlers.shared`
+
 These tools read the query service's own completed-requests log and turn it into
 findings. The statements are already guarded elsewhere; what is not covered is
 what happens to the ROWS -- the grouping, the thresholds, and the two places a

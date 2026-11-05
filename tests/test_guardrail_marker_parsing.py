@@ -1,5 +1,11 @@
 """The environment marker: the only thing that says an environment is ours.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 22 test function(s). Helpers and fixtures: `_marker`, `_described`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.guardrails`
+
 Every reaper decision reads it, and ONE bad marker used to break the whole
 listing. `capella_env_list`, `capella_env_status` and both reap modes all reach
 this through a list, so a single poisoned description meant no genuinely expired

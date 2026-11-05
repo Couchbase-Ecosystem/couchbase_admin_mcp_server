@@ -2,6 +2,13 @@
 The audit sink's last-resort paths, the profile validator's remaining refusals, and the
 diagnostic probes' row handling.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S4, S5.
+Main items: 24 test function(s). Helpers and fixtures: `_audit_records_reach_caplog`,
+    `_reset_audit`.
+Callers: none; collected by pytest
+Callees: `audit`, `handlers.encryption`, `handlers.shared`, `profile_config`
+
 WHY THE AUDIT FALLBACKS MATTER
 ==============================
 `emit_tool_call` catches `BaseException` twice, nested. That looks excessive until you notice

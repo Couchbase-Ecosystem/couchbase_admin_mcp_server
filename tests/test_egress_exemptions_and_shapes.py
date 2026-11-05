@@ -1,5 +1,11 @@
 """The egress guard's exempt path and its destination heuristic.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S10.
+Main items: 12 test function(s).
+Callers: none; collected by pytest
+Callees: `handlers.egress`
+
 An operator may reasonably relax the ALLOWLIST for a particular field. They may
 not relax the metadata, loopback and link-local denials, and the module says so
 twice in its own hints -- so the exempt path honours the second without honouring

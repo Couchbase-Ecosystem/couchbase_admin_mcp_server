@@ -1,6 +1,13 @@
 """
 The console's OAuth routes, static serving, and config endpoint.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 38 test function(s). Helpers and fixtures: `gui`, `client`, `_start_login`,
+    `_login`.
+Callers: none; collected by pytest
+Callees: `audit`, `profile_config`
+
 WHY THESE, SPECIFICALLY
 ======================
 `/auth/callback` validates the `state` parameter. That is the CSRF control on login: without

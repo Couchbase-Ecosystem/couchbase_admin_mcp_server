@@ -2,6 +2,13 @@
 Live end-to-end tests of the HTTP transport: a real uvicorn server, real HTTP
 requests, a real MCP handshake.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 7 test function(s). Helpers and fixtures: `_free_port`, `_fake_validate`, `_Client`,
+    `live_server`.
+Callers: none; collected by pytest
+Callees: `auth.oidc`, `auth.request_auth`, `handlers.shared`, `server`
+
 These exist because every unit test of the old design passed while the transport
 was completely broken. The authorization bug was a task boundary, and the only way
 to be sure it is fixed is to drive the actual server. Each test below would have

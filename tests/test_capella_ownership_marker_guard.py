@@ -1,5 +1,11 @@
 """The ownership marker's survival across an update, and the fail-closed fetch.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 9 test function(s). Helpers and fixtures: `_marker_text`, `cluster`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.guardrails`
+
 The marker is what makes a cluster VISIBLE to `capella_env_list`, `capella_env_status`
 and the reaper. A cluster that loses it does not stop existing -- it stops being
 collectable, and it goes on billing indefinitely with nothing pointing at it. The

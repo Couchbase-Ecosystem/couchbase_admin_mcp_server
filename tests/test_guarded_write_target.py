@@ -1,5 +1,12 @@
 """Every operation that writes to a cluster it does not name in its path must say so.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 8.
+Main items: 3 test function(s). Helpers and fixtures: `_body_fields`, `_cluster_fields`,
+    `_mutating_ops_naming_a_cluster`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.spec`
+
 WHY THIS TEST EXISTS
 ====================
 Twice, an operation was guarded on the wrong cluster:

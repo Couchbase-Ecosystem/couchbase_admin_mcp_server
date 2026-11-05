@@ -1,6 +1,13 @@
 """
 The console must actually render, and must not reach the internet to do it.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 12 test function(s). Helpers and fixtures: `html`, `_node`, `_node_prefix`,
+    `_node_path_candidates`.
+Callers: none; collected by pytest
+Callees: none
+
 THE FINDING
 ===========
 `gui/static/index.html` was 567 lines of JSX — 67 `className=` attributes, `{/* ... */}`

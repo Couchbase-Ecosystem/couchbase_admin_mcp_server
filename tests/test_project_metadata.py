@@ -1,6 +1,12 @@
 """
 Publication metadata: the target org, and the URLs that encode it.
 
+Component: regression suite; see tests/README.md.
+Spec: PUBLISHING.md.
+Main items: 7 test function(s). Helpers and fixtures: `_normalise`, `_pyproject`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY PIN THIS
 ============
 The repository is published under `github.com/Couchbase-Ecosystem/`. That decision is

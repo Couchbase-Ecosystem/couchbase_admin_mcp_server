@@ -1,6 +1,13 @@
 """
 What actually ships must be able to start.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S2; docs/questions.md Q-005 (the changelog inside the wheel).
+Main items: 13 test function(s). Helpers and fixtures: `_stdlib_names`,
+    `_first_party_top_level_modules`, `_declared_mcp_constraint`.
+Callers: none; collected by pytest
+Callees: `profile_config`, `server`
+
 The Dockerfile and the wheel both listed the top-level modules to include BY HAND,
 and both lists were missing ``audit.py``, ``authz.py`` and ``profile_config.py`` —
 every module added during the security review. So `import server` inside the built

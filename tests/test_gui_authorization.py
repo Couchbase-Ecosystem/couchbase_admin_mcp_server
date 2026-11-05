@@ -2,6 +2,14 @@
 The GUI's POST /api/call is a SECOND dispatch path into the same handlers, and every
 control the MCP transport enforces has to hold here too.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3.
+Main items: 15 test function(s). Helpers and fixtures: `_load_gui`, `audit_file`, `gui`,
+    `_call`, `_audit_records`.
+Callers: none; collected by pytest
+Callees: `audit`, `auth.scope_gate`, `gui.gui_server`, `handlers.shared`, `profile_config`,
+    `server`
+
 It did not. Round-2 review found the console:
 
   * never called check_scope, so any authenticated user in the tenant had the full

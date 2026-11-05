@@ -1,6 +1,13 @@
 """
 `handlers/shared.py`: the HTTP client every self-managed tool goes through.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 8.
+Main items: 38 test function(s). Helpers and fixtures: `_Recorder`, `_NsServerHandler`,
+    `ns_server`, `cluster`, `_count_network_failures`.
+Callers: none; collected by pytest
+Callees: `handlers.shared`
+
 WHY THIS MATTERS MORE THAN ITS COVERAGE NUMBER SUGGESTED
 =======================================================
 `admin_request` carries a safety property that nothing tested: **a non-idempotent request is

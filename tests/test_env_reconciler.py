@@ -1,6 +1,12 @@
 """
 `capella_env_ensure`: the reconciler that stands an environment up phase by phase.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 22 test function(s). Helpers and fixtures: `_Capella`, `reconciler`, `_body`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.environment`, `handlers.capella.guardrails`
+
 WHY A RECONCILER, AND WHY THAT MATTERS FOR TESTS
 ===============================================
 Provisioning a Capella environment takes minutes, and the MCP call that starts it cannot block

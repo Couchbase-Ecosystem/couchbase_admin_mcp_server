@@ -1,6 +1,12 @@
 """
 The introspection tools — cb_mcp_status, cb_mcp_list_tools, cb_mcp_get_tool_info.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 32 test function(s). Helpers and fixtures: `_payload`, `_tool`, `fake_server`.
+Callers: none; collected by pytest
+Callees: `handlers.mcp_status`, `handlers.shared`, `mcp_compat`
+
 WHY THESE MATTER MORE THAN THEY LOOK
 ====================================
 Three reasons this module is worth real tests rather than a smoke check:

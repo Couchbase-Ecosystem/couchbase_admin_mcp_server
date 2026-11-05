@@ -1,6 +1,12 @@
 """The console and the MCP transport must DECIDE the same way, not merely
 advertise the same tools.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3.
+Main items: 7 test function(s). Helpers and fixtures: `_StubHandler`, `both`, `_stub_both`.
+Callers: none; collected by pytest
+Callees: `audit`, `auth.scope_gate`, `mcp_compat`, `server`
+
 tests/test_gui_authorization.py already asserts that both surfaces expose an
 IDENTICAL tool set, in both directions. That test exists because
 handlers/backup_catalog.py was absent from the console for its entire life and

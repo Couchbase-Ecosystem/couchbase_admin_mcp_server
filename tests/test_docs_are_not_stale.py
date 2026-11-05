@@ -1,5 +1,12 @@
 """Documentation may not state a registry count without a date beside it.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/plans/documentation-standard-gap.md D7 (the documentation gate).
+Main items: 2 test function(s). Helpers and fixtures: `_declares_itself_historical`,
+    `_paragraphs`, `_docs`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 On 2026-09-14 a sweep of this repository's own documentation found seven claims

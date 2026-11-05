@@ -1,6 +1,13 @@
 """
 The HTTP authorization fix, tested across the task boundary that broke it.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 3, S6.
+Main items: 22 test function(s). Helpers and fixtures: `_clean`, `_FakeRequest`,
+    `_install_request`.
+Callers: none; collected by pytest
+Callees: `auth.request_auth`, `auth.scope_gate`, `server`
+
 WHY THE OLD TESTS COULD NOT CATCH THIS
 ======================================
 tests/test_automation_model.py sets the claims contextvar and then awaits

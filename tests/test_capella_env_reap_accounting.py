@@ -1,5 +1,12 @@
 """The reaper's accounting, where every defect has been a number that lied.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 12 test function(s). Helpers and fixtures: `_entry`, `sweep`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`
+
 This sweep deletes billable infrastructure and reports what it did. Three
 failures have come out of it, and all three are the same shape -- a count that
 read as more certain than the work performed:

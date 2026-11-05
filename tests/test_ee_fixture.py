@@ -1,5 +1,12 @@
 """Guards for the Enterprise Edition fixture family (`admin_fixture_*`).
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9.
+Main items: 36 test function(s). Helpers and fixtures: `_payload`, `_write_fixture`, `_text`,
+    `_Stub`, `stub`.
+Callers: none; collected by pytest
+Callees: `handlers.fixture`, `handlers.fixture_core`
+
 WHAT THESE COVER, AND WHAT THEY CANNOT
 ======================================
 Every test here is decidable without a cluster: refusals, ordering, the shapes

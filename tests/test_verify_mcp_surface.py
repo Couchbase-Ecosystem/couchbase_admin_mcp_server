@@ -1,6 +1,13 @@
 """
 `scripts/verify_mcp_surface.py`: the MCP-client-level live check.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1, S3.
+Main items: 133 test function(s). Helpers and fixtures: `_tool`, `_Response`, `_FakeSession`,
+    `_run`, `_status`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 The script it covers is the one that decides whether a live run "passed", and a

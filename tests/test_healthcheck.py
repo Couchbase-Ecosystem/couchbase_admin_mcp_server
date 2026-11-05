@@ -1,5 +1,12 @@
 """The container probe must call a refusal healthy and a wedge unhealthy.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S2, S6.
+Main items: 6 test function(s). Helpers and fixtures: `_http_transport`, `_raise`,
+    `_http_error`.
+Callers: none; collected by pytest
+Callees: `healthcheck`
+
 MEASURED 2026-09-15, the first time the image was ever run over HTTP: the
 Dockerfile's inline probe hit /mcp with no Authorization header, the enterprise
 profile requires CB_ADMIN_HTTP_REQUIRE_AUTH=true, and the container therefore sat

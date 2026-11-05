@@ -1,6 +1,12 @@
 """
 Keep CONTRIBUTING.md honest.
 
+Component: regression suite; see tests/README.md.
+Spec: CONTRIBUTING.md; docs/plans/documentation-standard-gap.md D7 (the documentation gate).
+Main items: 10 test function(s). Helpers and fixtures: `guide`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.spec`, `profile_config`
+
 A contributing guide is the one document a newcomer trusts completely, and it is also the
 document nobody re-reads once it is written. So the checkable claims are checked: the files
 it points at, the helpers it tells you to call, the commands it tells you to run, and the

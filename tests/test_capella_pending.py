@@ -1,6 +1,12 @@
 """
 `handlers/capella/spec_pending.py`: the parked v4 operations.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 6 test function(s).
+Callers: none; collected by pytest
+Callees: `handlers.capella.spec`, `handlers.capella.spec_pending`
+
 WHY THIS FILE EXISTS
 ====================
 Nothing imported the pending module and nothing tested it. That is a bad combination

@@ -1,5 +1,12 @@
 """The tool listing is scoped to the principal, and agrees with the gate.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 3.
+Main items: 5 test function(s). Helpers and fixtures: `_run`, `_server_under_http_auth`,
+    `_catalog_of_one_each`, `scope_gate_module`, `_listed_for`.
+Callers: none; collected by pytest
+Callees: `auth.scope_gate`, `server`
+
 WHY THIS FILE EXISTS
 ====================
 Authentication on `list_tools` was added after it was found to have none: any

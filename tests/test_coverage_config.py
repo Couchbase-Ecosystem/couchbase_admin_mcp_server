@@ -1,6 +1,12 @@
 """
 The coverage configuration itself, because exclusions are how a coverage number gets faked.
 
+Component: regression suite; see tests/README.md.
+Spec: pyproject.toml coverage settings; docs/BUILD_GUIDE.md.
+Main items: 10 test function(s). Helpers and fixtures: `parsed`, `_lines`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 A coverage percentage is only meaningful alongside what it excludes. Widening `omit` or adding

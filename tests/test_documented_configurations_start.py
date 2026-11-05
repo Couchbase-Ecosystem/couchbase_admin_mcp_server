@@ -1,6 +1,13 @@
 """
 The configurations the README hands people must actually start.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S2, S5.
+Main items: 12 test function(s). Helpers and fixtures: `_enforce`, `_compose_environment`,
+    `_compose_service_environment`, `_enterprise_inputs`, `_with_local_audit`.
+Callers: none; collected by pytest
+Callees: `tests._compose`
+
 WHY THIS EXISTS
 ===============
 The Quick start told you to set "at minimum CB_CONNECTION_STRING / CB_USERNAME /

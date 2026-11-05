@@ -1,6 +1,14 @@
 """
 Log-file preparation, the Capella HTTP client's error mapping, and the small guards left over.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S4, S8.
+Main items: 60 test function(s). Helpers and fixtures: `_restore_logging`, `_CapellaRecorder`,
+    `_CapellaHandler`, `capella_api`, `capella`.
+Callers: none; collected by pytest
+Callees: `auth.request_auth`, `auth.scope_gate`, `deployment`, `handlers.capella.client`,
+    `logging_config`, `tests._platform`
+
 WHY THE LOG FILE HAS SECURITY PROPERTIES
 ========================================
 The audit and diagnostic logs record who did what to a cluster, and the diagnostic log

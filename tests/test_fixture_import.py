@@ -1,5 +1,13 @@
 """Guards for capella_fixture_import and the integrity check it shares with verify.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8, S9.
+Main items: 46 test function(s). Helpers and fixtures: `_payload`, `_write_fixture`, `_text`,
+    `_payload_file`, `_cluster_report`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.environment`, `handlers.capella.fixture`,
+    `handlers.capella.guardrails`, `handlers.fixture_core`
+
 The importer writes to somebody's cluster, so the interesting cases are the ones
 where it must REFUSE before doing so. Each test here pins a refusal that costs
 nothing to get wrong in code and a great deal to get wrong in production.

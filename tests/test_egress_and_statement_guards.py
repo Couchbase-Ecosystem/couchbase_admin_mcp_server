@@ -2,6 +2,14 @@
 Tests for the cluster-egress allowlist, mass-assignment allow-lists, and the
 statement guards on the self-managed surface.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S10.
+Main items: 61 test function(s). Helpers and fixtures: `_clean_egress_env`.
+Callers: none; collected by pytest
+Callees: `audit`, `handlers.cluster`, `handlers.diagnostics`, `handlers.egress`,
+    `handlers.eight_x`, `handlers.encryption`, `handlers.eventing`, `handlers.security`,
+    `handlers.shared`, `handlers.stats`, `handlers.xdcr`
+
 Three classes of finding are covered:
 
   SSRF        Five tools take a hostname from the caller and make COUCHBASE open

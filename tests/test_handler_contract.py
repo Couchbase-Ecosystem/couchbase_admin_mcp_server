@@ -1,6 +1,13 @@
 """
 The contract every handler group must satisfy, checked against all of them.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1, S3 step 8.
+Main items: 19 test function(s). Helpers and fixtures: `_FakeCluster`, `sdk_available`,
+    `no_cluster`, `_sample`, `_minimal_args`.
+Callers: `tests/test_tool_group_examples.py`; collected by pytest
+Callees: `handlers.shared`, `mcp_compat`
+
 WHY A SHARED HARNESS RATHER THAN FOURTEEN FILES
 ==============================================
 Coverage measurement found the Couchbase Server handler groups largely untested — several

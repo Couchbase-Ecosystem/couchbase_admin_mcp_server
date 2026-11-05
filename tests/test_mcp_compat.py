@@ -1,6 +1,13 @@
 """
 Reading Tool metadata under either mcp 1.x or 2.x field naming.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3.
+Main items: 12 test function(s). Helpers and fixtures: `_Annotations2x`, `_Tool2x`,
+    `_Annotations1x`, `_Tool1x`, `_direct_reads`.
+Callers: none; collected by pytest
+Callees: `mcp_compat`
+
 WHY THIS MATTERS
 ================
 mcp 2.0 renamed the fields on `Tool` and `ToolAnnotations`:

@@ -1,5 +1,11 @@
 """The round-trip comparison must catch the bug that nothing else caught.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9; docs/FIXTURE_DESIGN.md.
+Main items: 9 test function(s). Helpers and fixtures: `_fixture`, `_airline`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 `scripts/fixture_round_trip.py` is the only check in this repository that

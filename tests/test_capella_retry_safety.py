@@ -1,6 +1,13 @@
 """
 Round-two findings: retry safety and misleading success states.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 15 test function(s). Helpers and fixtures: `_http_error`, `MiniCapella`, `mini`,
+    `_ensure`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`, `handlers.capella.environment`
+
   F9   POST was retried on 5xx and on network errors. A create that SUCCEEDED and
        then lost its response to a 502 or a dropped connection was retried,
        producing a duplicate cluster or credential — billed, and invisible to the

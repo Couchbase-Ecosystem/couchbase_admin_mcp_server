@@ -1,5 +1,11 @@
 """A cluster-level query must not require a bucket to exist.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 6 test function(s). Helpers and fixtures: `_Cluster`, `_Options`, `sdk`.
+Callers: none; collected by pytest
+Callees: `handlers.shared`
+
 MEASURED 2026-09-23 against the EE container. With `CB_BUCKET` unset,
 `admin_index_list` -- a query against `system:indexes`, which is answered by a
 query node and never touches a bucket -- returned:

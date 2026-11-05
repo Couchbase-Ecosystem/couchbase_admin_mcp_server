@@ -1,6 +1,13 @@
 """What the self-managed exporter records about indexes and eventing, and what it
 refuses to render.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9.
+Main items: 12 test function(s). Helpers and fixtures: `_with_query`, `_row`, `_definitions`,
+    `eventing`.
+Callers: none; collected by pytest
+Callees: `handlers.fixture`
+
 `system:indexes` is not a GSI-only view. It carries Full-Text Search indexes too,
 with `using` of `fts` and NO index_key, and the exporter used to assemble one
 into

@@ -2,6 +2,13 @@
 Tests for the Capella control plane: schema integrity, deployment gating,
 guardrails, pagination and path construction.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S2, S8.
+Main items: 84 test function(s). Helpers and fixtures: `_clear_capella_env`.
+Callers: none; collected by pytest
+Callees: `deployment`, `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.capella.spec_pending`
+
 These run offline. Nothing here calls Capella — the client is stubbed — because
 the properties worth testing are the ones that would otherwise fail against a
 real organization: a malformed schema, a path placeholder with no matching

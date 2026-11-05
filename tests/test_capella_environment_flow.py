@@ -2,6 +2,13 @@
 Functional tests for the environment reconciler, against an in-memory fake
 Capella.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 24 test function(s). Helpers and fixtures: `FakeCapella`, `fake`, `_ensure`,
+    `_teardown`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.environment`, `handlers.capella.guardrails`
+
 What these are really testing is the two properties that cannot be checked by
 inspection:
 

@@ -1,5 +1,12 @@
 """Parking and resuming an environment, and the reaper's refusal to overclaim.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 12 test function(s). Helpers and fixtures: `_error`, `sandbox`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`
+
 Every assertion here is about a DOMAIN CODE rather than a message, because that
 distinction has already cost real money in this project.
 

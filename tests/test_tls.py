@@ -1,6 +1,13 @@
 """
 Transport encryption for the HTTP transport.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 17 test function(s). Helpers and fixtures: `_clean_tls_env`, `_free_port`, `certs`,
+    `_boot`.
+Callers: none; collected by pytest
+Callees: `profile_config`, `server`, `tls_config`
+
 WHY THIS MATTERS MORE THAN IT LOOKS
 ===================================
 uvicorn.Config was constructed with no ssl_certfile and no ssl_keyfile, so the

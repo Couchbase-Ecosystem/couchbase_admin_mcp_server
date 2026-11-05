@@ -1,5 +1,13 @@
 """Tests that pass while asserting nothing, and how this suite stops shipping them.
 
+Component: regression suite; see tests/README.md.
+Spec: AGENTS.md (a test must be able to fail); docs/plans/documentation-standard-gap.md D7 (the
+    documentation gate).
+Main items: 5 test function(s). Helpers and fixtures: `_test_modules`, `_guarded_names`,
+    `_bound_to_a_literal`, `_tool_names_under`.
+Callers: none; collected by pytest
+Callees: `deployment`, `handlers.capella.spec_pending`
+
 THE FAILURE MODE
 ================
 Three separate times in this repository a test reported success while checking

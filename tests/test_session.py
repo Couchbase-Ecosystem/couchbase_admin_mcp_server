@@ -1,6 +1,12 @@
 """
 Session cookies for the console: signing, expiry, and the two flags that matter.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 35 test function(s). Helpers and fixtures: `clean_store`, `_run_gui_posture`.
+Callers: none; collected by pytest
+Callees: `audit`, `auth.session`, `gui.gui_server`, `profile_config`, `tls_config`
+
 This module had ZERO test coverage. Writing these tests found three defects, each of which
 has its own test below:
 

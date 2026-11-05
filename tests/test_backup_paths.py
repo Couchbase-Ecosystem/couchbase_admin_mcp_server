@@ -1,5 +1,11 @@
 """Every Backup service path carries its repository STATE segment.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 15 test function(s). Helpers and fixtures: `_path_expressions`.
+Callers: none; collected by pytest
+Callees: `handlers.backup`
+
 The five `admin_backup_*` tools all returned 404 against a cluster running the
 Backup service, and the cause was one missing path segment shared by all of
 them: `/cluster/self/repository/<state>/...` where state is `active`,

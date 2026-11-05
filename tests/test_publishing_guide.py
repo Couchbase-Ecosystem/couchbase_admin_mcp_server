@@ -1,6 +1,12 @@
 """
 PUBLISHING.md must describe the repository that actually exists.
 
+Component: regression suite; see tests/README.md.
+Spec: PUBLISHING.md.
+Main items: 11 test function(s). Helpers and fixtures: `doc`, `workflow`, `ci_jobs`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS IS TESTED AND NOT JUST WRITTEN
 =======================================
 A publication checklist is read exactly once, by someone who cannot tell a stale instruction

@@ -1,5 +1,12 @@
 """The self-managed exporter's cluster walk, and the listing beside it.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9.
+Main items: 14 test function(s). Helpers and fixtures: `payload`, `is_error`, `admin`,
+    `_fixture_dir`, `_list`.
+Callers: none; collected by pytest
+Callees: `handlers.fixture`, `handlers.shared`
+
 The walk is the half that decides what a fixture CLAIMS to describe, and its
 failure mode is quiet: a bucket whose scopes cannot be read, dropped rather than
 recorded, produces a fixture that says it describes a cluster and does not. So

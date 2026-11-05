@@ -1,5 +1,11 @@
 """The console's own API surface, below /api/call's authorization.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3, S6.
+Main items: 9 test function(s). Helpers and fixtures: `gui`, `records`, `call`.
+Callers: none; collected by pytest
+Callees: `audit`
+
 Three decisions live here and each has a recorded reason:
 
   * AN UNKNOWN TOOL IS AUDITED. server.py emits denied_unknown_tool for the same

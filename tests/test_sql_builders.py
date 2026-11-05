@@ -1,6 +1,13 @@
 """
 The SQL++ that `handlers/indexes.py` and `handlers/diagnostics.py` construct by hand.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 32 test function(s). Helpers and fixtures: `_Capture`, `_QueryOptions`, `sql`,
+    `_body`.
+Callers: none; collected by pytest
+Callees: `handlers.diagnostics`, `handlers.indexes`, `handlers.shared`
+
 WHY THIS IS WORTH TESTING RATHER THAN JUST COVERING
 ===================================================
 These two modules build statements by interpolating caller-supplied names into f-strings.

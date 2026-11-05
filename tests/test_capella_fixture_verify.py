@@ -1,5 +1,12 @@
 """capella_fixture_verify, and the cluster comparison behind it.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8, S9.
+Main items: 30 test function(s). Helpers and fixtures: `payload`, `is_error`, `_write`,
+    `verify`, `cluster`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.environment`, `handlers.capella.fixture`, `handlers.shared`
+
 The question this tool exists to answer is "is the cluster the thing the fixture
 says it is", and the failure it exists to prevent is a FALSE GREEN -- a verdict of
 verified:true over a cluster nobody actually checked. So the cases below are

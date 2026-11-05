@@ -1,6 +1,13 @@
 """
 `validate_token` executed for real, against a real JWKS.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 3, S6.
+Main items: 57 test function(s). Helpers and fixtures: `keypair`, `_jwks_document`,
+    `_IdpHandler`, `idp`, `oidc`.
+Callers: none; collected by pytest
+Callees: `auth.oidc`
+
 WHY THIS FILE EXISTS
 ====================
 `auth.oidc.validate_token` is the function that makes every authorization decision in this

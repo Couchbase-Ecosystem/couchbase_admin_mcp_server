@@ -1,6 +1,12 @@
 """
 The ns_server proxy prefix on service REST paths.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 4 test function(s). Helpers and fixtures: `_paths`.
+Callers: none; collected by pytest
+Callees: `handlers.backup`, `handlers.eventing`, `handlers.search_admin`
+
 WHY THIS FILE EXISTS
 ====================
 `admin_request()` talks to the MANAGEMENT port. A service's own REST API is not

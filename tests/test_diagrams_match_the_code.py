@@ -1,5 +1,12 @@
 """The architecture diagrams state counts. Those counts must be the real ones.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/plans/documentation-standard-gap.md D7 (the documentation gate).
+Main items: 12 test function(s). Helpers and fixtures: `_measured`, `_text`, `_number_before`,
+    `_per_mode_totals`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 `docs/diagrams-src/*.mmd` and the inline Mermaid in `docs/ARCHITECTURE.md` are

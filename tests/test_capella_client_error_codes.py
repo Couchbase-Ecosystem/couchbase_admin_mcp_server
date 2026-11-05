@@ -1,5 +1,11 @@
 """Reading Capella's domain error code, which is not the HTTP status.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 8 test function(s).
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`
+
 A park/resume decision turns on this. Capella answers 422 for several different
 situations, and the domain `code` in the body is what distinguishes "the cluster
 is already in that state" -- benign, proceed -- from a real refusal. Getting it

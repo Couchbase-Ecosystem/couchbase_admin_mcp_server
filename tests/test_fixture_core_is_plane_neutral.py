@@ -1,5 +1,11 @@
 """handlers/fixture_core.py must stay usable by BOTH planes.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9.
+Main items: 5 test function(s).
+Callers: none; collected by pytest
+Callees: `handlers.fixture_core`
+
 WHY THIS FILE EXISTS
 ====================
 The fixture family exists on two control planes and the two halves are genuinely

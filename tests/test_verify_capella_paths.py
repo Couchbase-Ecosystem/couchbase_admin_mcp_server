@@ -1,6 +1,13 @@
 """
 Tests for the Capella path-verification script, against a FAKE Capella.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8.
+Main items: 167 test function(s). Helpers and fixtures: `_load`, `_Handler`, `fake_capella`,
+    `script`, `_Args`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.spec`, `handlers.capella.spec_pending`
+
 A verification tool that reports the wrong answer is worse than none: it would either
 send someone chasing a path that is fine, or certify one that is broken. So the script's
 logic is exercised against a local HTTP server that behaves like v4 — including the

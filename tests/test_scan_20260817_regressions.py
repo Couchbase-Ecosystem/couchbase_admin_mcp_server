@@ -1,5 +1,13 @@
 """Regression tests for the ten findings fixed from SECURITY_AND_BUG_SCAN_2026-08-17.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3.
+Main items: 26 test function(s). Helpers and fixtures: `egress_env`.
+Callers: none; collected by pytest
+Callees: `authz`, `dryrun`, `handlers.buckets`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`, `handlers.cluster`, `handlers.egress`, `handlers.shared`,
+    `profile_config`, `server`
+
 One test per finding, named by its id, asserting the BEHAVIOUR that was wrong rather
 than the shape of the fix.
 

@@ -1,5 +1,12 @@
 """The dry-run policy: authorized, audited, and not performed.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 7.
+Main items: 10 test function(s). Helpers and fixtures: `_writes_loaded`, `call`, `audited`,
+    `executed`, `_no_preview_mode`.
+Callers: none; collected by pytest
+Callees: `dryrun`, `handlers.shared`, `profile_config`, `server`
+
 These tests exist because the architecture document asserted that every Admin MCP tool
 takes a dry-run flag while exactly one did. The claim is now true, and these are what keep
 it true -- in particular the two properties that are easy to break by accident:

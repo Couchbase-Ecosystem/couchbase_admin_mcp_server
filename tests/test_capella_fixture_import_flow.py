@@ -1,5 +1,13 @@
 """Driving capella_fixture_import end to end against a cluster held in memory.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8, S9.
+Main items: 28 test function(s). Helpers and fixtures: `payload`, `is_error`, `_write`,
+    `target`, `run`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.environment`, `handlers.capella.fixture`,
+    `handlers.capella.guardrails`, `handlers.shared`
+
 This tool refused for the whole life of the module, and the refusal was correct
 while the Data API layer did not exist: "a fixture that reports success with no
 documents in it is the worst outcome available here". Now that it writes, the

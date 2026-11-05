@@ -1,6 +1,12 @@
 """
 Shared pytest fixtures.
 
+Component: test support, not tests.
+Spec: tests/README.md (shared fixtures).
+Main items: `_reset_capella_guardrail_state`, `_restore_environ`, `repo_files`, `_repo_files`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.guardrails`
+
 The Capella guardrails keep one piece of deliberate PROCESS-GLOBAL state: a short
 memo of a recent environment-ceiling refusal, so a looping agent cannot re-trigger
 a multi-project paginated listing on every rejected retry. That is correct for a

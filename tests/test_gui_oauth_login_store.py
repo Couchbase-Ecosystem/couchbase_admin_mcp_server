@@ -1,5 +1,11 @@
 """The console's OIDC login store and callback edge cases.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 18 test function(s). Helpers and fixtures: `_load`, `gui`, `oauth`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS IS A SEPARATE FILE. These tests were written on 2026-09-22 to raise
 coverage, and were written INTO tests/test_gui_oauth_routes.py as though that
 file were new. It was not: it held 38 tests from 2026-08-19, including the

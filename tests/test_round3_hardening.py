@@ -1,6 +1,15 @@
 """
 Coverage for the controls the third review pass found untested.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3.
+Main items: 48 test function(s). Helpers and fixtures: `_FakeKey`, `_CountingClient`, `oidc`,
+    `_console_under_a_broken_posture`.
+Callers: none; collected by pytest
+Callees: `audit`, `auth.oidc`, `authz`, `handlers.backup`, `handlers.capella.environment`,
+    `handlers.cluster`, `handlers.egress`, `handlers.eventing`, `handlers.indexes`,
+    `handlers.shared`, `profile_config`, `server`, `tests._platform`
+
 Each of these existed as code with no test behind it, which is the state that let two
 earlier "completed" fixes turn out to be absent from the source entirely. Grouped by
 the finding they close.

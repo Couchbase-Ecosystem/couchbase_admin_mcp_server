@@ -1,5 +1,11 @@
 """Every claim shape a real identity provider emits must resolve to the same grants.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 3.
+Main items: 9 test function(s).
+Callers: none; collected by pytest
+Callees: `auth.scope_gate`
+
 WHY THIS FILE EXISTS
 ====================
 The unattended authorization model rests entirely on one question: does this

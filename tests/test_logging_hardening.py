@@ -1,6 +1,12 @@
 """
 Sink-level log hardening, tested by writing real files.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S4.
+Main items: 13 test function(s). Helpers and fixtures: `logdir`, `_read`, `_lines_for`.
+Callers: none; collected by pytest
+Callees: `logging_config`, `tests._platform`
+
 These exist because mutation testing showed the two most severe logging findings
 were caught by NO test at all. Both were verified by hand and then left unguarded,
 which is exactly how they would come back:

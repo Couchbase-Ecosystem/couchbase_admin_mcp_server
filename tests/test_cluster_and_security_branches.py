@@ -1,5 +1,12 @@
 """Branches in the cluster and security handlers that no other suite reaches.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 21 test function(s). Helpers and fixtures: `payload`, `is_error`, `_Wire`, `wire`,
+    `_alerts_wire`.
+Callers: none; collected by pytest
+Callees: `handlers.cluster`, `handlers.security`, `handlers.shared`
+
 Both modules sat in the seventies while the modules around them were above
 ninety, and the uncovered lines were not obscure -- they were the argument
 combinations that translate a friendly parameter into the one ns_server actually

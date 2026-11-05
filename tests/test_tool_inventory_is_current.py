@@ -1,5 +1,11 @@
 """docs/tools.json is the tool inventory the architecture document renders.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/plans/documentation-standard-gap.md D7 (the documentation gate).
+Main items: 11 test function(s). Helpers and fixtures: `_registry`, `_office_text`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 `docs/tools.json` is committed so a reader can rebuild the architecture document

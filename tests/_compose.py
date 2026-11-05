@@ -1,5 +1,12 @@
 """Load a Compose file as Compose understands it, not as a YAML subset.
 
+Component: test support, not tests.
+Spec: tests/README.md (loads Compose files as Compose does).
+Main items: `ComposeLoader`, `_override`, `_reset`, `load`.
+Callers: `tests/test_documented_configurations_start.py`,
+    `tests/test_one_container_one_surface.py`; collected by pytest
+Callees: none
+
 WHY THIS EXISTS
 ===============
 `yaml.safe_load` refuses any tag it has no constructor for, and Compose defines

@@ -1,5 +1,12 @@
 """The comparison at the heart of the round trip.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9; docs/FIXTURE_DESIGN.md.
+Main items: 19 test function(s). Helpers and fixtures: `_fixture`, `_row`, `_Block`,
+    `_Response`.
+Callers: none; collected by pytest
+Callees: none
+
 This is the only check in the project that compares a fixture against something
 OTHER THAN ITSELF, and it exists because everything that did compare a fixture
 against itself passed while the data was wrong: per-file sha256 matched the hash

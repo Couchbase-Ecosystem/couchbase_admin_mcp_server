@@ -1,6 +1,12 @@
 """
 Query-plan analysis: what `cb_explain_query` and the performance probes actually tell you.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 27 test function(s). Helpers and fixtures: `_FallbackCluster`, `_body`, `_Options`.
+Callers: none; collected by pytest
+Callees: `handlers.diagnostics`
+
 WHY IT MATTERS
 ==============
 These functions turn a Couchbase EXPLAIN plan into advice an operator acts on — "add a

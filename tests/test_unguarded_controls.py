@@ -1,5 +1,13 @@
 """Tests for controls that had NO test behind them.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3.
+Main items: 20 test function(s). Helpers and fixtures: `_reload_server`,
+    `_restore_server_module`, `_console_client`, `_run_verifier`.
+Callers: none; collected by pytest
+Callees: `auth.request_auth`, `auth.scope_gate`, `handlers.egress`, `handlers.mcp_status`,
+    `handlers.shared`, `profile_config`
+
 Every test here closes a mutation that survived the full suite. A control with no
 test is a control that can be deleted, inverted or short-circuited by a refactor and
 CI will still be green -- and this repo's own history shows that happening twice, with

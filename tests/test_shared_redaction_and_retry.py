@@ -1,5 +1,11 @@
 """Three small pieces of handlers/shared with outsized consequences.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S4, S7.
+Main items: 11 test function(s).
+Callers: none; collected by pytest
+Callees: `handlers.shared`
+
 REDACTION runs over every string leaf of every payload, so a rule written for
 error text now sees ordinary prose. "Basic authentication required" became
 "Basic ***REDACTED*** required" once the rule was applied everywhere -- a proxy's

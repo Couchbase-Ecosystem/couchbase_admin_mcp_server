@@ -1,6 +1,12 @@
 """
 Tests for the two deployment profiles and the audit record.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S4, S5.
+Main items: 27 test function(s). Helpers and fixtures: `_clean_profile_env`, `_audit`.
+Callers: none; collected by pytest
+Callees: `auth.scope_gate`, `profile_config`
+
 The two deployments have genuinely different trust models:
 
   workstation  Developer laptop, stdio, Claude Desktop. A HUMAN IS PRESENT, so

@@ -1,6 +1,14 @@
 """
 The runbook has to be right, because it is the document somebody follows at 2am.
 
+Component: regression suite; see tests/README.md.
+Spec: RUNBOOK.md; docs/plans/documentation-standard-gap.md D7 (the documentation gate).
+Main items: 14 test function(s). Helpers and fixtures: `doc`, `exposed_tools`,
+    `_documented_variables`, `_startup_problems`.
+Callers: none; collected by pytest
+Callees: `audit`, `handlers.capella.guardrails`, `handlers.shared`, `profile_config`, `server`,
+    `tls_config`
+
 A wrong tool name costs an hour. A wrong environment variable name costs longer, because
 the failure looks like a permissions problem rather than a typo — which is exactly what
 happened while writing it: the draft said `CAPELLA_API_KEY` and the server reads

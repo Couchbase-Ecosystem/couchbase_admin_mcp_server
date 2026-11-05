@@ -1,5 +1,11 @@
 """The IdP lab must run the SAME assertions against every provider.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3, S5; docs/OKTA_LAB.md.
+Main items: 10 test function(s). Helpers and fixtures: `_module`.
+Callers: none; collected by pytest
+Callees: none
+
 WHY THIS FILE EXISTS
 ====================
 Keycloak proved the plumbing and nothing about where a given tenant puts the

@@ -1,5 +1,11 @@
 """Tests for the confirmation / automation trust model.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 steps 4 and 5, S5.
+Main items: 12 test function(s). Helpers and fixtures: `srv`, `_call`, `_set_claims`.
+Callers: none; collected by pytest
+Callees: `auth.scope_gate`, `handlers.shared`, `profile_config`, `server`
+
 These lock in the safety-critical dispatch behaviour:
   * writes are gated by default,
   * an automation-scoped principal skips per-call confirmation,

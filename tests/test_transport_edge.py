@@ -1,6 +1,13 @@
 """
 The ASGI auth middleware, the startup banner, and the dispatch error path.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6, S3.
+Main items: 26 test function(s). Helpers and fixtures: `_Downstream`, `_scope`, `_drive`,
+    `_run`, `edge`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.guardrails`, `server`
+
 WHY THE MIDDLEWARE IS THE INTERESTING PART
 ==========================================
 `_ScopeAuthMiddleware` sits in front of every HTTP request, and it carries three properties

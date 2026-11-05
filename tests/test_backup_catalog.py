@@ -1,5 +1,12 @@
 """The backup catalogue: the only record that a backup existed.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9.
+Main items: 50 test function(s). Helpers and fixtures: `payload`, `is_error`, `root`, `record`,
+    `_recorded`.
+Callers: none; collected by pytest
+Callees: `handlers.backup_catalog`, `handlers.shared`
+
 This module is a pointer store. Nothing it holds can be re-derived -- an
 expired backup and a wrongly-deleted one look identical from here, and the
 catalogue entry is the only surviving evidence the backup was ever taken. That

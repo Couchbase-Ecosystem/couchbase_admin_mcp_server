@@ -1,5 +1,12 @@
 """The self-managed importer, which is the half that writes to somebody's cluster.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S9.
+Main items: 41 test function(s). Helpers and fixtures: `_FakeCollection`, `_FakeCluster`, `sdk`,
+    `_manifest`, `_data`.
+Callers: none; collected by pytest
+Callees: `handlers.fixture`
+
 tests/test_ee_fixture.py covers the refusals -- the cases where the importer must
 stop BEFORE touching anything. This file covers what happens once it has decided
 to proceed: the structure it creates, the documents it writes over KV, the

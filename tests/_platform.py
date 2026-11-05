@@ -1,5 +1,12 @@
 """Platform capabilities the suite needs, probed once rather than assumed.
 
+Component: test support, not tests.
+Spec: tests/README.md (platform capabilities).
+Main items: `_symlinks_available`.
+Callers: `tests/test_logging_and_client.py`, `tests/test_logging_hardening.py`,
+    `tests/test_round3_hardening.py`; collected by pytest
+Callees: none
+
 Six tests in this suite prove a security property by building the attack: they
 create a symlink where a log or audit file is expected and assert the server
 refuses to follow it. Creating a symlink on Windows needs either Developer Mode

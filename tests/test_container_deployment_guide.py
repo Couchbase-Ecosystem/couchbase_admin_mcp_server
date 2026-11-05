@@ -1,5 +1,11 @@
 """Every configuration printed in the deployment guide must actually start.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S2; docs/CONTAINER_DEPLOYMENT.md.
+Main items: 7 test function(s). Helpers and fixtures: `_configurations`, `_enforce`.
+Callers: none; collected by pytest
+Callees: `audit`, `profile_config`, `tls_config`
+
 WHY THIS FILE EXISTS
 ====================
 `docs/CONTAINER_DEPLOYMENT.md` is the document a customer follows to stand this

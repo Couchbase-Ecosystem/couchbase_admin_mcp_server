@@ -1,5 +1,12 @@
 """The Capella fixture family's transport layer and its listing.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S8, S9.
+Main items: 35 test function(s). Helpers and fixtures: `payload`, `is_error`, `_Response`,
+    `_http_error`, `_with_status`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`, `handlers.capella.fixture`, `handlers.shared`
+
 Three groups, chosen because each one has a measured failure behind it:
 
   * The Data API base URL is NOT derived from the cluster id. The module's own

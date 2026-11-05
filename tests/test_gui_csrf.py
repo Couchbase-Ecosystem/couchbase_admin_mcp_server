@@ -1,6 +1,12 @@
 """
 Cross-site request forgery against the admin console.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S6.
+Main items: 15 test function(s). Helpers and fixtures: `gui`.
+Callers: none; collected by pytest
+Callees: `audit`, `profile_config`
+
 THE FINDING
 ===========
 ``POST /api/call`` used ``request.get_json(force=True)``, which parses a JSON body

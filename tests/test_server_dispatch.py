@@ -1,6 +1,13 @@
 """
 `server.py`: tool dispatch, audit classification, and DNS-rebinding host allowlisting.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3, S4, S6.
+Main items: 31 test function(s). Helpers and fixtures: `_text`, `_a_registered_tool_name`,
+    `dispatch`, `_wire_call`.
+Callers: none; collected by pytest
+Callees: `handlers.shared`, `mcp_compat`, `server`
+
 WHY THESE PARTS
 ===============
 Three things here are load-bearing and were unexercised:

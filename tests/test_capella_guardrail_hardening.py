@@ -2,6 +2,14 @@
 Regression tests for guardrail hardening — one per real finding from the
 security review.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 8, S8.
+Main items: 78 test function(s). Helpers and fixtures: `_sandbox`, `Recorder`, `api`, `_call`,
+    `_synthetic_args`.
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.shared`
+
 Each test below corresponds to a hole that existed and was closed. They are kept
 separate from test_capella.py so that the property each one defends stays
 legible: if one of these fails, a specific containment guarantee has regressed,

@@ -1,6 +1,13 @@
 """
 Couchbase 8.x vector indexes, XDCR replication bodies, and the token cache.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S1.
+Main items: 28 test function(s). Helpers and fixtures: `_body`, `_Capture`, `vector`,
+    `replication`.
+Callers: none; collected by pytest
+Callees: `auth.request_auth`, `handlers.eight_x`, `handlers.shared`, `handlers.xdcr`
+
 WHY THESE THREE
 ===============
 Vector index creation builds a `WITH {...}` clause by string concatenation, with a

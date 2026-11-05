@@ -1,5 +1,12 @@
 """A deployment declares its control plane, and gets that one or does not start.
 
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S2.
+Main items: 15 test function(s). Helpers and fixtures: `_no_ambient_declaration`, `_compose`,
+    `_only_service`.
+Callers: none; collected by pytest
+Callees: `deployment`, `server`, `tests._compose`
+
 THE RULE
 ========
 One container, one surface. An Enterprise Edition container talks to ns_server

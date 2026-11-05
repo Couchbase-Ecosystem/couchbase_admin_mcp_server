@@ -1,4 +1,11 @@
-"""Tests for credential redaction in handlers.shared."""
+"""Tests for credential redaction in handlers.shared.
+
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S4 (what a record may contain).
+Main items: 6 test function(s).
+Callers: none; collected by pytest
+Callees: `handlers.shared`
+"""
 
 from __future__ import annotations
 

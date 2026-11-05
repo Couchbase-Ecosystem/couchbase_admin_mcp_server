@@ -4,6 +4,15 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Couchbase Admin MCP Console</title>
+<!--
+  Component: the console front end, one page. React and Babel are vendored in `vendor/`, so the
+    page makes no request to any other host (`tests/test_gui_frontend.py` checks this).
+  Spec: docs/spec.md S6 (transports); docs/questions.md Q-004 (console endpoints have no examples).
+  Main items: the inline script below, which holds the whole application.
+  Callers: served by `serve_frontend` in `gui/gui_server.py`.
+  Callees: `vendor/react.production.min.js`, `vendor/react-dom.production.min.js`,
+    `vendor/babel.min.js`, and the console API routes of `gui/gui_server.py`.
+-->
 <!-- No webfont <link> here, deliberately. A hosted font service is unreachable in an
      air-gapped network and is a third-party runtime request from an administration
      console. The stacks below name the intended faces first, so they are used if the

@@ -27,7 +27,7 @@ this project has sanctioned, and all three candidates are blocked on something:
     authenticated Cluster. But it needs the DATA PLANE on port 11210, which is
     exactly what handlers/capella/fixture.py avoided by choosing the HTTPS Data
     API: a container that can reach the Data API cannot necessarily reach 11210,
-    and Disney will run this in a container.
+    and the customer will run this in a container.
 
   * The Data API's own KV document endpoints. Almost certainly the right answer --
     HTTPS, the same cluster access credential, the same allowlist, no SQL++. Their

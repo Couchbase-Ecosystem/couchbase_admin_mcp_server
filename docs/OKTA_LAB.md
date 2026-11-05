@@ -107,7 +107,7 @@ Three ways out, honestly weighed:
 
 If Couchbase's own Okta does not have API Access Management, a customer's may
 not either — and the deployment shape this server documents assumes custom
-scopes on a custom authorization server. That is worth asking Disney directly,
+scopes on a custom authorization server. That is worth asking the customer directly,
 alongside the sample-token request that is already outstanding:
 
 > Does your Okta (or Entra) tenant have a custom authorization server we can be
@@ -147,7 +147,7 @@ assertions passed against Route A.
 > **The cheapest version of Route B is not a tenant at all.** A single decoded
 > access token — claims only, `sub` redacted — from a service app in Couchbase's
 > Okta answers the claim-shape question on its own, and costs an administrator
-> five minutes. That is the same ask already outstanding with Disney, and for the
+> five minutes. That is the same ask already outstanding with the customer, and for the
 > same reason.
 
 ---
@@ -182,7 +182,7 @@ assertions use:
 application in the same tenant, holding the write scope, proves the server
 compares the audience rather than merely requiring one. In a shared corporate
 tenant every token has an `aud` — so that is the realistic attack, and it is the
-shape Disney will have too. If a second audience is more trouble than it is worth
+shape the customer will have too. If a second audience is more trouble than it is worth
 on a first pass, skip `otherapp` and say so in the result rather than reporting a
 pass that did not test it.
 

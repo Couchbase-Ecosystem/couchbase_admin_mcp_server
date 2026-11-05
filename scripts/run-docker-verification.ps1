@@ -25,7 +25,7 @@
        machine's. Where a proxy re-signs outbound TLS -- which this network does,
        which is why uv needs UV_SYSTEM_CERTS -- the re-signed certificate is
        untrusted inside the container and Capella looks like an outage. If that
-       happens here it will happen to Disney, on their proxy.
+       happens here it will happen to the customer, on their proxy.
     3. the EE container resolving the cluster BY CONTAINER NAME on the shared
        Docker network. This is the whole reason to run there: a containerised
        cluster advertises internal addresses in its cluster map, unroutable from

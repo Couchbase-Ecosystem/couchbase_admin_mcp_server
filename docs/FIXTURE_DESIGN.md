@@ -9,7 +9,7 @@ Author context: written against CB-Admin-MCP as of 2026-08-13, 61 Capella v4 ops
 
 ## The problem
 
-Disney asked for backup and restore across clusters, with tags on backups and
+A customer asked for backup and restore across clusters, with tags on backups and
 filtering over those tags. Three example queries were given:
 
     latest backup where content-publisher-version = 1.6
@@ -126,7 +126,7 @@ key is the only cursor state to persist.
 ## Manifest schema
 
 One file per fixture, `manifest.json`, sitting beside a `data/` directory. JSON,
-committed, diffable. The `tags` object is the entire answer to Disney's filtering
+committed, diffable. The `tags` object is the entire answer to the customer's filtering
 requirement and it is deliberately free-form.
 
 ```json
@@ -134,7 +134,7 @@ requirement and it is deliberately free-form.
   "schema": "couchbase.capella.fixture/v1",
   "fixture_id": "notification-center-hurricane-1.1",
   "created_at": "2026-08-13T14:22:07Z",
-  "created_by": "chris.ahrendt@couchbase.com",
+  "created_by": "someone@example.com",
   "mode": "server",
 
   "tags": {
@@ -264,7 +264,7 @@ revision history is not preserved verbatim.
 must not be presented as suitable for a mobile scenario, and the manifest is what
 makes that checkable rather than a matter of memory.
 
-If a Disney scenario needs mobile sync state, server mode is wrong and no amount
+If a customer scenario needs mobile sync state, server mode is wrong and no amount
 of care in the exporter fixes it. Establish this per scenario before building.
 
 ## Throughput envelope
@@ -274,7 +274,7 @@ second request timeout, 10,000 requests per second per node. No bulk-get on the 
 side, so throughput comes only from batching inside SQL++ statements.
 
 This is sound for bounded fixtures. It is not a mechanism for moving hundreds of
-gigabytes. If Disney's load-test datasets are large, the fixture should carry a
+gigabytes. If the customer's load-test datasets are large, the fixture should carry a
 *generator specification* rather than the documents, and generation runs on the
 target cluster. That is a different feature and it should not be smuggled into
 this one.
@@ -314,7 +314,7 @@ genuine capability gap rather than a responsibility Couchbase took over." That i
 wrong. Read and write of Search index definitions are documented on Capella through
 the Data API FTS passthrough. The handoff doc should be corrected.
 
-What remains genuinely CBSE-worthy: downloadable managed backup via API, native
+What remains genuinely worth an upstream request: downloadable managed backup via API, native
 cross-CSP restore, and turn-off being refused during backup or maintenance with no
 queue or deferral.
 
@@ -351,7 +351,7 @@ anything.
   1. Probe run. Settles the restore path and the `queryIndexes` schemas, and
      promotes the new paths from `[DOC]` to `[LIVE+METHOD]`.
   2. Native backup and restore `Op` records. Six of them, mechanical, and the
-     right answer for recovery even though it is not the answer to Disney's ask.
+     right answer for recovery even though it is not the answer to the customer's ask.
   3. Manifest schema and the catalogue read/write tools. Smallest piece, highest
      value, useful before either export mode exists.
   4. Server-mode export and import, with build gating.
@@ -411,7 +411,7 @@ family that silently works on one plane only reads as something nobody got to.
   that need is identical on EE. `cbbackupmgr` answers recovery, not
   reproducibility, and a tagged, hash-verified, diffable JSON Lines payload is a
   different artifact from a binary backup.
-- **The container story cuts against it.** Disney runs this in a container, and
+- **The container story cuts against it.** The customer runs this in a container, and
   the hard rule is one container per plane. An operator running the EE container
   sees four `capella_fixture_*` tools that cannot work for them. Under the
   capability gating that is arguably correct — they should not be *loaded* at all

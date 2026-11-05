@@ -81,7 +81,7 @@ full reasoning, including the hosts-file entry that keeps the `iss` claim and
 
 ## What none of this proves
 
-Disney's claim layout. Keycloak validates the plumbing, which is IdP-independent:
+the customer's claim layout. Keycloak validates the plumbing, which is IdP-independent:
 a real JWKS fetch, real `iss`/`aud` matching, the session wiring, the audit
 principal. It does not establish where a different IdP puts the grant. That gap
 closes with a decoded sample access token from the customer's own IdP, not with

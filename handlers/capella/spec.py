@@ -324,7 +324,7 @@ LIVE_VERIFIED_OUT_OF_BAND: dict[str, str] = {
 #: Operations SHIPPED WITHOUT LIVE VERIFICATION, and why.
 #:
 #: This register exists because the alternative was worse. The ask was "mark XDCR active
-#: so Disney can test it and we fix whatever breaks" — a reasonable product call — and the
+#: so the customer can test it and we fix whatever breaks" — a reasonable product call — and the
 #: two ways to grant it were to fake a LIVE_VERIFIED entry or to say plainly that these
 #: ship on weaker evidence. A faked entry is the exact failure
 #: test_every_operation_has_been_verified_against_a_live_organization was written for: a
@@ -1571,7 +1571,7 @@ _EVENTING_FUNCTION_STATE_BODY: dict[str, Any] = {
 #: This body proves it, and more strongly than the path did: it carries BOTH
 #: sourceClusterID AND targetClusterID as required fields. Restoring a backup taken from
 #: one cluster into a different one is a single call, and both ends are named explicitly.
-#: That is the capability behind CBSE-23536.
+#: That is the capability behind the backup-metadata request.
 _BACKUP_RESTORE_BODY: dict[str, Any] = {
     "backupID": {
         "type": "string",
@@ -1814,7 +1814,7 @@ OPS: tuple[Op, ...] = (
         idempotent=True,
     ),
     Op(
-        # CBSE-23617: an empty-body POST here answers HTTP 500 rather than the 422 every
+        # Known upstream defect (reported): an empty-body POST here answers HTTP 500 rather than the 422 every
         # sibling create returns, so --method-probe records this operation as ERROR and
         # the run cannot report a clean pass. That is the probe being honest -- a 5xx
         # could come from a gateway before routing, so it proves nothing about the
@@ -2616,7 +2616,7 @@ OPS: tuple[Op, ...] = (
         idempotent=True,
     ),
     Op(
-        # CBSE-23617: an empty-body POST here answers HTTP 500 rather than the 422 every
+        # Known upstream defect (reported): an empty-body POST here answers HTTP 500 rather than the 422 every
         # sibling create returns, so --method-probe records this operation as ERROR and
         # the run cannot report a clean pass. That is the probe being honest -- a 5xx
         # could come from a gateway before routing, so it proves nothing about the

@@ -432,6 +432,12 @@ def test_d7_docs_do_not_name_files_that_no_longer_exist():
 
 #: What a real identifier looks like, as opposed to a stand-in. Stand-ins are the
 #: 11111111-2222-... UUIDs and the "example..." cluster ids used throughout the repository.
+#: An internal support ticket id (decision Q-007, 2026-11-05: the repository is public, so a
+#: ticket id is replaced by the reasoning it stood for).
+_TICKET_ID = re.compile(r"\bCBSE-\d+\b")
+#: A staff mailbox. Example data uses example.com instead (decision Q-007).
+_STAFF_EMAIL = re.compile(r"[\w.+-]+@couchbase\.com", re.IGNORECASE)
+
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 _STAND_IN_UUID = re.compile(r"^(0{8}-|11111111-2222-)")
 #: A Capella cluster host carries a 15 or 16 character generated id. Placeholders such as
@@ -442,7 +448,7 @@ _REAL_CAPELLA_HOST = re.compile(
 
 
 def test_d5_no_real_identifiers_or_lab_passwords_in_tracked_files():
-    """D5: no real cluster hosts, no real UUIDs, and no password literal for the lab.
+    """D5: no real cluster hosts, UUIDs, ticket ids or staff mailboxes, and no lab password literal.
 
     The `.py` and text files are scanned. Binary documents (.pptx, .docx, images) are not:
     they are generated from the Markdown sources.
@@ -462,6 +468,10 @@ def test_d5_no_real_identifiers_or_lab_passwords_in_tracked_files():
         for number, line in enumerate(text.splitlines(), 1):
             if _REAL_CAPELLA_HOST.search(line):
                 gaps.append(f"{rel}:{number} a real-looking Capella host")
+            if _TICKET_ID.search(line):
+                gaps.append(f"{rel}:{number} an internal ticket id")
+            if _STAFF_EMAIL.search(line):
+                gaps.append(f"{rel}:{number} a staff email address")
             for match in _UUID.finditer(line):
                 if not _STAND_IN_UUID.match(match.group(0)):
                     gaps.append(

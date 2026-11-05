@@ -2386,7 +2386,7 @@ def _exit_code(counts: dict) -> int:
     """
     # KNOWN, and it is not this script's bug: capella_cluster_create and
     # capella_app_service_create answer HTTP 500 to an empty-body POST where every other
-    # create answers 422. Filed as CBSE-23617. A run against a live organization will
+    # create answers 422. Reported upstream. A run against a live organization will
     # therefore report 2 ERRORs and exit non-zero until that is fixed. The alternative --
     # treating a 5xx as evidence -- is the thing this function exists to refuse.
     verified = counts.get("VERIFIED", 0)

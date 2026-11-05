@@ -80,7 +80,7 @@ generated client carries a whole subsystem we have never looked at:
 
 This matters beyond completeness. The managed-backup group above is the wrong primitive
 for the "give me a restorable environment on demand, several times a day" request that
-drove CBSE-23536 -- backups carry no user metadata, cannot be user-named, and their bytes
+drove it -- backups carry no user metadata, cannot be user-named, and their bytes
 are only retrievable through a console download with an emailed URL. A snapshot subsystem
 with an explicit restore endpoint, a retention edit, a schedule and a REGIONS endpoint has
 a different shape, and ``/cloudsnapshotbackups/restores`` implies restores are first-class

@@ -88,7 +88,7 @@ PRINCIPALS = {
     "stranger": ("cb-admin-mcp-stranger", "stranger-secret"),
     # A WELL-FORMED token that simply belongs to someone else: correct issuer,
     # correct signature, a real `aud` -- for a different application -- and the
-    # write role. This is the Disney-shaped case and the stronger of the two: a
+    # write role. This is the customer-shaped case and the stronger of the two: a
     # missing-claim refusal proves the required-claims check, not the audience
     # COMPARISON, and every token minted for another app in a shared tenant will
     # have an aud.

@@ -303,7 +303,7 @@ Couchbase Server 8.0.2:
   carries `sourceClusterId`, and Capella **requires that to match the cluster in
   the path** (error code 5026). A `targetClusterId` is silently ignored.
   **Cross-cluster restore is therefore not a v4 primitive.** This is the one
-  Disney requirement with no API workaround, and the reason the fixture layer
+  customer requirement with no API workaround, and the reason the fixture layer
   exists. See `docs/FIXTURE_DESIGN.md`.
 * `.../clusters/{c}/backups` and `.../clusters/{c}/replications` both answer 200.
 * `.../clusters/{c}/eventing/functions` does **not** route.

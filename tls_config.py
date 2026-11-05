@@ -1,6 +1,13 @@
 """
 tls_config.py — transport encryption for the HTTP transport, both shapes.
 
+Component: transport encryption for the HTTP transport, in both shapes: the server terminates
+    TLS itself, or an ingress or sidecar in front of it does.
+Spec: docs/spec.md S6 (transports).
+Main items: `TlsSettings`, `from_env`, `validate`, `is_loopback`.
+Callers: `auth/session.py`, `gui/gui_server.py`, `server.py`; 4 test file(s)
+Callees: none
+
 WHY THIS EXISTS
 ===============
 The HTTP transport served plain cleartext. `uvicorn.Config(...)` was constructed with

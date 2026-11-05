@@ -1,6 +1,14 @@
 """
 profile_config.py — the two deployments this server actually has, made explicit.
 
+Component: the two deployment profiles (workstation and enterprise), their defaults and the
+    start-up coherence check.
+Spec: docs/spec.md S5 (profiles).
+Main items: `Profile`, `profile_name`, `apply_profile`, `validate`, `local_identity`,
+    `describe`.
+Callers: `authz.py`, `gui/gui_server.py`, `server.py`; 16 test file(s)
+Callees: `handlers.shared`, `logging_config`
+
 WHY A PROFILE AND NOT EIGHT ENV VARS
 ====================================
 There are two ways this runs, and they have genuinely different trust models:

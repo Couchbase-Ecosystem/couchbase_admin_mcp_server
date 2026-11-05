@@ -1,5 +1,19 @@
 """Logging configuration for the Couchbase Admin MCP Server.
 
+Component: log sinks, formats and the redaction filter, configured from the `CB_ADMIN_LOG_*`
+    variables. The audit record goes out through it.
+Spec: docs/spec.md S4 (audit record); docs/questions.md Q-002 (the cycle with
+    `handlers.shared`).
+Main items: `configure_from_env`, `configure_logging`, `get_logger`,
+    `get_resolved_logging_config`, `parse_log_level`, `parse_log_sinks`, `SafeRecordFilter`,
+    `PrivateRotatingFileHandler`, `ResolvedLoggingConfig`.
+Callers: `audit.py`, `deployment.py`, `gui/gui_server.py`, `handlers/backup_catalog.py`,
+    `handlers/capella/__init__.py`, `handlers/capella/client.py`,
+    `handlers/capella/environment.py`, `handlers/capella/fixture.py`,
+    `handlers/capella/guardrails.py`, `handlers/diagnostics.py`, `handlers/fixture.py`,
+    `handlers/shared.py`, `profile_config.py`, `server.py`; 2 test file(s)
+Callees: `handlers.shared`
+
 Mirrors the logging model of the official couchbase/mcp-server-couchbase so an
 operator (or Couchbase support) gets the same shape of diagnostics from this
 server as from the product one:

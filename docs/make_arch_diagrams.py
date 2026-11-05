@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Generate the architecture diagrams.
 
+Component: draws the architecture figures (fig01 to fig10) with matplotlib, measuring every box
+    so text cannot overflow.
+Spec: no section of the spec; its output goes to `docs/diagrams/` for
+    `docs/build_architecture.js`.
+Main items: `main`, and one function per figure (`reference_architecture`, `authorization_path`,
+    `lifecycle_sequence` and others).
+Callers: none; run by hand (`python docs/make_arch_diagrams.py`)
+Callees: none; matplotlib.
+
     python docs/make_arch_diagrams.py
 
 WHY THE BOXES ARE MEASURED RATHER THAN SIZED BY HAND

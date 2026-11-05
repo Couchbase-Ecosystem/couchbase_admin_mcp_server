@@ -1,5 +1,13 @@
 """Regenerate docs/tools.json — the tool inventory the architecture document renders.
 
+Component: regenerates `docs/tools.json`, the tool inventory the architecture document renders.
+Spec: no section of the spec; its output feeds `docs/build_architecture.js`.
+Main items: `inventory`, `category`, `measured`, `main`.
+Callers: none; run by hand from the repository root (`python docs/generate_tools_json.py >
+    docs/tools.json`)
+Callees: `deployment`, `handlers.capella.spec`, `handlers.capella.spec_pending`, `mcp_compat`,
+    `server`
+
 Run from the repository root:
 
     python docs/generate_tools_json.py > docs/tools.json

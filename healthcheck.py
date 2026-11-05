@@ -1,5 +1,14 @@
 """Container health probe for the HTTP transport.
 
+Component: the container health probe for the HTTP transport. A 401 counts as healthy, because
+    it proves the process is serving HTTP.
+Spec: docs/spec.md S2 (one container), S6 (transports); docs/questions.md Q-004 (other entry
+    points).
+Main items: `check`, `main`.
+Callers: none; run by the `Dockerfile` HEALTHCHECK and the manifests in `deploy/k8s/`, never
+    imported; 1 test file(s)
+Callees: none; standard library only.
+
 ONE DEFINITION, THREE CALLERS: the image's HEALTHCHECK and both Kubernetes
 manifests run this file. It used to be an inline one-liner in the Dockerfile and
 a `httpGet: /healthz` in the manifests, and those two disagreed with each other

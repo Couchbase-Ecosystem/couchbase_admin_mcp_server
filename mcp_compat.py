@@ -1,6 +1,16 @@
 """
 mcp_compat.py — read Tool metadata on either mcp 1.x or 2.x.
 
+Component: reads `Tool` metadata on either mcp 1.x or 2.x, whose models name the fields
+    differently.
+Spec: docs/spec.md S3 (every gate reads tool annotations); docs/questions.md Q-002 (the cycle
+    with `dryrun`).
+Main items: `input_schema`, `annotation`, `is_read_only`, `is_destructive`, `is_idempotent`,
+    `with_control_fields`.
+Callers: `auth/scope_gate.py`, `docs/generate_tools_json.py`, `dryrun.py`, `gui/gui_server.py`,
+    `handlers/mcp_status.py`, `scripts/dump_tool.py`, `server.py`; 5 test file(s)
+Callees: `dryrun`
+
 THE PROBLEM
 ===========
 mcp 2.0 renamed the fields on the `Tool` and `ToolAnnotations` models:

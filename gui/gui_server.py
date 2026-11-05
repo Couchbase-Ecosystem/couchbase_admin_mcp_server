@@ -1,6 +1,21 @@
 """
 gui_server.py - Flask backend for the Couchbase MCP GUI.
 
+Component: the Flask console: a browser front end over the same handlers, with its own sign-in
+    and `POST /api/call`.
+Spec: docs/spec.md S3 (the console asks the same `authz` module), S5 (profiles), S6
+    (transports); docs/questions.md Q-004 (console endpoints have no examples).
+Main items: `create_app`, `call_tool` (`POST /api/call`), `list_tools`, `auth_login`,
+    `auth_callback`, `auth_logout`, `auth_me`, `auth_status`, `config`, `serve_frontend`.
+Callers: none; 2 test file(s)
+Callees: `audit`, `auth.oidc`, `auth.scope_gate`, `auth.session`, `authz`, `deployment`,
+    `dryrun`, `handlers.backup`, `handlers.backup_catalog`, `handlers.buckets`,
+    `handlers.capella`, `handlers.cluster`, `handlers.collections`, `handlers.diagnostics`,
+    `handlers.eight_x`, `handlers.encryption`, `handlers.eventing`, `handlers.fixture`,
+    `handlers.indexes`, `handlers.mcp_status`, `handlers.search_admin`, `handlers.security`,
+    `handlers.shared`, `handlers.stats`, `handlers.xdcr`, `logging_config`, `mcp_compat`,
+    `profile_config`, `tls_config`; Flask.
+
 Authentication modes (controlled by OAUTH_ENABLED env var):
   - OAUTH_ENABLED=false (default): no auth — original behaviour, localhost only.
   - OAUTH_ENABLED=true:            Generic OIDC / OAuth 2.0.

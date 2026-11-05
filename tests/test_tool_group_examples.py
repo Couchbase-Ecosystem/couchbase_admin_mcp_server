@@ -1,11 +1,15 @@
 """One tested, runnable example for each tool group (documentation rule D12, decision Q5).
 
-Component: regression suite, documentation. Spec: docs/spec.md S1 and S3, and
-docs/questions.md Q5 in docs/plans/documentation-standard-gap.md.
-Main items: `EXAMPLES` (the 17 examples), `test_each_example_runs`,
-`test_there_is_one_example_per_tool_group`. Callers: pytest, and the documentation gate
-(`tests/test_documentation_gate.py`), which counts the groups listed here against the groups
-in `tests/test_handler_contract.py`. Callees: every handler group's `handle()`.
+Component: regression suite, documentation (rule D12, decision Q5).
+Spec: docs/spec.md S1 (purpose and surface) and S3 step 8; docs/plans/documentation-standard-gap.md
+    D12 and Q5.
+Main items: `EXAMPLES` (the 14 examples that share a stub), `test_each_example_runs`,
+    `test_there_is_one_example_per_tool_group`, and the three tests that need their own set-up
+    (`test_the_backup_catalog_example`, `test_the_fixture_example`, `test_the_capella_example`).
+Callers: none; collected by pytest. The documentation gate reads this file as text and counts
+    the groups listed here against the groups in `tests/test_handler_contract.py`.
+Callees: `handlers.capella.client`, `handlers.shared`, `tests.test_handler_contract`; every tool
+    group's `handle()` is reached through the handler contract's module list.
 
 WHAT AN EXAMPLE IS
 ==================

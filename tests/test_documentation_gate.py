@@ -1,9 +1,11 @@
 """The documentation gate: the build fails when the documentation falls behind the code.
 
 Component: regression suite. Runs with every other test (`uv run pytest -q -p no:randomly --cov`).
-Main items: `GATE` (the mode of each check), `_python_files`, `_public_items`, and one
-test per rule. Callers: pytest and CI. Callees: only the standard library.
 Spec: documentation standard rules D1 to D15 (docs/plans/documentation-standard-gap.md).
+Main items: `GATE` (the mode of each check), `_python_files`, `_public_items`, the header
+    helpers (`_header_fields`, `_computed_callers`, `_computed_callees`), and one test per rule.
+Callers: none; collected by pytest and run by CI.
+Callees: none; the standard library and `git`.
 
 WHY THIS FILE EXISTS
 ====================
@@ -49,6 +51,8 @@ _REPO = pathlib.Path(__file__).resolve().parent.parent
 #: Moving a rule to "fail" is part of the commit that closes its last gap.
 GATE = {
     "D1-header": "fail",
+    "D1-header-fields": "fail",
+    "D1-header-matches-imports": "fail",
     "D2-public-doc-comment": "fail",
     "D6-handover-set": "fail",
     "D10-contributor-guides": "fail",
@@ -170,6 +174,135 @@ def test_d1_every_python_file_has_a_header():
         if not ast.get_docstring(tree):
             gaps.append(str(path.relative_to(_REPO)))
     _enforce("D1-header", gaps)
+
+
+#: The labels every Python header carries (D1): what it is, where it sits in the spec, what
+#: it holds, who calls it and what it calls.
+HEADER_LABELS = ("Component", "Spec", "Main items", "Callers", "Callees")
+
+
+def _header_fields(tree: ast.Module) -> dict[str, str]:
+    """Return the labelled lines of a module header, continuation lines joined.
+
+    A field starts at a line that begins with its label and a colon. Lines indented under
+    it continue it, which is how the headers wrap at 100 columns.
+    """
+    doc = ast.get_docstring(tree) or ""
+    fields: dict[str, str] = {}
+    label = None
+    for line in doc.splitlines():
+        match = re.match(rf"({'|'.join(HEADER_LABELS)}): ?(.*)$", line)
+        if match:
+            label = match.group(1)
+            fields[label] = match.group(2)
+        elif label and line.startswith("    "):
+            fields[label] += " " + line.strip()
+        else:
+            label = None
+    return fields
+
+
+def _module_name(path: pathlib.Path) -> str:
+    """The dotted module name of a repository file (a package file names the package)."""
+    parts = list(path.relative_to(_REPO).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _imported_names(path: pathlib.Path) -> set[str]:
+    """Every module name a file imports, relative imports resolved against its package."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    package = ".".join(path.parent.relative_to(_REPO).parts)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                parts = package.split(".") if package else []
+                if node.level > 1:
+                    parts = parts[: len(parts) - (node.level - 1)]
+                base = ".".join(parts + ([node.module] if node.module else []))
+            else:
+                base = node.module or ""
+            if base:
+                names.add(base)
+                names |= {f"{base}.{alias.name}" for alias in node.names}
+    return names
+
+
+def _import_graph() -> tuple[dict[str, set[str]], set[str]]:
+    """Imports per tracked Python file, and the set of module names the repository defines."""
+    files = _python_files()
+    graph = {str(p.relative_to(_REPO).as_posix()): _imported_names(p) for p in files}
+    local = {_module_name(p) for p in files}
+    return graph, local
+
+
+def _computed_callees(rel: str, graph, local) -> list[str]:
+    """The repository modules a file imports, naming a package only when no module of it is named."""
+    own = _module_name(_REPO / rel)
+    found = {name for name in graph[rel] if name in local and name != own}
+    return sorted(n for n in found if not any(o.startswith(n + ".") for o in found))
+
+
+def _computed_callers(rel: str, graph) -> list[str]:
+    """The repository files that import this one (test files count only for test files)."""
+    own = _module_name(_REPO / rel)
+    callers = sorted(k for k, names in graph.items() if own in names and k != rel)
+    if rel.startswith("tests/"):
+        return callers
+    return [c for c in callers if not c.startswith("tests/")]
+
+
+def _named(text: str) -> list[str]:
+    """The backticked names before the first semicolon of a Callers or Callees line."""
+    return re.findall(r"`([^`]+)`", text.split(";")[0])
+
+
+def test_d1_every_header_has_the_five_fields():
+    """D1: component, spec, main items, callers and callees, in every Python header."""
+    files = _python_files()
+    assert files, "found no Python files, so this scan would check nothing"
+    gaps = []
+    for path in files:
+        fields = _header_fields(ast.parse(path.read_text(encoding="utf-8")))
+        missing = [label for label in HEADER_LABELS if not fields.get(label)]
+        if missing:
+            gaps.append(f"{path.relative_to(_REPO)}: no {', '.join(missing)}")
+    _enforce("D1-header-fields", gaps)
+
+
+def test_d1_header_callers_and_callees_match_the_imports():
+    """D1: a header that names the wrong callers or callees is worse than none.
+
+    The two lines are compared with what the files really import, so a new import fails
+    the build until the header says so. Only the names before the first semicolon count;
+    the text after it (the test count, the libraries) is free.
+
+    One limit: the check reads import statements. A module loaded by name at run time, such
+    as the console loaded through `importlib` in a test, is not seen.
+    """
+    graph, local = _import_graph()
+    assert graph and local, "found no imports, so this scan would check nothing"
+    checked = 0
+    gaps = []
+    for rel in sorted(graph):
+        fields = _header_fields(ast.parse((_REPO / rel).read_text(encoding="utf-8")))
+        if not (fields.get("Callers") and fields.get("Callees")):
+            continue  # D1-header-fields reports a missing field once
+        checked += 1
+        for label, computed in (
+            ("Callers", _computed_callers(rel, graph)),
+            ("Callees", _computed_callees(rel, graph, local)),
+        ):
+            named = sorted(_named(fields[label]))
+            if named != computed:
+                wrong = sorted(set(named) ^ set(computed))
+                gaps.append(f"{rel}: {label} differs from the imports at {wrong}")
+    assert checked, "no header had Callers and Callees, so this scan checked nothing"
+    _enforce("D1-header-matches-imports", gaps)
 
 
 def test_d2_every_public_item_has_a_doc_comment():

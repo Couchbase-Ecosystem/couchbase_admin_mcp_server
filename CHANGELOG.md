@@ -22,6 +22,8 @@ reconstructed from it here, so this file claims nothing about those changes.
 - `tests/test_tool_group_examples.py`: one tested example for each of the 17 tool groups (D12).
 - This changelog, shipped in the wheel and the container image.
 - The documentation standard, in `CONTRIBUTING.md`.
+- A header on every Python file, PowerShell script and the console page: component, spec section, main items, callers and callees (D1). Two gate rules check them: every Python header has the five fields, and its callers and callees match what the code imports. No behavior changed.
+- A doc comment on every public function and class (D2). The gate now fails the build when one is missing.
 
 ### Changed
 

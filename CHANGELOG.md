@@ -25,8 +25,15 @@ reconstructed from it here, so this file claims nothing about those changes.
 - A header on every Python file, PowerShell script and the console page: component, spec section, main items, callers and callees (D1). Two gate rules check them: every Python header has the five fields, and its callers and callees match what the code imports. No behavior changed.
 - A doc comment on every public function and class (D2). The gate now fails the build when one is missing.
 
+### Fixed
+
+- The cached SDK cluster connection is now built under a lock. Two calls that arrived together before the first connection existed each built a cluster, and one was never closed (Q-001).
+
 ### Changed
 
+- The audit decision vocabulary is defined once, as `audit.DECISIONS`. The `build_record` docstring listed nine of the fourteen names; it and `docs/spec.md` S4 now list all of them, and a test fails when they disagree with the code (Q-003). The record format is unchanged.
+- Customer names and internal ticket ids are removed from comments and documents, and the gate (D5) fails if a ticket id or a `@couchbase.com` address comes back (Q-007).
+- `ee-lab.ps1` reads the lab password from `CB_LAB_PASSWORD` when `-Password` is not given (Q-006).
 - Real Capella cluster ids and UUIDs in comments, documents and tests are replaced with stand-ins (D5).
 - `seed-ee-bucket.ps1`, `probe-alternate-ports.ps1` and `probe_rest_paths.ps1` read the lab password from `CB_LAB_PASSWORD` instead of holding it as a literal. `ee-lab.ps1` documents the same variable.
 

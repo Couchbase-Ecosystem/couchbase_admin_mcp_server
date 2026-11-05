@@ -8,6 +8,13 @@ A header says what the code does now, and cites a question number for the reason
 
 | Date | Decision | Decided by | Where the reasoning is |
 | --- | --- | --- | --- |
+| 2026-11-05 | Customer names and internal ticket ids leave the public repository; the reasoning stays (Q-007 option b) | Chris Ahrendt | `docs/questions.md` Q-007 |
+| 2026-11-05 | The lab password is read from `CB_LAB_PASSWORD`, with no default (Q-006 option a) | Chris Ahrendt | `docs/questions.md` Q-006 |
+| 2026-11-05 | `CHANGELOG.md` stays beside the top-level modules in the wheel (Q-005 option a) | Chris Ahrendt | `docs/questions.md` Q-005 |
+| 2026-11-05 | Only tools get a tested example. Scripts get dry-run modes and a usage section (Q-004 option a) | Chris Ahrendt | `docs/questions.md` Q-004 |
+| 2026-11-05 | The audit decision vocabulary is defined once, as `audit.DECISIONS`, and tested (Q-003 option a) | Chris Ahrendt | `docs/questions.md` Q-003 |
+| 2026-11-05 | The three import cycles stay, documented (Q-002 option a) | Chris Ahrendt | `docs/questions.md` Q-002 |
+| 2026-11-05 | The cached SDK cluster is created under a lock (Q-001 option a) | Chris Ahrendt | `docs/questions.md` Q-001 |
 | 2026-11-02 | The tool-group example (D12) is one tested example per tool group, 17 groups, reusing the handler contract harness | Chris Ahrendt | `docs/plans/documentation-standard-gap.md` Q5 |
 | 2026-11-02 | `AGENTS.md` holds the working rules and `CLAUDE.md` points at it | Chris Ahrendt | Same file, Q4 |
 | 2026-11-02 | The Terraform provider source is public material, so its citations stay | Chris Ahrendt | Same file, Q3 |

@@ -8,7 +8,7 @@ Documentation-standard questions Q1 to Q5 were asked and decided on 2026-11-02. 
 recorded in `docs/plans/documentation-standard-gap.md`, and summarized in
 `docs/design-decisions.md`.
 
-## Q-001 [OPEN]. Should the cached SDK cluster connection be created under a lock?
+## Q-001 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. Should the cached SDK cluster connection be created under a lock?
 
 **Found 2026-11-02**, by reading `get_sdk_cluster` in `handlers/shared.py`. The cache
 `_cluster` is a module global with no lock. Handlers run on worker threads, so two calls
@@ -21,7 +21,9 @@ the code, not measured.
 - (b) Leave it, and document it. Cost: none now. A leaked connection on a first-use race.
 - Recommendation: (a). It is small and the enterprise profile runs concurrent agents.
 
-## Q-002 [OPEN]. Should the three import cycles be removed?
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Create the cached cluster under a lock. Done: `handlers/shared.py` `get_sdk_cluster` takes `_cluster_lock` around the whole build, and `tests/test_cluster_cache_lock.py` fails without it (eight threads built eight clusters before).
+
+## Q-002 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. Should the three import cycles be removed?
 
 **Found 2026-11-02** (`docs/MODULE_MAP.md`): `logging_config` and `handlers.shared`,
 `mcp_compat` and `dryrun`, `handlers.mcp_status` and `server`. They work because one
@@ -32,7 +34,9 @@ side imports inside a function.
   imports nothing from the repository. Cost: a refactor of three modules and their tests.
 - Recommendation: (a) now. Revisit if a change trips one.
 
-## Q-003 [OPEN]. What is the audit decision vocabulary, and where is it defined?
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Leave the three cycles, as documented in `docs/MODULE_MAP.md`. Revisit if a change trips one.
+
+## Q-003 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. What is the audit decision vocabulary, and where is it defined?
 
 **Found 2026-11-02.** The docstring of `audit.build_record` lists nine decisions and calls
 the vocabulary closed. The code emits fourteen (`docs/spec.md` S4). A SIEM rule written
@@ -43,7 +47,9 @@ from the docstring would miss five.
 - (b) Only correct the docstring.
 - Recommendation: (a). It makes "closed" true.
 
-## Q-004 [OPEN]. Which public entry points besides tools need a tested example (D12)?
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Define the vocabulary once as `audit.DECISIONS`. Done: the table, the `build_record` docstring and `docs/spec.md` S4 list the same fourteen names, and `tests/test_audit_vocabulary.py` fails when they or the emitted denials disagree.
+
+## Q-004 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. Which public entry points besides tools need a tested example (D12)?
 
 Decision Q5 gives one tested example per tool group (17 groups). The console endpoints, the
 scripts and the `couchbase-admin-mcp-server` console script are also entry points.
@@ -53,7 +59,9 @@ scripts and the `couchbase-admin-mcp-server` console script are also entry point
 - (b) Also add an example for each console endpoint.
 - Recommendation: (a).
 
-## Q-005 [OPEN]. Where does `CHANGELOG.md` sit inside the wheel?
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Tools only. Scripts get dry-run modes and a usage section in `scripts/README.md`. Not started: the dry-run modes are code, so a short spec comes to Chris first.
+
+## Q-005 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. Where does `CHANGELOG.md` sit inside the wheel?
 
 The standard says the changelog ships in every package. In the container image it is at
 `/app/CHANGELOG.md`. In the wheel it was added to the same `force-include` list as the
@@ -66,7 +74,9 @@ top-level modules, so it lands beside them in `site-packages`.
 - (c) Rely on the sdist and on the wheel's own metadata. Does not satisfy "every package".
 - Recommendation: (b), once Chris names the folder.
 
-## Q-006 [OPEN]. How should the lab password be supplied to the three lab scripts?
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Keep `CHANGELOG.md` where it is in the wheel, beside the top-level modules, consistent with the existing `force-include` list.
+
+## Q-006 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. How should the lab password be supplied to the three lab scripts?
 
 **Found 2026-11-02** by text search (and a fourth by the new gate check): `seed-ee-bucket.ps1`,
 `probe-alternate-ports.ps1`, `probe_rest_paths.ps1` and `ee-lab.ps1` contain a lab password as a literal. It belongs to a throwaway local
@@ -79,7 +89,9 @@ pattern that teaches the next script to hard-code a real one.
   other scripts read. Cost: more code, and a state file.
 - Recommendation: (a). It is the smallest change and nothing is stored.
 
-## Q-007 [OPEN]. Should customer names and internal ticket numbers stay in the repository?
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Read the lab password from `CB_LAB_PASSWORD` and fail with a clear message when it is unset. Done: `seed-ee-bucket.ps1`, `probe-alternate-ports.ps1`, `probe_rest_paths.ps1` and `ee-lab.ps1` read it. `start-ee-cluster.ps1` has no literal: it takes a mandatory `-Password`.
+
+## Q-007 [DECIDED: Chris Ahrendt, 2026-11-05, option (b)]. Should customer names and internal ticket numbers stay in the repository?
 
 **Found 2026-11-02** by text search. A customer name appears in comments and documents
 (`docs/FIXTURE_DESIGN.md`, `docs/OKTA_LAB.md`, `docs/ARCHITECTURE.md`,
@@ -96,3 +108,5 @@ The repository is public.
 - (c) Keep ticket ids, remove customer names only.
 - Recommendation: (b), or (c) if the ticket ids are useful to Couchbase staff and not sensitive.
   Not done until Chris decides.
+
+**Decision (Chris Ahrendt, 2026-11-05):** option (b). Replace customer names with "a customer" or "the customer" and drop internal ticket ids, keeping the reasoning. Done on 2026-11-05. The "personal email address" was a staff address in an example manifest in `docs/FIXTURE_DESIGN.md`, now `someone@example.com`. D5 in the gate now fails on a ticket id or a staff mailbox. Customer names are not in the gate, because the gate file would then contain them.

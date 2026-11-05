@@ -6,7 +6,7 @@
 <title>Couchbase Admin MCP Console</title>
 <!--
   Component: the console front end, one page. React and Babel are vendored in `vendor/`, so the
-    page makes no request to any other host (`tests/test_gui_frontend.py` checks this).
+    page links to no other host (`tests/test_gui_frontend.py` checks every `src` and `href`).
   Spec: docs/spec.md S6 (transports); docs/questions.md Q-004 (console endpoints have no examples).
   Main items: the inline script below, which holds the whole application.
   Callers: served by `serve_frontend` in `gui/gui_server.py`.

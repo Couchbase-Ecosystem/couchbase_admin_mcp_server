@@ -58,7 +58,7 @@
 #>
 param(
     [string[]] $Names = @('cb-mcp-ee', 'cb-mcp-peer'),
-    [string]   $Password = '',
+    [string]   $Password = $env:CB_LAB_PASSWORD,
     [string]   $Network = 'cb-mcp-net',
     [string]   $Image = 'couchbase/server:enterprise-8.0.1',
     [string]   $PrimaryServices = 'data,index,query,fts,eventing,backup',
@@ -90,7 +90,7 @@ if ($Down) {
     return
 }
 
-if (-not $Password) { Die "-Password is required when creating a lab" }
+if (-not $Password) { Die "Set CB_LAB_PASSWORD to the lab password, or pass -Password (docs/questions.md Q-006)" }
 
 # PORT 8091 BELONGS TO THE PRIMARY. Say which container is holding it rather
 # than letting docker fail with a bind error that names no owner.

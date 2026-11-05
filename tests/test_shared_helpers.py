@@ -5,7 +5,7 @@ Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S3 step 8; docs/questions.md Q-001 (the cluster cache is built under a lock).
 Main items: 42 test function(s). Helpers and fixtures: `_FakeAuthenticator`, `_FakeCluster`,
     `_FakeBucket`, `_FakeScope`, `_FakeOptions`.
-Callers: none; collected by pytest
+Callers: `tests/test_cluster_cache_lock.py`; collected by pytest
 Callees: `handlers.shared`
 
 The HTTP client is in `test_shared_http.py`. This covers the surface around it, and two parts

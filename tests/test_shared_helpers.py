@@ -2,7 +2,7 @@
 The rest of `handlers/shared.py`: SDK connection, env parsing, DDL guards, form encoding.
 
 Component: regression suite; see tests/README.md.
-Spec: docs/spec.md S3 step 8; docs/questions.md Q-001 (the cluster cache has no lock).
+Spec: docs/spec.md S3 step 8; docs/questions.md Q-001 (the cluster cache is built under a lock).
 Main items: 42 test function(s). Helpers and fixtures: `_FakeAuthenticator`, `_FakeCluster`,
     `_FakeBucket`, `_FakeScope`, `_FakeOptions`.
 Callers: none; collected by pytest

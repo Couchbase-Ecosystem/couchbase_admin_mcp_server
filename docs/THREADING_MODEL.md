@@ -33,7 +33,7 @@ Two different thread hops are used on purpose, and they are not interchangeable:
 
 | State | File | Protection | Notes |
 | --- | --- | --- | --- |
-| Cached SDK cluster connection `_cluster` | `handlers/shared.py` `get_sdk_cluster` | **None found** | Two threads that both call it first can each build a cluster, and the last assignment wins. The code publishes only after `wait_until_ready` succeeds, so a half-built cluster is never cached. Whether to add a lock is [Q-001 in questions.md](questions.md) |
+| Cached SDK cluster connection `_cluster` | `handlers/shared.py` `get_sdk_cluster` | `_cluster_lock` (a `threading.Lock`), taken around the whole build (double-checked) | Two threads that both call it first build one cluster, not two. The code publishes only after `wait_until_ready` succeeds, so a half-built cluster is never cached, and a failed build releases the lock and leaves the cache empty. Decided in [Q-001 in questions.md](questions.md) on 2026-11-05. Held by `tests/test_cluster_cache_lock.py` |
 | OIDC discovery cache, unknown-key-id memo, JWKS refresh budget | `auth/oidc.py` | `_throttle_lock` (a `threading.Lock`) for the throttle structures. `_discovery_cache` has no lock found | The lock exists because validation runs on worker threads from two places (the edge middleware and the dispatch). An unlocked dict raised "dictionary changed size during iteration", which turned into denials of legitimate tokens |
 | Audit sink handle | `audit.py` | Module globals set at start-up | Not checked for concurrent first use. Not measured |
 | Logging configuration | `logging_config.py` | Module global `_resolved_config` | Set once at start-up |

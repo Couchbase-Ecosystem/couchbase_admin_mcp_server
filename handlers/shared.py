@@ -4,7 +4,7 @@ shared.py — connection pool, HTTP admin client, response helpers, safety primi
 Component: what every handler uses: the SDK connection cache, the REST client, statement guards,
     confirmation, redaction and the response helpers.
 Spec: docs/spec.md S3 steps 5 and 8, S7 (the error marker); docs/THREADING_MODEL.md;
-    docs/questions.md Q-001 (no lock on the cluster cache), Q-002 (the cycle with
+    docs/questions.md Q-001 (the cluster cache is built under a lock), Q-002 (the cycle with
     `logging_config`).
 Main items: `get_sdk_cluster`, `admin_request`, `admin_request_json`, `require_confirmation`,
     the statement guards (`assert_read_only_statement` and others), `redact`, `ok`, `err`,
@@ -51,6 +51,7 @@ import json
 import os
 import re
 import ssl
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -238,6 +239,15 @@ _cluster = None
 _bucket = None
 _collection = None
 
+#: Serialises creation of the cached cluster (docs/questions.md Q-001, decided 2026-11-05).
+#:
+#: Handlers run on worker threads (docs/THREADING_MODEL.md), so two calls that arrive
+#: together before the first connection exists used to both build a Cluster. The last
+#: assignment won and the other cluster was never closed, which leaked a connection on
+#: every first-use race. A plain Lock is enough: the second caller waits for the first
+#: and then takes the cached result.
+_cluster_lock = threading.Lock()
+
 
 def get_sdk_cluster():
     """Return a ready Cluster, WITHOUT opening any bucket.
@@ -272,7 +282,22 @@ def get_sdk_cluster():
     global _cluster
     if _cluster is not None:
         return _cluster
+    # Double-checked: the unlocked read above keeps the common case (a cluster already
+    # cached) free of the lock, and the check inside the lock stops a second thread that
+    # was waiting from building again once the first has published its cluster.
+    with _cluster_lock:
+        if _cluster is None:
+            _cluster = _connect_cluster()
+        return _cluster
 
+
+def _connect_cluster():
+    """Build a Cluster, wait until it is ready, and return it. Caller holds `_cluster_lock`.
+
+    Kept apart from `get_sdk_cluster` so the lock covers the whole build. It does not touch
+    the cache: a failure raises with the cache still empty, so the next call retries and the
+    lock is released by the caller's `with` block.
+    """
     try:
         from datetime import timedelta
 
@@ -324,8 +349,7 @@ def get_sdk_cluster():
             cluster.close()
         raise
 
-    _cluster = cluster
-    return _cluster
+    return cluster
 
 
 def get_sdk_connection():

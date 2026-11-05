@@ -1,5 +1,11 @@
 """handlers/eventing.py — Phase 6c: Couchbase Eventing service tools.
 
+Component: the `eventing` tool group: Eventing function lifecycle, deployment and statistics.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (10 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 3 test file(s)
+Callees: `handlers.egress`, `handlers.shared`
+
 Couchbase Eventing runs JavaScript functions that react to KV mutations (or
 timers). The service exposes a REST API for function lifecycle:
 

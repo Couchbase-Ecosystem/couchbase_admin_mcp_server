@@ -1,5 +1,12 @@
 """handlers/backup.py — Backup / Restore service.
 
+Component: the `backup` tool group: the Backup Service on a self-managed cluster (repositories,
+    backups, restores).
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (7 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 3 test file(s)
+Callees: `handlers.egress`, `handlers.shared`
+
 Split out of the original monolithic ``extended.py`` for the standalone admin
 server: the data-plane tools (``cb_transaction_run``, ``cb_analytics_query``)
 stay in the CRUD server; only the ``admin_backup_*`` tools live here.

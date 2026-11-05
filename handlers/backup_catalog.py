@@ -1,6 +1,14 @@
 """
 handlers/backup_catalog.py — user-defined metadata for backups, on both planes.
 
+Component: the `backup_catalog` tool group: user-defined metadata about backups, on both control
+    planes.
+Spec: docs/spec.md S9 (fixtures and the backup catalogue); docs/spec.md S3 step 8 (the handler
+    runs after every gate).
+Main items: `TOOLS` (6 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 1 test file(s)
+Callees: `handlers.shared`, `logging_config`
+
 THE PROBLEM THIS SOLVES
 =======================
 The requirement was for backups carrying tags, retrievable by queries like

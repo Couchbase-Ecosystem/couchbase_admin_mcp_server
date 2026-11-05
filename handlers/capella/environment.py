@@ -1,6 +1,14 @@
 """
 handlers/capella/environment.py — ephemeral test-environment orchestration.
 
+Component: ephemeral Capella test-environment orchestration (create, use, tear down) with the
+    unattended-write guardrails.
+Spec: docs/spec.md S8 (Capella operations), S3 step 8.
+Main items: `TOOLS` (9 tools) and `handle`.
+Callers: `handlers/capella/__init__.py`, `handlers/capella/fixture.py`; 12 test file(s)
+Callees: `authz`, `handlers.capella.client`, `handlers.capella.guardrails`,
+    `handlers.capella.spec`, `handlers.shared`, `logging_config`
+
 THE PROBLEM
 ===========
 "Stand up a Capella cluster, point a mobile app at it, tear it down" is not one

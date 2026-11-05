@@ -1,5 +1,11 @@
 """handlers/xdcr.py — Cross Datacenter Replication (XDCR) admin tools.
 
+Component: the `xdcr` tool group: cross-datacenter replication references and replications.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (10 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
+Callees: `handlers.egress`, `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. Replication delete and reference delete marked destructive.
 - Phase 2: URL encoding for replication_id moved inside handler (caller no longer

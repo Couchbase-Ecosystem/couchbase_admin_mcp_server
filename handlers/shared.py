@@ -1,6 +1,25 @@
 """
 shared.py — connection pool, HTTP admin client, response helpers, safety primitives.
 
+Component: what every handler uses: the SDK connection cache, the REST client, statement guards,
+    confirmation, redaction and the response helpers.
+Spec: docs/spec.md S3 steps 5 and 8, S7 (the error marker); docs/THREADING_MODEL.md;
+    docs/questions.md Q-001 (no lock on the cluster cache), Q-002 (the cycle with
+    `logging_config`).
+Main items: `get_sdk_cluster`, `admin_request`, `admin_request_json`, `require_confirmation`,
+    the statement guards (`assert_read_only_statement` and others), `redact`, `ok`, `err`,
+    `get_env` and the `env_*` helpers.
+Callers: `audit.py`, `dryrun.py`, `gui/gui_server.py`, `handlers/backup.py`,
+    `handlers/backup_catalog.py`, `handlers/buckets.py`, `handlers/capella/__init__.py`,
+    `handlers/capella/client.py`, `handlers/capella/environment.py`,
+    `handlers/capella/fixture.py`, `handlers/cluster.py`, `handlers/collections.py`,
+    `handlers/diagnostics.py`, `handlers/eight_x.py`, `handlers/encryption.py`,
+    `handlers/eventing.py`, `handlers/fixture.py`, `handlers/indexes.py`,
+    `handlers/mcp_status.py`, `handlers/search_admin.py`, `handlers/security.py`,
+    `handlers/stats.py`, `handlers/xdcr.py`, `logging_config.py`, `profile_config.py`,
+    `server.py`; 29 test file(s)
+Callees: `logging_config`
+
 Changes from upstream:
 - Phase 1 (safety):
   * Read-only mode (CB_ADMIN_READ_ONLY_MODE) with classification helpers

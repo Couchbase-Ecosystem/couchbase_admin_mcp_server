@@ -1,5 +1,13 @@
 """Fixture mechanics that belong to no control plane.
 
+Component: fixture mechanics that belong to no control plane: manifests, hashing, safe path
+    resolution, statement export.
+Spec: docs/spec.md S9 (fixtures and the backup catalogue).
+Main items: `read_manifest`, `export_statement`, `schema_problem`, `resolve_under_root`,
+    `sha256_file`, `count_lines`, `parse_timestamp`, `strip_index_nodes`.
+Callers: `handlers/capella/fixture.py`, `handlers/fixture.py`; 3 test file(s)
+Callees: none
+
 WHY THIS MODULE EXISTS
 ======================
 A fixture is a named, tagged, hash-verified capture of a dataset: a manifest

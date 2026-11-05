@@ -1,5 +1,11 @@
 """handlers/encryption.py — Phase 5 deferred: DARE + KMIP.
 
+Component: the `encryption` tool group: encryption at rest and KMIP.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (4 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
+Callees: `handlers.egress`, `handlers.shared`
+
 Couchbase 8.x adds first-class Data-at-Rest Encryption (DARE) with optional
 KMIP key-management integration. The cluster-level configuration is exposed
 via REST endpoints under /settings/security/encryptionAtRest and

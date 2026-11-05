@@ -1,5 +1,11 @@
 """handlers/stats.py — Statistics, diagnostics, events, and system info tools.
 
+Component: the `stats` tool group: statistics, events, diagnostics and system information.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (10 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 1 test file(s)
+Callees: `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. admin_internal_settings_set marked destructive
   (can wedge a cluster if misconfigured). admin_query_settings_set treated as

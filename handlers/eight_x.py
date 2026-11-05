@@ -1,5 +1,12 @@
 """handlers/eight_x.py — Phase 5: Couchbase 8.x-specific first-class tools.
 
+Component: the `eight_x` tool group: tools that exist only on Couchbase 8.x (vector indexes,
+    user lock, conflict log).
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (6 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
+Callees: `handlers.shared`
+
 All tools in this module call `_require_8x()` at runtime. If the cluster is
 not 8.x (or version detection fails), they return a structured error rather
 than constructing SQL++ that the cluster will reject anyway.

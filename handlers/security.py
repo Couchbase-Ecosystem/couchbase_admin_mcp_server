@@ -1,5 +1,12 @@
 """handlers/security.py — Users, groups, roles, RBAC, audit, certs, password policy.
 
+Component: the `security` tool group: users, groups, roles, RBAC, audit settings, certificates,
+    password policy.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (17 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
+Callees: `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. User/group deletes, password changes, and
   security-settings writes marked destructive.

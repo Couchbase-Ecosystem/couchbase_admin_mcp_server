@@ -1,5 +1,11 @@
 """handlers/search_admin.py — Full-Text Search index administration.
 
+Component: the `search_admin` tool group: Full-Text Search index administration.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (9 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 1 test file(s)
+Callees: `handlers.egress`, `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. Delete and ingest pause/resume marked destructive.
 - Phase 2: Uses unified admin_request_json for JSON-body endpoints.

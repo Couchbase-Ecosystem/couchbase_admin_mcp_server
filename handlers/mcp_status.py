@@ -1,5 +1,12 @@
 """handlers/mcp_status.py — Server/MCP introspection tools.
 
+Component: the `mcp_status` tool group: the server describing itself (configuration summary, the
+    tools it exposes, one tool's schema). Read only, no cluster needed.
+Spec: docs/spec.md S1, S3 step 8; docs/questions.md Q-002 (the cycle with `server`).
+Main items: `TOOLS` (3 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
+Callees: `dryrun`, `handlers.shared`, `mcp_compat`, `server`
+
 These tools report on the MCP server itself (the Python process running
 `server.py`), not the Couchbase cluster. They're useful for verifying that
 configuration was applied correctly and for diagnosing why a tool is missing

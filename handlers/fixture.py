@@ -1,5 +1,11 @@
 """handlers/fixture.py — fixtures on Enterprise Edition (`admin_fixture_*`).
 
+Component: the `fixture` tool group: fixtures on Enterprise Edition (`admin_fixture_*`).
+Spec: docs/spec.md S9 (fixtures and the backup catalogue), S3 step 8.
+Main items: `TOOLS` (4 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 4 test file(s)
+Callees: `handlers.fixture_core`, `handlers.shared`, `logging_config`
+
 WHAT A FIXTURE IS, AND WHY EE WANTS ONE
 =======================================
 A fixture is a named, tagged, hash-verified capture of a dataset: a manifest

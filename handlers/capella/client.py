@@ -1,6 +1,15 @@
 """
 handlers/capella/client.py — HTTP client for the Capella Management API v4.
 
+Component: the HTTP client for the Capella Management API v4: path building, Bearer
+    authentication, error mapping and paging.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `capella_request`, `capella_list`, `build_path`, `quote_segment`,
+    `extract_placeholders`, `base_url`, `CapellaError`, `capella_error_code`.
+Callers: `handlers/capella/__init__.py`, `handlers/capella/environment.py`,
+    `handlers/capella/fixture.py`, `handlers/capella/spec.py`; 9 test file(s)
+Callees: `handlers.shared`, `logging_config`
+
 DIFFERENT FROM ``handlers.shared.admin_request``
 ===============================================
     shared.admin_request  ->  https://<node>:18091/pools/...             Basic

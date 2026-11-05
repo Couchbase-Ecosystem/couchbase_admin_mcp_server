@@ -1,5 +1,12 @@
 """handlers/diagnostics.py — Phase 4: schema discovery, query analytics, EXPLAIN.
 
+Component: the `diagnostics` tool group: schema discovery, query analytics, EXPLAIN, index
+    advice.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (10 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 4 test file(s)
+Callees: `handlers.shared`, `logging_config`
+
 Adds the tools the official Couchbase MCP exposes that this MCP was missing:
 - cb_get_schema_for_collection         (schema sampling via OBJECT_PAIRS)
 - cb_index_advisor                      (wraps the ADVISOR() function)

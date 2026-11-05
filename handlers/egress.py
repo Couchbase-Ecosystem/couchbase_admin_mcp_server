@@ -1,6 +1,15 @@
 """
 handlers/egress.py — allowlist for destinations the CLUSTER is asked to contact.
 
+Component: the allowlist for destinations the cluster is asked to contact: log upload host, XDCR
+    hostnames, node-add host, KMIP host and alert mail host.
+Spec: docs/spec.md S10 (egress allowlist), S3 step 8 (`denied_egress`).
+Main items: `assert_egress_allowed`, `guard_host_like_fields`, `guard_nested_host_fields`,
+    `split_host`, `describe_policy`, `EgressDeniedError`.
+Callers: `handlers/backup.py`, `handlers/cluster.py`, `handlers/encryption.py`,
+    `handlers/eventing.py`, `handlers/search_admin.py`, `handlers/xdcr.py`; 5 test file(s)
+Callees: none
+
 THE PROBLEM
 ===========
 Several admin operations take a hostname from the caller and make Couchbase

@@ -1,6 +1,13 @@
 """
 handlers/capella/spec_pending.py — Capella v4 operations written but NOT shipped.
 
+Component: Capella v4 operations that are written but not shipped, kept apart so they cannot be
+    registered by accident.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: data only: the pending operation entries.
+Callers: `docs/generate_tools_json.py`, `scripts/verify_capella_paths.py`; 4 test file(s)
+Callees: `handlers.capella.spec`
+
 Kept in a SEPARATE module from spec.py for two reasons:
 
   * ``OPS`` in spec.py is the shipped registry. ``build_tools()`` and

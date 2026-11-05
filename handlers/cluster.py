@@ -1,5 +1,12 @@
 """handlers/cluster.py — Cluster info, nodes, rebalance, failover, auto-failover, server groups.
 
+Component: the `cluster` tool group: cluster info, nodes, rebalance, failover, auto-failover,
+    server groups.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (29 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 4 test file(s)
+Callees: `handlers.egress`, `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. Failover, rebalance, node remove, internal/memory
   settings marked destructive.

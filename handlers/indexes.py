@@ -1,5 +1,12 @@
 """handlers/indexes.py — Query Service index management via N1QL system catalog + Index REST API.
 
+Component: the `indexes` tool group: index management through the system catalog and the index
+    REST API.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (6 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
+Callees: `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. Critical hardening — admin_index_create's raw
   `statement` parameter now only accepts CREATE INDEX / CREATE PRIMARY INDEX /

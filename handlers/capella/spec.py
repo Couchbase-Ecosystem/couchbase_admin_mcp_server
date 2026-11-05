@@ -2,6 +2,16 @@
 handlers/capella/spec.py — declarative registry of the Capella v4 operations used
 by the ephemeral-environment workflow.
 
+Component: the declarative registry of Capella v4 operations. Each entry is one tool; nothing
+    ships without a status from an observed call.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `Op`, `build_tools`, `build_input_schema`.
+Callers: `docs/generate_tools_json.py`, `handlers/capella/__init__.py`,
+    `handlers/capella/environment.py`, `handlers/capella/fixture.py`,
+    `handlers/capella/spec_pending.py`, `scripts/verify_capella_paths.py`,
+    `scripts/verify_mcp_surface.py`; 6 test file(s)
+Callees: `handlers.capella.client`
+
 WHY DECLARATIVE
 ===============
 Each operation is one ``Op`` record: name, verb, path template, request-body

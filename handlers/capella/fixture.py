@@ -1,6 +1,14 @@
 """
 handlers/capella/fixture.py — portable, taggable Capella fixtures.
 
+Component: portable, taggable Capella fixtures, moved through the Data API.
+Spec: docs/spec.md S8 (Capella operations), S9 (fixtures and the backup catalogue).
+Main items: `TOOLS` (4 tools) and `handle`.
+Callers: `handlers/capella/__init__.py`; 4 test file(s)
+Callees: `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.fixture_core`,
+    `handlers.shared`, `logging_config`
+
 WHAT A FIXTURE IS, AND IS NOT
 =============================
 A fixture is a named, versioned, tagged dataset: a manifest plus a JSON Lines

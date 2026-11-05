@@ -1,5 +1,11 @@
 """handlers/buckets.py — Bucket & sample-bucket admin tools.
 
+Component: the `buckets` tool group: bucket and sample-bucket administration.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (10 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`; 1 test file(s)
+Callees: `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations on every tool. Destructive ops marked.
 - Phase 2: admin_sample_buckets_install now routes through admin_request_json

@@ -1,6 +1,15 @@
 """
 handlers/capella — Couchbase Capella control plane.
 
+Component: the `capella` tool group: Capella control-plane tools. `TOOLS` is the declarative
+    operations from `spec.py` plus the tools of `environment.py` and `fixture.py`.
+Spec: docs/spec.md S8 (Capella operations), S3 step 8.
+Main items: `TOOLS` (138 tools) and `handle`.
+Callers: `docs/generate_tools_json.py`, `gui/gui_server.py`, `handlers/capella/environment.py`,
+    `handlers/capella/fixture.py`, `scripts/verify_mcp_surface.py`, `server.py`; 22 test file(s)
+Callees: `handlers.capella.client`, `handlers.capella.environment`, `handlers.capella.fixture`,
+    `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.shared`, `logging_config`
+
 Two layers, deliberately separated:
 
   PRIMITIVES (spec.py)      One tool per Capella v4 operation. Thin, predictable,

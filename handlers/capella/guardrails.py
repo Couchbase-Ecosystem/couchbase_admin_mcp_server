@@ -1,6 +1,15 @@
 """
 handlers/capella/guardrails.py — blast-radius controls for unattended Capella writes.
 
+Component: blast-radius controls for unattended Capella writes: which organizations, projects
+    and names an agent may touch.
+Spec: docs/spec.md S8 (Capella operations), S3 step 8 (`denied_guardrail`).
+Main items: `Policy`, `load_policy`, `resolve_org`, `assert_project_allowed`,
+    `assert_name_allowed`, `assert_managed`, `is_managed_name`, `GuardrailError`.
+Callers: `handlers/capella/__init__.py`, `handlers/capella/environment.py`,
+    `handlers/capella/fixture.py`, `scripts/claim_env_marker.py`, `server.py`; 14 test file(s)
+Callees: `logging_config`
+
 THE PROBLEM THIS SOLVES
 =======================
 The ephemeral-environment workflow is inherently destructive and runs with no

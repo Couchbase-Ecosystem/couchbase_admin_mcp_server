@@ -1,5 +1,11 @@
 """handlers/collections.py — Scopes and Collections admin tools.
 
+Component: the `collections` tool group: scopes and collections.
+Spec: docs/spec.md S3 step 8 (the handler runs after every gate)
+Main items: `TOOLS` (5 tools) and `handle`.
+Callers: `gui/gui_server.py`, `server.py`
+Callees: `handlers.shared`
+
 Changes from upstream:
 - Phase 1: ToolAnnotations. Scope/collection deletes marked destructive.
 - Phase 2: Structured err() returns.

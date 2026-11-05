@@ -1,6 +1,13 @@
 """
 auth/session.py — Server-side session management for the GUI OAuth flow.
 
+Component: the console's server-side session store for the browser sign-in flow.
+Spec: docs/spec.md S6 (transports); the console sign-in flow has no section of its own yet.
+Main items: `create_session`, `get_session`, `update_session`, `delete_session`,
+    `validate_startup`, `cookie_max_age`, `cookie_is_secure`.
+Callers: `gui/gui_server.py`; 1 test file(s)
+Callees: `tls_config`
+
 Design:
   - The browser receives a short, opaque session ID as a Secure HttpOnly cookie.
   - Token material (access_token, refresh_token, id_token, claims) is stored

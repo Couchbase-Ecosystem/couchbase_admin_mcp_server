@@ -2,6 +2,22 @@
 Couchbase MCP Server (Extended, hardened)
 =========================================
 
+Component: the MCP entry point. It registers every tool, decides each call, and starts the stdio
+    or HTTP transport.
+Spec: docs/spec.md S2 (one container), S3 (how a tool call is decided), S4 (audit record), S6
+    (transports), S7 (protocol error flag); docs/questions.md Q-002 (the cycle with
+    `handlers.mcp_status`), Q-003 (audit vocabulary).
+Main items: `list_tools`, `call_tool` (the decision order in S3), `main`.
+Callers: `docs/generate_tools_json.py`, `handlers/mcp_status.py`; 15 test file(s)
+Callees: `audit`, `auth.oidc`, `auth.request_auth`, `auth.scope_gate`, `authz`, `deployment`,
+    `dryrun`, `handlers.backup`, `handlers.backup_catalog`, `handlers.buckets`,
+    `handlers.capella.guardrails`, `handlers.cluster`, `handlers.collections`,
+    `handlers.diagnostics`, `handlers.eight_x`, `handlers.encryption`, `handlers.eventing`,
+    `handlers.fixture`, `handlers.indexes`, `handlers.mcp_status`, `handlers.search_admin`,
+    `handlers.security`, `handlers.shared`, `handlers.stats`, `handlers.xdcr`, `logging_config`,
+    `mcp_compat`, `profile_config`, `tls_config`; the `mcp` SDK, and `starlette` and `uvicorn` for the
+    HTTP transport.
+
 Exposes the full Couchbase data-plane AND admin REST API as MCP tools, with
 defense-in-depth safety primitives modeled after the official Couchbase MCP.
 

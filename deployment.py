@@ -1,6 +1,14 @@
 """
 deployment.py — deployment-mode detection and capability gating.
 
+Component: detects whether the target is self-managed or Capella and says which tools are
+    available in that mode.
+Spec: docs/spec.md S3 step 2 (`denied_deployment`), S8 (Capella operations).
+Main items: `detect_mode`, `tool_is_available`, `unavailable_reason`, `declared_mode_error`,
+    `gating_enabled`, `describe`.
+Callers: `docs/generate_tools_json.py`, `gui/gui_server.py`, `server.py`; 4 test file(s)
+Callees: `logging_config`
+
 WHY THIS MODULE EXISTS
 ======================
 This server was built for self-managed Couchbase Enterprise Server. Nearly

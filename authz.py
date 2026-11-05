@@ -1,6 +1,14 @@
 """
 authz.py — the confirmation/ceiling decision, in ONE place.
 
+Component: the one place that decides scope, hard ceiling, automation and confirmation, shared
+    by the MCP path and the console.
+Spec: docs/spec.md S3 steps 3 to 5, S5 (profiles).
+Main items: `evaluate` and its `Decision`, `hard_ceiling_tools`, `human_is_present`,
+    `caller_context`, `caller_evidence`.
+Callers: `gui/gui_server.py`, `handlers/capella/environment.py`, `server.py`; 2 test file(s)
+Callees: `profile_config`
+
 WHY THIS MODULE EXISTS
 ======================
 There are two dispatch paths into the handlers: the MCP tool dispatch in server.py

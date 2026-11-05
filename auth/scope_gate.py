@@ -1,6 +1,15 @@
 """
 auth/scope_gate.py — Per-tool OAuth scope enforcement for the MCP call path.
 
+Component: holds the caller's claims for the current call and checks them against what each tool
+    requires.
+Spec: docs/spec.md S3 step 3 (scope), S5 (profiles).
+Main items: `check_scope`, `denial_for`, `principal_of`, `is_read_side`,
+    `session_has_automation_scope`, `set_token_claims`, `current_claims`, `clear_token_claims`,
+    `configure`.
+Callers: `gui/gui_server.py`, `scripts/idp_lab_assertions.py`, `server.py`; 9 test file(s)
+Callees: `auth.request_auth`, `mcp_compat`
+
 KISS design:
   * When no validated token is in context (stdio transport, or HTTP with OAuth
     not configured), enforcement is a no-op. Same code path serves both modes.

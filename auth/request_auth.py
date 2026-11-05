@@ -1,6 +1,14 @@
 """
 auth/request_auth.py — resolve the calling principal INSIDE the dispatch task.
 
+Component: resolves the caller's token claims from the current HTTP request, inside the dispatch
+    task.
+Spec: docs/spec.md S6 (transports), S3 step 3.
+Main items: `resolve_claims`, `current_request`, `request_source`, `transport_is_http`,
+    `reset_cache`.
+Callers: `auth/scope_gate.py`, `server.py`; 5 test file(s)
+Callees: `auth.oidc`
+
 THE BUG THIS REPLACES
 =====================
 The previous design validated the bearer token in ASGI middleware and stashed the

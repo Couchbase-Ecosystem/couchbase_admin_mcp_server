@@ -1,6 +1,15 @@
 """
 auth/oidc.py — Generic OIDC / OAuth 2.0 provider abstraction.
 
+Component: OpenID Connect client: token validation against the issuer's keys, the
+    authorization-code flow with PKCE, and the client-credentials token.
+Spec: docs/spec.md S5 (enterprise profile needs an OAuth issuer), S6 (transports).
+Main items: `validate_token`, `userinfo_from_claims`, `build_authorization_url`,
+    `generate_pkce_pair`, `exchange_code`, `refresh_access_token`, `client_credentials_token`,
+    `gate_unknown_kid`.
+Callers: `auth/request_auth.py`, `gui/gui_server.py`, `server.py`; 3 test file(s)
+Callees: no module of this repository; the `PyJWT` and `requests` libraries.
+
 Supports:
   - Authorization Code + PKCE  (GUI browser login)
   - Client Credentials          (machine-to-machine API access)

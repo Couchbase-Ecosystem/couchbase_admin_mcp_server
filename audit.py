@@ -1,6 +1,15 @@
 """
 audit.py — the accountability record for an autonomous administration chain.
 
+Component: builds and writes the audit record for every decision, allowed or refused.
+Spec: docs/spec.md S4 (audit record), S7 (the error marker `classify_result` shares with the
+    server); docs/questions.md Q-003 (the `build_record` docstring lists nine of the 14
+    decisions).
+Main items: `build_record`, `emit`, `emit_tool_call`, `emit_auth_failure`, `classify_result`,
+    `sanitize_correlation`, `audit_sink_error`.
+Callers: `gui/gui_server.py`, `server.py`; 11 test file(s)
+Callees: `handlers.shared`, `logging_config`
+
 WHAT THIS HAS TO ANSWER
 =======================
 In the intended deployment there is deliberately no human at the moment of

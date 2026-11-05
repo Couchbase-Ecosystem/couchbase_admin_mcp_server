@@ -2,6 +2,13 @@
 r"""
 probe_onoff_schedule.py - why does POST .../onOffSchedule answer 500?
 
+Component: finds why the cluster on/off schedule call answers 500. Without `--perform` it sends
+    nothing, and no candidate can power a cluster down.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 WHY THIS EXISTS
 ===============
 capella_cluster_onoff_schedule_set has now failed the same way on two separate

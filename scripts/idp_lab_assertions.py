@@ -1,5 +1,13 @@
 """Drive the running MCP server with real IdP-issued tokens.
 
+Component: drives the running server with real identity-provider tokens to check scope,
+    automation, hard ceiling and the audit principal.
+Spec: docs/spec.md S3 (how a tool call is decided), S4 (audit record), S5 (profiles);
+    docs/OKTA_LAB.md.
+Main items: `cmd_tools`, `cmd_call`, `post`, `initialize`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: `auth.scope_gate`
+
 WHAT THIS IS FOR
 ────────────────
 The authorization model — scope gate, automation mode, hard ceiling, audit

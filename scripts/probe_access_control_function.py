@@ -3,6 +3,13 @@ r"""
 probe_access_control_function.py - what body shape does
 PUT .../appEndpoints/{keyspace}/accessControlFunction actually want?
 
+Component: finds what body shape the App Endpoint access-control-function call accepts. Without
+    `--perform` it sends nothing.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `main`, `resolve_credentials`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 WHY THIS EXISTS
 ===============
 capella_app_endpoint_access_control_function_set has now been refused in two

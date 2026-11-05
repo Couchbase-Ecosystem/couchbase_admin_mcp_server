@@ -1,5 +1,13 @@
 """Restore a Capella managed backup INTO A DIFFERENT CLUSTER, through the MCP tool.
 
+Component: restores a Capella managed backup into a different cluster, through the MCP tool.
+    Previews by default; `--perform` makes the changes.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `main_async`, `main`, and the `Restore` steps (`clusters`, `preflight`,
+    `ensure_bucket`).
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 WHAT THIS CLOSES
 ================
 `capella_backup_restore` is the last tool in this server whose behaviour was

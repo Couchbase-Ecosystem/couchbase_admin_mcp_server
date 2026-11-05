@@ -2,6 +2,13 @@
 r"""
 probe_data_api.py - measure the Data API endpoints, and turn the Data API on.
 
+Component: measures the Capella Data API endpoints and turns the Data API on.
+Spec: docs/spec.md S8 (Capella operations); docs/spec.md S9 (fixtures need it);
+    docs/questions.md Q-004 (scripts: dry-run modes and usage).
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 WHY
 ===
 Three fixture capabilities are blocked on one dependency: document export,

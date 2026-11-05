@@ -1,5 +1,13 @@
 """Find a connection string the SDK can actually use against a local cluster.
 
+Component: finds a connection string the SDK can use against a local containerised cluster,
+    whose advertised node address is unreachable from outside.
+Spec: docs/spec.md S2 (one control plane); docs/questions.md Q-004 (scripts: dry-run modes and
+    usage).
+Main items: `main`, `variants`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 WHY THIS EXISTS
 ===============
 A containerised Couchbase advertises its node address from inside the container

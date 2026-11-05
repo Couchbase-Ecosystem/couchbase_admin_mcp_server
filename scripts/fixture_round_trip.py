@@ -1,5 +1,12 @@
 """Prove a fixture family by round-tripping it: export, import elsewhere, export back, compare.
 
+Component: proves a fixture family by exporting, importing elsewhere, exporting back and
+    comparing. Without `--perform` it prints the plan and calls nothing.
+Spec: docs/spec.md S9 (fixtures and the backup catalogue); docs/FIXTURE_DESIGN.md.
+Main items: `run`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 WHY THIS EXISTS, AND WHY NOTHING ELSE WILL DO
 =============================================
 On 2026-09-14 the Capella fixture exporter was writing the WRONG DOCUMENT KEY for

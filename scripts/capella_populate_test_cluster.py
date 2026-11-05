@@ -1,5 +1,12 @@
 """Create, through the MCP tools themselves, the objects the surface check needs.
 
+Component: creates, through the MCP tools themselves, the objects the surface check needs on a
+    Capella cluster. Previews by default; `--perform` makes the changes.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `main_async`, `main`, and the `Populate` steps.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 WHY THIS EXISTS
 ===============
 `scripts/verify_mcp_surface.py --write-preview` reports two different kinds of

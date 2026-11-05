@@ -1,5 +1,13 @@
 """What would it take to make Capella backup work end to end?
 
+Component: read-only: works out what it would take to run the Capella backup write path end to
+    end.
+Spec: docs/spec.md S8 (Capella operations); docs/questions.md Q-004 (scripts: dry-run modes and
+    usage).
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 READ-ONLY. Nothing here creates, deletes or restores anything. It answers the
 questions that decide whether the write path CAN be tested, before anyone tries
 and misreads a plan restriction as a broken tool.

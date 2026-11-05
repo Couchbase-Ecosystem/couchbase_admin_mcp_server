@@ -2,6 +2,13 @@
 r"""
 claim_env_marker.py - tag an existing cluster as a managed environment.
 
+Component: tags an existing Capella cluster as a managed environment by writing the marker into
+    its description. Without `--perform` it prints the body it would send.
+Spec: docs/spec.md S8 (Capella operations) (`capella_env_list` reads the marker).
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: `handlers.capella.guardrails`
+
 WHY THIS IS A SCRIPT AND NOT A HAND-BUILT TOOL CALL
 ===================================================
 capella_env_list decides what is a "managed environment" by parsing an

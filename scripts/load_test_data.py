@@ -1,5 +1,11 @@
 """Put real data into `mcptest` so the admin tools have something to act on.
 
+Component: puts real data into the `mcptest` bucket so the admin tools have something to act on.
+Spec: docs/spec.md S1 (surface); docs/questions.md Q-004 (scripts: dry-run modes and usage).
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 WHY THIS EXISTS
 ===============
 A backup of an empty bucket succeeds and proves nothing. So do the stats tools,

@@ -1,5 +1,12 @@
 """Create, through the MCP tools themselves, the objects the EE surface needs.
 
+Component: creates, through the MCP tools themselves, the objects the Enterprise Edition surface
+    check needs. Previews by default; `--perform` makes the changes.
+Spec: docs/spec.md S9 (fixtures and the backup catalogue).
+Main items: `main_async`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 THE SAME ARGUMENT AS THE CAPELLA SCRIPT, ON THE OTHER SURFACE
 =============================================================
 `scripts/verify_mcp_surface.py --write-preview` reports three kinds of SKIPPED,

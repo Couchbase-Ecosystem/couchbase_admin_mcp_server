@@ -1,5 +1,12 @@
 """Call ONE tool through a real MCP client and print its WHOLE response.
 
+Component: calls one tool through a real MCP client and prints its whole response. Writes need
+    `--perform` and the tool's own `confirm`.
+Spec: docs/spec.md S3 (every gate applies); scripts/README.md.
+Main items: `run`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: `mcp_compat`; the `mcp` client.
+
 WHY THIS EXISTS
 ===============
 Every defect this project has found was found by reading a response, and most

@@ -1,5 +1,12 @@
 """Create a ONE-WAY XDCR replication between two Capella clusters, by name.
 
+Component: creates a one-way XDCR replication between two named Capella clusters. Previews by
+    default; `--perform` makes the changes.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `main_async`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 WHY A SEPARATE SCRIPT
 =====================
 Direction is the whole safety property of a replication, and it is not something

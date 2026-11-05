@@ -1,5 +1,13 @@
 """Re-check the mutations that SURVIVED, plus the round-3 fixes.
 
+Component: re-checks the mutations that survived earlier, plus the round-3 fixes, in a temporary
+    copy of the repository.
+Spec: docs/spec.md S3 (the gates it protects); docs/questions.md Q-004 (scripts: dry-run modes
+    and usage).
+Main items: `run`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 Targeted test files and a short per-run timeout, so this finishes in minutes rather
 than stalling on a full-suite run per mutation.
 """

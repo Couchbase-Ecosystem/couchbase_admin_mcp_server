@@ -1,6 +1,13 @@
 """
 scripts/verify_mcp_surface.py — drive this server the way a client does.
 
+Component: drives the server the way a client does, over stdio, and reports whether every tool
+    can be called: start-up, gating, confirmation, dry run, argument marshalling and audit.
+Spec: docs/spec.md S1, S3, S4; scripts/README.md.
+Main items: `main`, `report`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: `handlers.capella.spec`; the `mcp` client.
+
 WHAT THIS PROVES THAT verify_capella_paths.py DOES NOT
 =====================================================
 ``verify_capella_paths.py`` speaks HTTP to the Capella control plane directly.

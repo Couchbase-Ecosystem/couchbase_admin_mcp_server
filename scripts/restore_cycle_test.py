@@ -1,5 +1,12 @@
 """Restore, through a real MCP client. The half that has never been run.
 
+Component: restores through a real MCP client, the half of the backup cycle that had not been
+    run. Previews by default; `--perform` makes the changes.
+Spec: docs/spec.md S1 (surface), S3.
+Main items: `main_async`, `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 WHY THIS EXISTS
 ===============
 Backup is verified end to end on both surfaces. RESTORE is not verified at all

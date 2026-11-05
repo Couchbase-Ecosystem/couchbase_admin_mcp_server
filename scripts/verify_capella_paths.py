@@ -2,6 +2,13 @@
 """
 verify_capella_paths.py — confirm every Capella v4 path this server uses is real.
 
+Component: checks over HTTP that every Capella v4 path the server uses is real, and reports how
+    each operation answered.
+Spec: docs/spec.md S8 (Capella operations); docs/CAPELLA_SURFACE_TODO.md.
+Main items: `main`, `Result`, `_run_probes`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: `handlers.capella.spec`, `handlers.capella.spec_pending`
+
 WHY THIS EXISTS
 ===============
 The 61 operations in handlers/capella/spec.py are tagged by provenance:

@@ -1,5 +1,14 @@
 """Mutation-check the round-4 fixes and the test-quality gaps independent
-verification found (controls that could be deleted with all 504 tests green)."""
+verification found (controls that could be deleted with all 504 tests green).
+
+Component: mutation check of the round-4 fixes: breaks one guard in a temporary copy of the
+    repository, runs the tests that should notice, and reports any that stay green.
+Spec: docs/spec.md S3 (the gates it protects); docs/questions.md Q-004 (scripts: dry-run modes
+    and usage).
+Main items: `run`, `main`; `MutationTimeoutError`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+"""
 
 from __future__ import annotations
 

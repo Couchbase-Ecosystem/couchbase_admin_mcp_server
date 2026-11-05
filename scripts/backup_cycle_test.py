@@ -1,5 +1,12 @@
 """Drive a whole backup cycle through a real MCP client. Level 3.
 
+Component: drives a whole backup cycle on a self-managed cluster through a real MCP client
+    (level 3). Previews by default; `--perform` makes the changes.
+Spec: docs/spec.md S1 (surface); scripts/README.md.
+Main items: `main_async`, `main`, `say`, `check`, `call`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 WHAT THIS IS FOR
 ================
 `verify_mcp_surface.py` proves a client can CALL every tool -- startup, gating,

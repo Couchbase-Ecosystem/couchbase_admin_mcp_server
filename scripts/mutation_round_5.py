@@ -1,5 +1,13 @@
 """Mutation-check the session-cookie fixes and the mcp version-compat accessors.
 
+Component: mutation check of the session-cookie fixes and the mcp version-compat accessors, in a
+    temporary copy of the repository.
+Spec: docs/spec.md S6 (transports), S3; docs/questions.md Q-004 (scripts: dry-run modes and
+    usage).
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 Same contract as rounds 1-4: break one guard, run the suite that is supposed to notice, and
 report anything that stays green. A guard whose deletion nothing detects is decoration.
 

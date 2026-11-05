@@ -2,6 +2,13 @@
 r"""
 probe_data_api_kv.py - measure the Data API's KV DOCUMENT endpoints.
 
+Component: measures the Data API's key-value document endpoints. With `--perform` it creates,
+    upserts and deletes a probe document.
+Spec: docs/spec.md S8 (Capella operations); docs/spec.md S9.
+Main items: `main`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none
+
 WHY
 ===
 capella_fixture_import creates structure and indexes and does NOT load documents,

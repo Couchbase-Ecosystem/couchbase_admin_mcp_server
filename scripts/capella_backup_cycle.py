@@ -1,5 +1,12 @@
 """Drive a Capella managed-backup cycle through a real MCP client.
 
+Component: drives a Capella managed-backup cycle through a real MCP client. Previews by default;
+    `--perform` makes the changes.
+Spec: docs/spec.md S8 (Capella operations).
+Main items: `main_async`, `main`, `say`, `check`, `call`.
+Callers: none; run by hand from the repository root; see scripts/README.md
+Callees: none; the `mcp` client.
+
 THE ONE THING THIS SETTLES
 ==========================
 `handlers/capella/spec.py` records these statuses, observed live:

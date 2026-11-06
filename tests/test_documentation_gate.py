@@ -61,6 +61,7 @@ GATE = {
     "D14-folder-readme": "fail",
     "D7-docs-name-live-things": "fail",
     "D5-clean-room": "fail",
+    "scripts-preview": "fail",
 }
 
 #: The handover set. Every file must exist and be linked from docs/README.md (D6, D9).
@@ -83,6 +84,35 @@ README_FOLDERS = ["auth", "deploy", "docs", "gui", "handlers", "scripts", "tests
 #: The tool groups that need one tested example each (D12, decision Q5).
 #: Taken from tests/test_handler_contract.py so the two lists cannot disagree.
 EXAMPLE_TEST = "tests/test_tool_group_examples.py"
+
+
+#: Scripts that change nothing outside themselves, each with the reason, so a script cannot
+#: be added here without saying why it needs no preview (scripts rule, decided 2026-11-06 in
+#: docs/plans/script-dry-run-spec.md). A script not here must carry its preview flag.
+READ_ONLY_SCRIPTS = {
+    "capella_backup_readiness.py": "read-only by its own header",
+    "probe_local_sdk.py": "opens connections only",
+    "verify_mcp_surface.py": "drives the server over stdio; the server's dry run intercepts writes",
+    "idp_lab_assertions.py": "calls tools through the running server, so its gates apply",
+    "mutation_rounds_1_3.py": "changes only a temporary copy of the repository",
+    "mutation_round_4.py": "changes only a temporary copy of the repository",
+    "mutation_round_5.py": "changes only a temporary copy of the repository",
+    "find-couchbase-clusters.ps1": "GET requests only",
+    "measure-egress.ps1": "GET requests only",
+    "probe_backup_paths.ps1": "GET requests only",
+    "probe_backup_repository.ps1": "GET and OPTIONS requests only",
+    "probe_rest_paths.ps1": "GET requests only",
+    "run-mcp-evidence.ps1": "writes its own evidence files; its write phase runs the server in dry-run",
+}
+
+#: Scripts whose preview is an action flag other than `--perform`: without the flag they only read.
+ACTION_FLAG_SCRIPTS = {
+    "probe_data_api.py": "--enable",
+    "verify_capella_paths.py": "--write-probe",
+}
+
+#: The preview flag a script must contain when it is in neither table above.
+PREVIEW_FLAG = {".py": "--perform", ".ps1": "SupportsShouldProcess"}
 
 
 def _tracked(pattern: str) -> list[pathlib.Path]:
@@ -402,6 +432,48 @@ def test_d14_every_top_level_folder_has_a_readme():
         if not (_REPO / name / "README.md").is_file()
     ]
     _enforce("D14-folder-readme", gaps)
+
+
+def test_scripts_preview_or_declare_that_they_change_nothing():
+    """Scripts rule: every script previews, has an action flag, or says why it needs none.
+
+    A new script lands in none of the three until its author decides, so the decision cannot
+    be skipped. The tables are checked against the folder in both directions, so a renamed or
+    deleted script cannot leave a stale entry that excuses nothing.
+    """
+    scripts = sorted(
+        p for pattern in ("scripts/*.py", "scripts/*.ps1") for p in _tracked(pattern)
+    )
+    names = {p.name for p in scripts}
+    assert len(scripts) >= 30, (
+        f"found only {len(scripts)} scripts, so this scan checks nothing"
+    )
+    readme = (_REPO / "scripts" / "README.md").read_text(encoding="utf-8")
+    gaps: list[str] = []
+    for table in (READ_ONLY_SCRIPTS, ACTION_FLAG_SCRIPTS):
+        gaps += [f"stale entry, no such script: {n}" for n in table if n not in names]
+    gaps += [
+        f"in both tables: {n}" for n in READ_ONLY_SCRIPTS if n in ACTION_FLAG_SCRIPTS
+    ]
+    gaps += [f"no reason given: {n}" for n, why in READ_ONLY_SCRIPTS.items() if not why]
+    for path in scripts:
+        text = path.read_text(encoding="utf-8-sig")
+        name = path.name
+        if f"`{name}`" not in readme:
+            gaps.append(f"{name}: not named in scripts/README.md")
+        flag = PREVIEW_FLAG[path.suffix]
+        if name in READ_ONLY_SCRIPTS:
+            if flag in text:
+                gaps.append(f"{name}: listed as read-only but contains {flag}")
+        elif name in ACTION_FLAG_SCRIPTS:
+            if ACTION_FLAG_SCRIPTS[name] not in text:
+                gaps.append(f"{name}: lost its action flag {ACTION_FLAG_SCRIPTS[name]}")
+        elif flag not in text:
+            gaps.append(
+                f"{name}: no {flag} and not in READ_ONLY_SCRIPTS. Add the preview, or add the "
+                "script to READ_ONLY_SCRIPTS with the reason it changes nothing."
+            )
+    _enforce("scripts-preview", gaps)
 
 
 #: A backticked path that looks like a repository file, such as `handlers/shared.py`.

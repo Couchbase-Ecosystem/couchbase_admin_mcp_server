@@ -48,11 +48,13 @@
   that changes.
 
 .NOTES
+  -WhatIf reads the cluster, prints the quota change and the topology it would send, and makes
+  neither the quota change nor the rebalance.
   No new container. Allow 2-5 minutes for the rebalance.
   Safe to re-run: a service already present is left where it is.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$IncludeAnalytics,
 
@@ -123,7 +125,7 @@ Write-Host '  On a single-node cluster no data moves, but the services being add
 Write-Host '  start and the cluster is briefly busy. On a multi-node cluster data'
 Write-Host '  DOES move. Ctrl-C now if this is not the cluster you meant.'
 Write-Host ''
-Start-Sleep -Seconds 5
+if (-not $WhatIfPreference) { Start-Sleep -Seconds 5 }
 
 Write-Host '[before]' -ForegroundColor Cyan
 foreach ($n in $pool.nodes) {
@@ -170,7 +172,9 @@ if ($IncludeAnalytics) {
 
 if ($quotas.Count -gt 0) {
     Write-Host "[quota] setting $($quotas -join ' ')"
-    Send-CB '/pools/default' $quotas | Out-Null
+    if ($PSCmdlet.ShouldProcess($Mgmt, "set $($quotas -join ' ')")) {
+        Send-CB '/pools/default' $quotas | Out-Null
+    }
 } else {
     Write-Host '[quota] nothing to set'
 }
@@ -206,6 +210,11 @@ foreach ($svc in $services) {
 $known = ($pool.nodes | ForEach-Object { $_.otpNode }) -join ','
 Write-Host ""
 Write-Host "[rebalance] knownNodes=$known"
+if (-not $PSCmdlet.ShouldProcess($Mgmt, "rebalance, adding $($wanted -join ', ') to $host1")) {
+    Write-Host ''
+    Write-Host '  Nothing was changed (-WhatIf).'
+    return
+}
 Send-CB '/controller/rebalance' (@("knownNodes=$([uri]::EscapeDataString($known))") + $topology) | Out-Null
 
 Wait-For 'rebalance complete' { (Get-CB '/pools/default/rebalanceProgress').status -eq 'none' }

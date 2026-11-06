@@ -39,9 +39,13 @@
   READ-ONLY against your clusters. Containers are started with --rm and a probe
   command instead of the server, so nothing is left running and no tool is
   called.
+
+  The only things it changes are the local image it builds and those throwaway containers.
+  -WhatIf lists both and does neither. It still looks for the cluster container (a read), and
+  stops before the build, because every later check runs in the image the build would make.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$Image = 'cb-admin-mcp:verify',
     [switch]$SkipBuild,
@@ -131,6 +135,18 @@ if ($ClusterContainer -and -not $Network) {
                 Select-Object -First 1).Name
 }
 Check ([bool]$Network) 'its Docker network was discovered' $Network
+
+if ($WhatIfPreference) {
+    Write-Host ''
+    Write-Host '== -WhatIf: what this would do ==' -ForegroundColor Cyan
+    if (-not $SkipBuild) {
+        $null = $PSCmdlet.ShouldProcess($Image, 'docker build the image from Dockerfile')
+    }
+    $null = $PSCmdlet.ShouldProcess($Image, "run throwaway containers (docker run --rm) on network '$Network': TLS from inside, name resolution to $ClusterContainer, refusal of a drifted posture, tools loaded per mode")
+    Write-Host ''
+    Write-Host '   Nothing was changed.'
+    exit 0
+}
 
 # -- 1. Build ------------------------------------------------------------------
 

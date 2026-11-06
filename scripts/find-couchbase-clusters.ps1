@@ -139,7 +139,7 @@ if ($withMcptest) {
     Write-Host ''
     Write-Host ("  mcptest lives on {0}. Load data with:" -f $withMcptest.Base) -ForegroundColor Green
     Write-Host ("      `$env:CB_CONNECTION_STRING = 'couchbase://{0}:{1}{2}'" -f $ClusterHost, $withMcptest.KvPort, $suffix)
-    Write-Host  '      uv run python scripts\load_test_data.py'
+    Write-Host  '      uv run python scripts\load_test_data.py --perform'
 } else {
     Write-Host ''
     Write-Host '  No cluster has an mcptest bucket. Create one before loading data.' -ForegroundColor Yellow

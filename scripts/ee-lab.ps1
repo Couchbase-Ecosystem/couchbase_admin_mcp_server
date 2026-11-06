@@ -49,6 +49,10 @@
     Remove every named container instead of creating them. The network is left
     alone -- it costs nothing and other things may be attached.
 
+.PARAMETER WhatIf
+    Print what would be created or removed and change nothing. It is passed on to
+    start-ee-cluster.ps1, which prints its own steps the same way.
+
 .EXAMPLE
     # the usual pair: one to drive, one to replicate into
     .\scripts\ee-lab.ps1 -Password $env:CB_LAB_PASSWORD -Names cb-mcp-ee,cb-mcp-peer -LoadSample
@@ -56,6 +60,7 @@
 .EXAMPLE
     .\scripts\ee-lab.ps1 -Names cb-mcp-ee,cb-mcp-peer -Down
 #>
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [string[]] $Names = @('cb-mcp-ee', 'cb-mcp-peer'),
     [string]   $Password = $env:CB_LAB_PASSWORD,
@@ -81,8 +86,10 @@ if ($Names.Count -lt 1) { Die "give at least one name" }
 if ($Down) {
     Head "tearing down"
     foreach ($n in $Names) {
-        & docker rm -f $n 2>$null | Out-Null
-        Say "   removed $n (if it existed)"
+        if ($PSCmdlet.ShouldProcess($n, 'remove the container (docker rm -f)')) {
+            & docker rm -f $n 2>$null | Out-Null
+            Say "   removed $n (if it existed)"
+        }
     }
     Say ""
     Say "The network '$Network' was left in place; it costs nothing and other"
@@ -131,6 +138,7 @@ $primaryArgs = @{
     WriteEnvFile = $true
 }
 if ($LoadSample) { $primaryArgs['LoadSample'] = $true }
+if ($WhatIfPreference) { $primaryArgs['WhatIf'] = $true }
 & (Join-Path $here 'start-ee-cluster.ps1') @primaryArgs
 if ($LASTEXITCODE) { Die "primary failed" }
 
@@ -139,7 +147,8 @@ foreach ($peer in $peers) {
     Head "peer: $peer  (internal only, host ports at +$offset)"
     & (Join-Path $here 'start-ee-cluster.ps1') `
         -Name $peer -Network $Network -Password $Password -Image $Image `
-        -Services $PeerServices -PortOffset $offset -SkipAlternateAddress
+        -Services $PeerServices -PortOffset $offset -SkipAlternateAddress `
+        -WhatIf:$WhatIfPreference
     if ($LASTEXITCODE) { Die "peer $peer failed" }
     # Each peer needs its own block of host ports, or the second one collides
     # with the first on a bind that reads as "port already allocated" and says

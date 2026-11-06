@@ -2,7 +2,7 @@
 
 Component: puts real data into the `mcptest` bucket so the admin tools have something to act on.
 Spec: docs/spec.md S1 (surface); docs/questions.md Q-004 (scripts: dry-run modes and usage).
-Main items: `main`.
+Main items: `main`, `plan_lines`.
 Callers: none; run by hand from the repository root; see scripts/README.md
 Callees: none
 
@@ -28,14 +28,21 @@ run are comparable rather than merely both green:
 IDEMPOTENT. Re-running upserts over the same keys rather than duplicating, so it
 is safe to run before every verification pass.
 
+PREVIEW BY DEFAULT
+==================
+Without `--perform` it prints what it would create and load, and exits 0 without opening a
+connection. `--perform` does the work. Decided by Chris Ahrendt, 2026-11-06
+(`docs/plans/script-dry-run-spec.md`, decision 1).
+
 USAGE
 -----
-    # local Enterprise Edition
+    # local Enterprise Edition: show the plan, then do it
     uv run python scripts/load_test_data.py
+    uv run python scripts/load_test_data.py --perform
 
     # Capella (VPN OFF -- the data plane is allowlist-gated; see
     # CAPELLA-CONNECTIVITY.md, which records why the VPN question is still open)
-    uv run python scripts/load_test_data.py --capella
+    uv run python scripts/load_test_data.py --capella --perform
 """
 
 from __future__ import annotations
@@ -209,6 +216,35 @@ def _index(cluster, bucket: str) -> None:
             print(f"  {label} FAILED: {type(exc).__name__}: {exc}")
 
 
+def plan_lines(args) -> list[str]:
+    """Describe what a `--perform` run would do, without connecting to anything.
+
+    Args:
+        args: The parsed command line.
+
+    Returns:
+        The lines to print, ending with how to run it for real.
+    """
+    side = "Capella" if args.capella else "local / self-managed"
+    lines = [
+        f"PREVIEW. Nothing is changed. Target: {args.bucket} on {side}.",
+        f"  would create scope {SCOPE} and collections {SCOPE}.{EVENTS}, {SCOPE}.{ASSETS}"
+        " if missing",
+        f"  would upsert {args.assets} documents into {SCOPE}.{ASSETS}",
+        f"  would upsert {args.events} documents into {SCOPE}.{EVENTS}",
+        "  would upsert 5 marker documents into _default._default",
+    ]
+    if args.skip_indexes:
+        lines.append("  would create no indexes (--skip-indexes)")
+    else:
+        lines.append(
+            f"  would create primary indexes on {SCOPE}.{EVENTS} and {SCOPE}.{ASSETS},"
+            " and two secondary indexes on events"
+        )
+    lines.append("Add --perform to do it.")
+    return lines
+
+
 def main() -> int:
     """Parse the command line and run this script. `--help` lists the options.
 
@@ -224,6 +260,12 @@ def main() -> int:
     parser.add_argument("--capella", action="store_true")
     parser.add_argument("--timeout", type=int, default=20)
     parser.add_argument(
+        "--perform",
+        action="store_true",
+        help="create the keyspaces and indexes and load the documents; "
+        "without it, print the plan and change nothing",
+    )
+    parser.add_argument(
         "--skip-indexes",
         action="store_true",
         help="load documents only; use if the Index service is not on this cluster",
@@ -231,6 +273,10 @@ def main() -> int:
     args = parser.parse_args()
 
     side = "Capella" if args.capella else "local / self-managed"
+    if not args.perform:
+        for line in plan_lines(args):
+            print(line)
+        return 0
     print(f"\n== loading {args.bucket} on {side} ==\n")
 
     cluster = _connect(args)

@@ -12,6 +12,12 @@
 # map back, and see whether that key survived. A key that stores is accepted; a
 # key that vanishes is ignored; a key that 400s is rejected outright — three
 # different answers that a single all-at-once PUT collapses into one failure.
+#
+# This script CHANGES the node's alternate-address map and then asks it to install a sample
+# bucket. -WhatIf lists each request it would send and sends none, so the probe answers nothing
+# under -WhatIf: it only shows the plan.
+[CmdletBinding(SupportsShouldProcess)]
+param()
 $ErrorActionPreference = 'Continue'
 # The lab password comes from the environment, never from this file (docs/questions.md Q-006).
 if (-not $env:CB_LAB_PASSWORD) { Write-Host 'Set CB_LAB_PASSWORD to the lab password first.' -ForegroundColor Red; exit 1 }
@@ -53,6 +59,10 @@ $candidates = [ordered]@{
 $accepted = [ordered]@{}
 foreach ($k in $candidates.Keys) {
     $one = @{ hostname = '127.0.0.1'; $k = $candidates[$k] }
+    if (-not $PSCmdlet.ShouldProcess($uri, "set alternate address key $k = $($candidates[$k])")) {
+        "{0,-20} WOULD SEND  hostname + {0}={1}" -f $k, $candidates[$k]
+        continue
+    }
     try {
         Invoke-RestMethod -Method Put -Uri $uri -Headers $h `
             -ContentType 'application/x-www-form-urlencoded' -Body (Body $one) | Out-Null
@@ -72,7 +82,9 @@ foreach ($k in $candidates.Keys) {
 
 ""
 "== applying every accepted key in one PUT =="
-if ($accepted.Count -eq 0) {
+if (-not $PSCmdlet.ShouldProcess($uri, 'apply every accepted key in one PUT')) {
+    "not sent (-WhatIf)."
+} elseif ($accepted.Count -eq 0) {
     "none were accepted — the external map cannot carry ports on this build."
 } else {
     $final = @{ hostname = '127.0.0.1' }
@@ -90,6 +102,10 @@ if ($accepted.Count -eq 0) {
 
 ""
 "== sample bucket: what does install actually answer? =="
+if (-not $PSCmdlet.ShouldProcess("$base/sampleBuckets/install", 'ask it to install travel-sample')) {
+    "not sent (-WhatIf)."
+    return
+}
 try {
     $r = Invoke-WebRequest -Method Post -Uri "$base/sampleBuckets/install" -Headers $h `
          -ContentType 'application/json' -Body '["travel-sample"]' -UseBasicParsing

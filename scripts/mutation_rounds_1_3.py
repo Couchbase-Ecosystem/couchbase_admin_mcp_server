@@ -14,6 +14,7 @@ than stalling on a full-suite run per mutation.
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 import shutil
 import subprocess
@@ -292,16 +293,35 @@ def run(target: str, cwd: pathlib.Path) -> bool:
     return result.returncode == 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run every mutation in this round and report which ones the test suite caught.
 
     Re-check the mutations that SURVIVED, plus the round-3 fixes.
 
-    This script has no argument parser, so `--help` does not print usage: it starts the round.
+    `--list` prints each mutation and runs nothing; `--help` prints usage. With no option
+    it runs the whole round.
+
+    Args:
+        argv: The command line without the program name; `None` reads `sys.argv`.
 
     Returns:
         The process exit code.
     """
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="print each mutation (label, file, test that should notice) and run nothing",
+    )
+    args = parser.parse_args(argv)
+    if args.list:
+        for label, relpath, _old, _new, target in MUTATIONS:
+            print(f"{label}  [{relpath}; caught by {target}]")
+        print(f"{len(MUTATIONS)} mutations. Nothing was run.")
+        return 0
+
     survivors = []
     for label, relpath, old, new, target in MUTATIONS:
         with tempfile.TemporaryDirectory() as tmp:

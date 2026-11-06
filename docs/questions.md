@@ -59,7 +59,9 @@ scripts and the `couchbase-admin-mcp-server` console script are also entry point
 - (b) Also add an example for each console endpoint.
 - Recommendation: (a).
 
-**Decision (Chris Ahrendt, 2026-11-05):** option (a). Tools only. Scripts get dry-run modes and a usage section in `scripts/README.md`. Not started: the dry-run modes are code, so a short spec comes to Chris first.
+**Decision (Chris Ahrendt, 2026-11-05):** option (a). Tools only. Scripts get dry-run modes and a usage section in `scripts/README.md`. 
+
+**Built 2026-11-06** from `docs/plans/script-dry-run-spec.md`, which Chris approved the same day: `load_test_data.py` previews unless `--perform`; the three mutation scripts take `--help` and `--list`; eight PowerShell scripts take `-WhatIf`; a gate rule (`scripts-preview`) fails the build when a script has none of these and is not declared read-only.
 
 ## Q-005 [DECIDED: Chris Ahrendt, 2026-11-05, option (a)]. Where does `CHANGELOG.md` sit inside the wheel?
 

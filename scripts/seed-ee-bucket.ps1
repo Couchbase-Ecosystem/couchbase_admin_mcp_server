@@ -22,6 +22,11 @@
 # The bucket is the point. Every bucket-shaped admin_* tool skips for want of a
 # bucket_name, and any bucket resolves it -- travel-sample is preferred only
 # because its scopes, collections and indexes reach further tools.
+#
+# -WhatIf prints the two changes (create the bucket, load the sample) and makes neither. The
+# read-only steps still run, so the output shows the real state of the container.
+[CmdletBinding(SupportsShouldProcess)]
+param()
 $ErrorActionPreference = 'Continue'
 $Container = 'cb-mcp-ee'
 $User      = 'Administrator'
@@ -36,12 +41,14 @@ Step "what samples ship in this image"
 docker exec $Container ls -1 /opt/couchbase/samples/
 
 Step "create the bucket"
-docker exec $Container couchbase-cli bucket-create `
-    -c 127.0.0.1 -u $User -p $Pass `
-    --bucket $Bucket --bucket-type couchbase --bucket-ramsize 256 `
-    --enable-flush 1 --wait
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "   (a non-zero here is fine if it already exists)" -ForegroundColor DarkGray
+if ($PSCmdlet.ShouldProcess("$Bucket in $Container", 'create the bucket')) {
+    docker exec $Container couchbase-cli bucket-create `
+        -c 127.0.0.1 -u $User -p $Pass `
+        --bucket $Bucket --bucket-type couchbase --bucket-ramsize 256 `
+        --enable-flush 1 --wait
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   (a non-zero here is fine if it already exists)" -ForegroundColor DarkGray
+    }
 }
 
 Step "load the sample data"
@@ -59,10 +66,12 @@ Step "load the sample data"
 # Two things worth taking from that. The alternate map is live and honoured,
 # which is the confirmation we wanted. And any tool running INSIDE the network
 # must pin network=default, or it will be routed out through the host.
-docker exec $Container cbimport json `
-    -c "couchbase://127.0.0.1?network=default" -u $User -p $Pass `
-    -b $Bucket -d file:///opt/couchbase/samples/travel-sample.zip `
-    --format sample --generate-key "%id%"
+if ($PSCmdlet.ShouldProcess("$Bucket in $Container", 'load travel-sample into it')) {
+    docker exec $Container cbimport json `
+        -c "couchbase://127.0.0.1?network=default" -u $User -p $Pass `
+        -b $Bucket -d file:///opt/couchbase/samples/travel-sample.zip `
+        --format sample --generate-key "%id%"
+}
 
 Step "what is there now"
 docker exec $Container couchbase-cli bucket-list -c 127.0.0.1 -u $User -p $Pass

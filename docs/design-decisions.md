@@ -12,6 +12,7 @@ A header says what the code does now, and cites a question number for the reason
 | 2026-11-05 | The lab password is read from `CB_LAB_PASSWORD`, with no default (Q-006 option a) | Chris Ahrendt | `docs/questions.md` Q-006 |
 | 2026-11-05 | `CHANGELOG.md` stays beside the top-level modules in the wheel (Q-005 option a) | Chris Ahrendt | `docs/questions.md` Q-005 |
 | 2026-11-05 | Only tools get a tested example. Scripts get dry-run modes and a usage section (Q-004 option a) | Chris Ahrendt | `docs/questions.md` Q-004 |
+| 2026-11-06 | Scripts that change things preview first: `--perform` (Python), `-WhatIf` (PowerShell). `load_test_data.py` now previews by default. The mutation scripts get `--help` and `--list`. A gate rule enforces it | Chris Ahrendt | `docs/plans/script-dry-run-spec.md`, `docs/questions.md` Q-004 |
 | 2026-11-05 | The audit decision vocabulary is defined once, as `audit.DECISIONS`, and tested (Q-003 option a) | Chris Ahrendt | `docs/questions.md` Q-003 |
 | 2026-11-05 | The three import cycles stay, documented (Q-002 option a) | Chris Ahrendt | `docs/questions.md` Q-002 |
 | 2026-11-05 | The cached SDK cluster is created under a lock (Q-001 option a) | Chris Ahrendt | `docs/questions.md` Q-001 |

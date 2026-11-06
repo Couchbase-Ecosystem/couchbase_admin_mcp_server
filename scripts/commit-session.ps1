@@ -22,7 +22,8 @@
   commit the defects are invisible. Separated, someone reviewing "what actually
   changed about the server's behaviour" reads three small commits and stops.
 
-  SAFE BY DEFAULT. Without -Execute it prints the plan and touches nothing.
+  SAFE BY DEFAULT. Without -Execute it prints the plan and touches nothing. -WhatIf does the
+  same and wins over -Execute: `-Execute -WhatIf` prints the plan and commits nothing.
 
       .\scripts\commit-session.ps1              # show the plan
       .\scripts\commit-session.ps1 -Execute     # make the commits
@@ -32,7 +33,7 @@
   without -AllowMainBranch.
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$Execute,
     [switch]$Push,
@@ -49,6 +50,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
+
+# -WhatIf is the plan-only mode this script already had, under the name PowerShell users reach
+# for. Everything that changes the repository sits after the `if (-not $Execute)` exit below.
+if ($WhatIfPreference) { $Execute = $false }
 
 $attribution = @'
 

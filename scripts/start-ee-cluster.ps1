@@ -71,13 +71,22 @@
     optional -WriteEnvFile writes deploy/.env.ee, which .gitignore already
     excludes via the `.env.*` rule.
 
+.PARAMETER WhatIf
+    List what this would do and change nothing: create the network, start or create the
+    container, initialise the node, set the alternate address, load the sample, write the
+    env file. Only the check that docker answers runs. It stops after the list, because every
+    later step needs the container the earlier steps would have made.
+
+.EXAMPLE
+    .\scripts\start-ee-cluster.ps1 -Password 'choose-a-strong-one' -WhatIf
+
 .EXAMPLE
     .\scripts\start-ee-cluster.ps1 -Password 'choose-a-strong-one'
 
 .EXAMPLE
     .\scripts\start-ee-cluster.ps1 -Password '...' -LoadSample -WriteEnvFile
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateLength(6, 128)]
@@ -209,6 +218,30 @@ Step "docker is available"
 docker version --format '{{.Server.Version}}' | Out-Null
 if ($LASTEXITCODE -ne 0) { Die "docker is not responding. Is Docker Desktop running?" }
 Ok "docker responds"
+
+if ($WhatIfPreference) {
+    # Every later step needs the container an earlier step would have made, so a faithful
+    # preview is a list, not a run. Each call below prints its own "What if:" line.
+    Step "-WhatIf: what this would do"
+    $null = $PSCmdlet.ShouldProcess($Network, 'create the docker network if it is missing')
+    $null = $PSCmdlet.ShouldProcess($Name, "start it if it exists, else docker run $Image with host ports at +$PortOffset")
+    if ($BackupArchiveHost) {
+        $null = $PSCmdlet.ShouldProcess($BackupArchiveHost, 'create it if missing and mount it as the backup archive')
+    }
+    $null = $PSCmdlet.ShouldProcess($Name, "initialise the node: services ($Services), credentials for $Username, memory quotas")
+    if ($PortOffset -ne 0 -and -not $SkipAlternateAddress) {
+        $null = $PSCmdlet.ShouldProcess($Name, 'set the external alternate address (this stops the Backup service)')
+    }
+    if ($LoadSample) {
+        $null = $PSCmdlet.ShouldProcess($Name, 'create travel-sample and load it')
+    }
+    if ($WriteEnvFile) {
+        $null = $PSCmdlet.ShouldProcess('deploy/.env.ee', 'write the connection settings')
+    }
+    Say ""
+    Say "   Nothing was changed."
+    return
+}
 
 Step "network $Network"
 $existing = docker network ls --filter "name=^$Network$" --format '{{.Name}}'

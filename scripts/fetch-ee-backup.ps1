@@ -34,6 +34,10 @@
     or you have copied nothing usable, which is why this takes a directory
     destination and refuses a file.
 
+.PARAMETER WhatIf
+    Print the two changes this makes (create the destination directory, copy the archive) and
+    make neither. The checks and `-Inspect` still run, because they only read.
+
 .PARAMETER Container
     The Couchbase container holding the archive. Default cb-mcp-ee.
 
@@ -49,9 +53,11 @@
     so you know whether the copy is worth making.
 
 .EXAMPLE
+    .\scripts\fetch-ee-backup.ps1 -Destination C:\Backups -WhatIf
     .\scripts\fetch-ee-backup.ps1 -Destination C:\Backups
     .\scripts\fetch-ee-backup.ps1 -Destination C:\Backups -Inspect
 #>
+[CmdletBinding(SupportsShouldProcess)]
 param(
     [string] $Container   = 'cb-mcp-ee',
     [string] $ArchivePath = '/opt/couchbase/var/lib/couchbase/backup-archive',
@@ -100,25 +106,31 @@ if ($Inspect) {
 
 Step "destination"
 if (-not (Test-Path $Destination)) {
-    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    if ($PSCmdlet.ShouldProcess($Destination, 'create the destination directory')) {
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
 }
-if (-not (Get-Item $Destination).PSIsContainer) {
+if ((Test-Path $Destination) -and -not (Get-Item $Destination).PSIsContainer) {
     Die "$Destination is a file. An archive is a directory tree; give a directory."
 }
 # TIMESTAMPED, so a second fetch never silently merges into or overwrites the
 # first. Two archives that got mixed together are worse than two copies.
 $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
-$target = Join-Path (Resolve-Path $Destination).Path "cb-backup-$stamp"
+# Under -WhatIf the directory may not exist yet, and Resolve-Path would fail on it.
+$base   = if (Test-Path $Destination) { (Resolve-Path $Destination).Path } else { $Destination }
+$target = Join-Path $base "cb-backup-$stamp"
 Ok "copying into $target"
 
 Step "docker cp"
-& docker cp "${Container}:${ArchivePath}" $target
-if ($LASTEXITCODE -ne 0) { Die "docker cp failed." }
+if ($PSCmdlet.ShouldProcess("${Container}:${ArchivePath}", "copy into $target")) {
+    & docker cp "${Container}:${ArchivePath}" $target
+    if ($LASTEXITCODE -ne 0) { Die "docker cp failed." }
 
-$files = @(Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue)
-$bytes = ($files | Measure-Object -Property Length -Sum).Sum
-if (-not $bytes) { $bytes = 0 }
-Ok "$($files.Count) file(s), $([math]::Round($bytes / 1MB, 1)) MB"
+    $files = @(Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue)
+    $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+    if (-not $bytes) { $bytes = 0 }
+    Ok "$($files.Count) file(s), $([math]::Round($bytes / 1MB, 1)) MB"
+}
 
 Say ""
 Say "======================================================================"

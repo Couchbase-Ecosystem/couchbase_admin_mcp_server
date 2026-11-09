@@ -14,6 +14,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 
 ### Added
 
+- Full doc comments (what it does, the order of the steps, arguments, returns, what it raises, why, and the spec and design note) on five of the hardest functions: `assert_egress_allowed`, `profile_config.validate`, `_apply_guardrails`, `capella_request` and the backup catalogue `_matches` (D15). Documentation only. 29 more functions over the complexity limit remain; most already have long comments.
 - Design note for the backup catalogue, `docs/design/backup-catalogue.md`, and `docs/spec.md` S9 re-read for it. Documentation only. It found three gaps, listed in the note.
 - `scripts/mutation_round_7.py`, run in CI: 10 mutations of the backup catalogue.
 - `scripts/mutation_round_6.py`, run in CI: 13 mutations of the Capella sandbox (guardrail policy, ownership of the cluster a call writes to, fixture import ownership). Two behaviour tests for the written-cluster rule in `tests/test_capella_guardrail_hardening.py`.

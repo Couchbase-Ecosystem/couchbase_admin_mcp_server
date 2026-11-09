@@ -286,8 +286,39 @@ def _resolve_all(host: str) -> list:
 def assert_egress_allowed(value: str, *, field: str, tool: str) -> str:
     """Authorize a destination the CLUSTER will be asked to contact.
 
-    Returns the extracted host on success. Raises EgressDenied otherwise —
-    nothing has been sent at that point.
+    The caller names the destination and Couchbase itself opens the connection, from inside the
+    trust boundary and sometimes holding a cloud instance role. This decides whether that
+    destination is acceptable, before anything is sent.
+
+    The order of the checks is the security property, and each step can only refuse or let the
+    next one run until an allow:
+
+    1. Parse the host (`split_host`), then refuse anything that cannot be a hostname.
+    2. Refuse the absolute denials (loopback, link-local, cloud metadata, `0.0.0.0/8`). No setting
+       lifts these, including `CB_ADMIN_EGRESS_ALLOW_ANY` and an explicit entry.
+    3. Refuse a private range (RFC1918, `100.64.0.0/10`, `fc00::/7`) unless an entry names it.
+    4. Resolve a name and judge every address by steps 2 and 3, so a name is refused for where it
+       points. `CB_ADMIN_EGRESS_SKIP_DNS` turns resolution off.
+    5. An entry the operator wrote admits the host. Otherwise `CB_ADMIN_EGRESS_ALLOW_ANY` admits
+       a public destination, except a name that did not resolve, which is refused because the
+       cluster resolves it separately and may get a metadata address. With no entries and no
+       allow-any, everything is refused (fail closed).
+
+    Args:
+        value: the destination as the caller wrote it: a host, `host:port` or a URL.
+        field: the argument name, so a refusal says which argument was refused.
+        tool: the tool name, for the same reason.
+
+    Returns:
+        The extracted host, when the destination is allowed.
+
+    Raises:
+        EgressDeniedError: the destination is refused. Nothing has been sent at that point.
+
+    Not covered: DNS rebinding. The cluster re-resolves a name on its own, so a name can resolve
+    to a safe address here and a denied one there. An IP literal or a CIDR entry is the answer for
+    anything sensitive. Why the rules are built this way, and what broke before:
+    `docs/design/egress-allowlist.md`. Spec: `docs/spec.md` S10 and S3 step 8.
     """
     host = split_host(value)
     if not host:

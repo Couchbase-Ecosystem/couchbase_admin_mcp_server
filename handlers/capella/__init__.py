@@ -176,6 +176,35 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
     Ordering matters: cheap local checks first, then the one network round-trip
     needed to inspect the live target. Everything raises GuardrailError, so a
     refusal never reaches Capella.
+
+    The steps, in order:
+
+    1. The project allowlist, for an operation whose path names a project. A missing project id is
+       a refusal, not a skip.
+    2. Ownership of the live cluster, for every operation whose path names a cluster and that is
+       not listed in `_WRITES_ELSEWHERE`. The cluster is fetched and judged by its own name and
+       flags (`guardrails.assert_managed`), and a cluster delete also honors Capella's deletion
+       protection. This covers children of a cluster too, not only the cluster delete.
+    2a. For `capella_backup_restore` and `capella_replication_create`, the path cluster is only
+       read, so the check runs on the cluster in the body that is WRITTEN, and a missing body
+       field is a refusal.
+    2b. Deleting a project is an indirect route to its clusters, so it is checked locally rather
+       than left to Capella.
+
+    Args:
+        name: the tool name.
+        op: the operation definition from `spec.py`; its path says which ids are involved.
+        args: the tool arguments, including `project_id`, `cluster_id` and `body`.
+        policy: the sandbox policy read from server configuration, never from an argument.
+
+    Raises:
+        guardrails.GuardrailError: the call is outside the sandbox, or the live cluster could not
+            be read well enough to decide. Nothing was sent to Capella.
+
+    Why the cluster is fetched and not taken from the caller: an agent cannot claim a cluster is a
+    test cluster. `capella_fixture_import` does not pass through here and runs the same ownership
+    check itself (`docs/questions.md` Q-008). Spec: `docs/spec.md` S8 and S3 step 8. Reasoning and
+    the findings that shaped it: `docs/design/capella-client-and-guardrails.md`.
     """
     placeholders = set(extract_placeholders(op.path))
 

@@ -294,6 +294,24 @@ def _read_entries(root: pathlib.Path) -> tuple[list[dict], list[dict]]:
 
 
 def _matches(entry: dict, args: dict) -> bool:
+    """Whether one catalogue entry satisfies every filter in a list call.
+
+    All filters combine with AND: `match_tags` must all be equal, `exclude_tags` must all differ,
+    and `plane`, `cluster_id` and `bucket` must be equal when given. Tag values are compared as
+    strings after the same normalization `_record` applies, so `1.6` finds `"1.6"`. A date filter
+    reads `backup_created_at`, then `recorded_at`, and an entry with no readable timestamp does not
+    match, because matching it would answer "what did we take last month" with something of
+    unknown age. An entry whose `tags` is not an object never matches.
+
+    Args:
+        entry: one entry as read from its file.
+        args: the list tool's arguments.
+
+    Returns:
+        True when the entry matches every filter that was given.
+
+    Spec: `docs/spec.md` S9. Reasoning: `docs/design/backup-catalogue.md`.
+    """
     tags = entry.get("tags") or {}
     if not isinstance(tags, dict):
         return False

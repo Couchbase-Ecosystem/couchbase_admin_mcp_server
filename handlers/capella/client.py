@@ -388,6 +388,34 @@ def capella_request(
     ``path`` must already be per-segment encoded (see ``build_path``). Retries
     transient failures with exponential backoff. Returns parsed JSON, or
     ``{"status": "ok"}`` for an empty 2xx body (v4 DELETEs answer 204).
+
+    Retries depend on the method, and that is the point of the structure here. A POST that
+    creates a cluster can succeed and then lose its response, and repeating it would make a second,
+    billed cluster that the caller never hears about. So a POST is retried only on statuses that
+    prove it was not processed, and GET, HEAD, PUT and DELETE are retried on a server error as well
+    (`_retryable`). A server error on a POST is returned with a hint to check what exists before
+    trying again. The body is JSON unless `content_type` is `application/javascript`, where it is
+    the source itself, because wrapping JavaScript in JSON made the access-control function
+    operation fail with an error that read like a verdict on the code.
+
+    Args:
+        method: the HTTP method.
+        path: the request path, already encoded.
+        params: query parameters, or `None`.
+        body: the JSON body, or the source string for `application/javascript`, or `None`.
+        content_type: the request content type.
+
+    Returns:
+        The parsed JSON response; `{"status": "ok", ...}` for an empty body or a body that is not
+        JSON.
+
+    Raises:
+        CapellaError: the call failed after any retries. It carries the status, a hint and, when
+            the response body had one, the domain error code. No secret appears in it.
+
+    The control plane is never sent over an insecure connection: there is no switch for it
+    (`_ssl_context`). Spec: `docs/spec.md` S8. Reasoning:
+    `docs/design/capella-client-and-guardrails.md`.
     """
     secret = _secret()
     url = base_url() + (path if path.startswith("/") else "/" + path)

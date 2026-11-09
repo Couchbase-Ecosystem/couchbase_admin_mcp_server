@@ -264,6 +264,25 @@ def validate(name: str | None) -> list[str]:
 
     Returned strings are fatal: the caller should refuse to start. These are the
     pairs that produced real findings, so they are checked rather than documented.
+
+    Checks run in this order. An unstated profile returns at once, since none of the other checks
+    mean anything without a posture. `OAUTH_SKIP_VERIFY` is checked in every profile. A workstation
+    profile is checked for being actually local. Anything other than the enterprise profile then
+    returns. The enterprise profile must have authentication required, a durable audit sink that
+    a raised log level cannot silence, signature verification on, the console not running without
+    authentication, and an identity-provider issuer set.
+
+    Every problem is collected and returned together, not just the first, so an operator fixes the
+    deployment in one pass (`docs/design/transports.md`).
+
+    Args:
+        name: the profile name from `CB_ADMIN_PROFILE`, or `None` when it is not set.
+
+    Returns:
+        A list of problems, one sentence each. Empty means the posture can start.
+
+    Spec: `docs/spec.md` S5 (profiles). The caller is `server.py` `_enforce_profile`, which exits
+    with code 2 when the list is not empty.
     """
     errors: list[str] = []
 

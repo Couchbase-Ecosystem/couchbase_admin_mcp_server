@@ -37,7 +37,7 @@ is the reference. The one-line descriptions below come from each script's header
 
 | Script | What it does |
 | --- | --- |
-| `mutation_rounds_1_3.py`, `mutation_round_4.py`, `mutation_round_5.py` | Break one guard at a time and check the test suite notices. A surviving mutation means a control with no test. Run them in a Linux container (`CONTRIBUTING.md`, "Testing"). `--list` prints every mutation and runs nothing; `--help` prints usage |
+| `mutation_rounds_1_3.py`, `mutation_round_4.py`, `mutation_round_5.py`, `mutation_round_6.py` | Break one guard at a time and check the test suite notices. A surviving mutation means a control with no test. Run them in a Linux container (`CONTRIBUTING.md`, "Testing"). `--list` prints every mutation and runs nothing; `--help` prints usage |
 
 ## Exercise real operations (write to a cluster)
 
@@ -105,8 +105,8 @@ writes; without it only GET and OPTIONS).
 - `verify_mcp_surface.py`: drives the server over stdio and stops short of writes; the server's own
   dry run intercepts them.
 - `idp_lab_assertions.py`: calls tools through the running server, so the server's gates apply.
-- `mutation_rounds_1_3.py`, `mutation_round_4.py`, `mutation_round_5.py`: change only a temporary
-  copy of the repository.
+- `mutation_rounds_1_3.py`, `mutation_round_4.py`, `mutation_round_5.py`, `mutation_round_6.py`:
+  change only a temporary copy of the repository.
 - `find-couchbase-clusters.ps1`, `measure-egress.ps1`, `probe_backup_paths.ps1`,
   `probe_backup_repository.ps1`, `probe_rest_paths.ps1`: send GET requests (the repository probe
   also sends OPTIONS).

@@ -61,6 +61,7 @@ only caught by symlink tests):
 uv run python scripts/mutation_rounds_1_3.py
 uv run python scripts/mutation_round_4.py
 uv run python scripts/mutation_round_5.py
+uv run python scripts/mutation_round_6.py
 ```
 
 Live verification against a Capella organization is a maintainer step and never runs in

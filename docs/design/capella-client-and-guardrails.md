@@ -46,7 +46,7 @@ returns it, not an id the caller supplies. An agent cannot claim a cluster is a 
 The name on the object decides, and an id or a name in `CAPELLA_PROTECTED_CLUSTERS` refuses
 the call with no override, compared without regard to case.
 
-**The check covers every change, not only deletes.** Adding an allowlist entry, rewriting an
+**The check covers every change, not only deletes, and the fixture import.** Adding an allowlist entry, rewriting an
 access-control function or flushing a bucket on an unmanaged cluster is as far out of scope
 as deleting it. `_apply_guardrails` therefore fetches the cluster for any mutating tool whose
 path names a cluster.
@@ -123,7 +123,7 @@ a new credential is. The API key secret never appears in an error.
 | A child-resource change is guarded | `tests/test_capella_guardrail_hardening.py` (F1 to F3) |
 | Ceiling on the create primitive, across projects, memo | same file (F4, F16, F20, F21) |
 | Protected list by name and by id | same file (F7) |
-| The written cluster is checked, not the path cluster | `tests/test_guarded_write_target.py` |
+| The written cluster is checked, not the path cluster | `tests/test_guarded_write_target.py` (the table), `tests/test_capella_guardrail_hardening.py` (`test_a_protected_source_does_not_stop_a_write_into_a_managed_target`, `test_an_unmanaged_target_is_refused_even_from_a_managed_source`) |
 | A missing or unusable cluster response refuses | `tests/test_capella_ownership_marker_guard.py` |
 | The marker survives an update | same file |
 | Marker parsing and expiry | `tests/test_guardrail_marker_parsing.py` |
@@ -138,8 +138,11 @@ a new credential is. The API key secret never appears in an error.
 - Do not read a limit from a tool argument. Do not add a retry for POST on a 5xx.
 - A parser that reads the marker must fail toward "not recognizably ours" and warn. Do not
   let it raise from inside a list.
-- GAP: the three mutation rounds (`scripts/mutation_*.py`) break 7 guards in `client.py` and
-  5 in `environment.py`, but none in `guardrails.py` or `handlers/capella/__init__.py`, so
-  the sandbox checks themselves are not mutation-checked (counted with `--list` on
-  2026-11-09). When you change a guard, add a mutation for it to the next round.
+- Rounds 1 to 5 break 7 guards in `client.py` and 5 in `environment.py` and none in the sandbox.
+  Round 6 (`scripts/mutation_round_6.py`, added 2026-11-09) breaks 13: fail-open destructive
+  policy, the protected list by case, by name and by id, the name prefix, the ceiling, the
+  fail-closed cluster fetch, both entries of `_WRITES_ELSEWHERE`, the path-cluster check, and the
+  fixture import ownership check. Writing it found that nothing tested the written-cluster rule
+  by behaviour, only by table, so two behaviour tests were added to
+  `tests/test_capella_guardrail_hardening.py`. When you change a guard, add a mutation for it.
 - Record a new default in `docs/design-decisions.md`. Chris Ahrendt decides it.

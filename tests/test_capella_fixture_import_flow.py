@@ -121,10 +121,15 @@ def target(monkeypatch):
         "name_refusal": None,
         "project_refusal": None,
         "buckets_list_error": None,
+        "cluster": {"id": "c1", "name": "mcptest-c1"},
     }
 
     def invoke(op_name, args, body=None, composite=""):
         state["invocations"].append((op_name, body))
+        if op_name == "capella_cluster_get":
+            if op_name in state["invoke_errors"]:
+                raise RuntimeError(state["invoke_errors"][op_name])
+            return state["cluster"]
         if op_name == "capella_buckets_list":
             if state["buckets_list_error"]:
                 raise RuntimeError(state["buckets_list_error"])
@@ -223,6 +228,65 @@ def test_a_refused_project_stops_the_import(tmp_path, target):
     result = run(_write(tmp_path))
     assert is_error(result)
     assert "allowlist" in payload(result)["error"]
+
+
+def _nothing_written(target) -> bool:
+    """No structure call and no document write happened."""
+    ops = [op for op, _ in target["invocations"]]
+    return target["documents"] == [] and ops == ["capella_cluster_get"]
+
+
+def test_a_cluster_without_the_name_prefix_is_refused(tmp_path, target, monkeypatch):
+    """Q-008, decided 2026-11-09: the live cluster must carry the prefix, as for every
+    other write on a cluster's children."""
+    monkeypatch.setenv("CAPELLA_ENV_NAME_PREFIX", "mcptest-")
+    target["cluster"] = {"id": "c1", "name": "prod-orders"}
+    result = run(_write(tmp_path))
+    assert is_error(result)
+    error = payload(result)["error"]
+    assert "prod-orders" in error
+    assert "Nothing was imported" in error
+    assert _nothing_written(target)
+
+
+def test_a_protected_cluster_is_refused_even_with_the_prefix(
+    tmp_path, target, monkeypatch
+):
+    monkeypatch.setenv("CAPELLA_ENV_NAME_PREFIX", "mcptest-")
+    monkeypatch.setenv("CAPELLA_PROTECTED_CLUSTERS", "MCPTEST-C1")
+    result = run(_write(tmp_path))
+    assert is_error(result)
+    assert "CAPELLA_PROTECTED_CLUSTERS" in payload(result)["error"]
+    assert _nothing_written(target)
+
+
+@pytest.mark.parametrize("response", [[], "text", None, {}, {"id": "c1"}, {"name": ""}])
+def test_an_unusable_cluster_response_is_refused_not_skipped(
+    tmp_path, target, monkeypatch, response
+):
+    """Fail closed: a response that is not a cluster object with a name is a refusal."""
+    monkeypatch.setenv("CAPELLA_ENV_NAME_PREFIX", "mcptest-")
+    target["cluster"] = response
+    result = run(_write(tmp_path))
+    assert is_error(result)
+    assert "ownership" in payload(result)["error"]
+    assert _nothing_written(target)
+
+
+def test_a_cluster_lookup_that_fails_stops_the_import(tmp_path, target, monkeypatch):
+    monkeypatch.setenv("CAPELLA_ENV_NAME_PREFIX", "mcptest-")
+    target["invoke_errors"]["capella_cluster_get"] = "boom"
+    result = run(_write(tmp_path))
+    assert is_error(result)
+    assert "boom" in payload(result)["error"]
+    assert _nothing_written(target)
+
+
+def test_a_managed_cluster_still_imports(tmp_path, target, monkeypatch):
+    monkeypatch.setenv("CAPELLA_ENV_NAME_PREFIX", "mcptest-")
+    result = run(_write(tmp_path))
+    assert not is_error(result), payload(result)
+    assert target["documents"], "a managed cluster must still receive the documents"
 
 
 def test_a_bucket_that_would_be_created_is_prefix_checked(tmp_path, target):

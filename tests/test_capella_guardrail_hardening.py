@@ -4,8 +4,8 @@ security review.
 
 Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S3 step 8, S8.
-Main items: 78 test function(s). Helpers and fixtures: `_sandbox`, `Recorder`, `api`, `_call`,
-    `_synthetic_args`.
+Main items: 80 test function(s). Helpers and fixtures: `_sandbox`, `Recorder`, `api`, `_call`,
+    `_synthetic_args`, `_TwoClusters`, `two_clusters`.
 Callers: none; collected by pytest
 Callees: `handlers.capella.client`, `handlers.capella.environment`,
     `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.shared`
@@ -1540,3 +1540,77 @@ def test_f9_a_422_with_no_reason_keeps_the_general_hint():
     for detail in (None, "", {}, {"message": "   "}):
         hint = client._hint_for_status(422, detail)
         assert "service" in hint.lower(), detail
+
+
+# ── The cluster that is WRITTEN is the one that is checked ───────────────────
+#
+# A restore and a replication name their SOURCE in the path and the cluster they WRITE
+# in the body. The ownership check must run on the written cluster and only on it.
+# tests/test_guarded_write_target.py pins the table; these pin the behaviour, because
+# the first version checked the path cluster and was wrong in both directions at once.
+
+_WRITE_CASES = [
+    (
+        "capella_backup_restore",
+        {"backup_id": "bk1"},
+        lambda target_id: {"targetClusterID": target_id},
+    ),
+    (
+        "capella_replication_create",
+        {},
+        lambda target_id: {"target": {"cluster": target_id}},
+    ),
+]
+
+assert len(_WRITE_CASES) == 2, (
+    "a parametrised list that came back empty would skip, not fail"
+)
+
+
+class _TwoClusters(Recorder):
+    """A Recorder that answers a cluster GET by the id in the path."""
+
+    def __init__(self, by_id: dict):
+        super().__init__(None)
+        self.by_id = by_id
+
+    def request(self, method, path, **kwargs):
+        self.requests.append((method, path))
+        if method == "GET" and "/clusters/" in path:
+            return self.by_id.get(path.rsplit("/clusters/", 1)[1].split("/")[0])
+        return {"status": "ok"}
+
+
+@pytest.fixture
+def two_clusters(monkeypatch):
+    rec = _TwoClusters({"src": UNMANAGED, "dst": MANAGED})
+    monkeypatch.setattr(capella, "capella_request", rec.request)
+    monkeypatch.setattr(capella, "capella_list", rec.listing)
+    return rec
+
+
+@pytest.mark.parametrize(("tool", "extra", "body"), _WRITE_CASES)
+def test_a_protected_source_does_not_stop_a_write_into_a_managed_target(
+    two_clusters, tool, extra, body
+):
+    """An outbound copy from a cluster this server did not create is safe: the source is
+    only read. Checking the path cluster refused it."""
+    payload = _call(
+        tool, project_id="test-proj", cluster_id="src", body=body("dst"), **extra
+    )
+    assert "guardrail" not in payload, payload
+    assert two_clusters.mutating_requests, f"{tool} never reached Capella"
+
+
+@pytest.mark.parametrize(("tool", "extra", "body"), _WRITE_CASES)
+def test_an_unmanaged_target_is_refused_even_from_a_managed_source(
+    monkeypatch, tool, extra, body
+):
+    rec = _TwoClusters({"src": MANAGED, "dst": UNMANAGED})
+    monkeypatch.setattr(capella, "capella_request", rec.request)
+    monkeypatch.setattr(capella, "capella_list", rec.listing)
+    payload = _call(
+        tool, project_id="test-proj", cluster_id="src", body=body("dst"), **extra
+    )
+    assert payload.get("guardrail") is True, payload
+    assert rec.mutating_requests == []

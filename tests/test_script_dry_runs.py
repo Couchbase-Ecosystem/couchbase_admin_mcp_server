@@ -1,6 +1,6 @@
 """Scripts that change things preview first; scripts with no parser now have one.
 
-Component: regression suite for `scripts/load_test_data.py` and the three `scripts/mutation_*.py`.
+Component: regression suite for `scripts/load_test_data.py` and the four `scripts/mutation_*.py`.
 Spec: docs/plans/script-dry-run-spec.md (decisions 1 and 3, Chris Ahrendt, 2026-11-06);
     docs/questions.md Q-004.
 Main items: `test_load_test_data_previews_and_connects_to_nothing_without_perform`,
@@ -30,6 +30,7 @@ sys.path.insert(0, str(_SCRIPTS))
 import load_test_data as ltd  # noqa: E402
 import mutation_round_4  # noqa: E402
 import mutation_round_5  # noqa: E402
+import mutation_round_6  # noqa: E402
 import mutation_rounds_1_3  # noqa: E402
 
 
@@ -102,8 +103,13 @@ def test_load_test_data_writes_only_with_perform(monkeypatch):
     assert len(written["_default"].keys) == 5
 
 
-MUTATION_SCRIPTS = [mutation_rounds_1_3, mutation_round_4, mutation_round_5]
-assert len(MUTATION_SCRIPTS) == 3, (
+MUTATION_SCRIPTS = [
+    mutation_rounds_1_3,
+    mutation_round_4,
+    mutation_round_5,
+    mutation_round_6,
+]
+assert len(MUTATION_SCRIPTS) == 4, (
     "a parametrised list that came back empty would skip, not fail"
 )
 

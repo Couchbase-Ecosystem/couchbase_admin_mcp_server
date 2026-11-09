@@ -38,7 +38,7 @@ grep -rInE "(api[_-]?key|secret|password|token)[\"']?\s*[:=]\s*[\"'][A-Za-z0-9/+
 python -m pytest -q -p no:randomly
 python -m ruff check . && python -m ruff format --check .
 python scripts/mutation_rounds_1_3.py && python scripts/mutation_round_4.py \
-  && python scripts/mutation_round_5.py
+  && python scripts/mutation_round_5.py && python scripts/mutation_round_6.py
 ```
 
 Live organization and project UUIDs were removed from the working tree **and rewritten out of

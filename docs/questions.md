@@ -113,7 +113,7 @@ The repository is public.
 
 **Decision (Chris Ahrendt, 2026-11-05):** option (b). Replace customer names with "a customer" or "the customer" and drop internal ticket ids, keeping the reasoning. Done on 2026-11-05. The "personal email address" was a staff address in an example manifest in `docs/FIXTURE_DESIGN.md`, now `someone@example.com`. D5 in the gate now fails on a ticket id or a staff mailbox. Customer names are not in the gate, because the gate file would then contain them.
 
-## Q-008 [OPEN]. Should `capella_fixture_import` check that the target cluster is managed and not protected?
+## Q-008 [DECIDED: Chris Ahrendt, 2026-11-09, option (a)]. Should `capella_fixture_import` check that the target cluster is managed and not protected?
 
 **Found 2026-11-09**, by reading `handlers/capella/fixture.py` (around line 1520) while writing
 `docs/design/fixtures.md`. `capella_fixture_import` writes documents into a cluster the caller
@@ -134,4 +134,4 @@ Not reproduced, and not tested against a live organization.
 - Recommendation: (a). The protected list reads as configured, and an operator would expect it to
   hold for an import that overwrites documents.
 
-Not decided. No code changed.
+**Decision (Chris Ahrendt, 2026-11-09):** option (a). `capella_fixture_import` now fetches the live target cluster and runs `assert_managed` on it, after the project check and before any structure or document is written. An unusable cluster response is a refusal (fail closed, as in `_fetch_cluster`). Built the same day with tests in `tests/test_capella_fixture_import_flow.py`, and mutation-checked in `scripts/mutation_round_6.py`. Existing buckets are still not prefix-checked, because the cluster check now covers what they sit in.

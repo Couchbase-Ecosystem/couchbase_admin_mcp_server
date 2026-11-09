@@ -57,10 +57,13 @@ through. A path argument on a tool that writes files is the sensitive part of th
 
 **Import is destructive and says so.** Both imports are annotated destructive, so the server's
 confirmation gate applies (`docs/design/authorization.md`). The Enterprise Edition schema also
-requires `confirm`. The Capella import checks the project allowlist and the name prefix of any
-bucket it would create, and refuses a malformed `keyspace_map` before importing anything. It does
-not check the ownership of the target cluster the way the other Capella writes do. That is open
-as Q-008 in `docs/questions.md`.
+requires `confirm`. The Capella import checks the project allowlist, then fetches the live target
+cluster and refuses one that lacks `CAPELLA_ENV_NAME_PREFIX` or is in
+`CAPELLA_PROTECTED_CLUSTERS`, then checks the name prefix of any bucket it would create. It
+refuses a malformed `keyspace_map` before importing anything. The cluster check was added on
+2026-11-09 (Q-008, Chris Ahrendt): before it, an import could overwrite documents on a protected
+or hand-made cluster in an allowlisted project. It fails closed, so a cluster response that is
+not an object with a name is a refusal, the same rule as `_fetch_cluster`.
 
 **Two refusals on Enterprise Edition, both about not making capacity decisions on someone else's
 cluster as a side effect.** Export will not create an index. A collection with none cannot be read
@@ -105,6 +108,7 @@ the gating logic, not the shipped container image.
 | Import creates only what the data needs, never a bucket; reports a failed scope or collection | `tests/test_ee_fixture_import.py` |
 | Export, list, and the index and eventing steps | `tests/test_ee_fixture_export_and_list.py`, `tests/test_ee_fixture_index_and_eventing.py` |
 | Capella verify, import flow, transport | `tests/test_capella_fixture_verify.py`, `tests/test_capella_fixture_import_flow.py`, `tests/test_capella_fixture_transport.py` |
+| The import refuses an unprefixed, a protected and an unreadable target cluster, and writes nothing | `tests/test_capella_fixture_import_flow.py` (`test_a_cluster_without_the_name_prefix_is_refused` and the four after it) |
 | A real cluster | `scripts/fixture_round_trip.py --perform`, by hand. Last recorded clean: 187 documents on a local 7.6 cluster, 2026-09-14 |
 
 ## Before you change it
@@ -114,8 +118,10 @@ the gating logic, not the shipped container image.
   Unit tests passing is not enough here. That is what the first defect proved.
 - Do not add a plane name or a network call to `fixture_core.py`. The test fails it.
 - Do not let a fixture tool take a path that does not go through `resolve_under_root`.
-- GAP: none of the three mutation rounds breaks a guard in any `fixture` module (counted with
-  `--list` on 2026-11-09), and no round trip has been recorded since 2026-09-14. Both are open.
-- Until Q-008 is decided, do not describe the Capella import as sandboxed to managed clusters.
+- GAP: only the Capella import ownership check is mutation-checked (round 6). The shared
+  `fixture_core.py` and the Enterprise Edition fixture module have no mutation, and no round trip
+  has been recorded since 2026-09-14.
+- Keep the ownership check in `capella_fixture_import` ahead of every write. Three mutations in
+  `scripts/mutation_round_6.py` break it.
 - Record a change to what a fixture preserves in `docs/design-decisions.md`. Chris Ahrendt
   decides it.

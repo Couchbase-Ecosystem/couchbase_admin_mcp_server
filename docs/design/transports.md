@@ -121,5 +121,6 @@ path itself. This was verified against a real client handshake.
   asserts that `TransportSecuritySettings` is constructed with protection on (searched the tests
   on 2026-11-09). `tests/test_http_transport_live.py` starts a real server but does not check
   either. A keyword search of the mutation labels (`scripts/mutation_*.py --list`) finds one
-  transport mutation, on the Host allowlist.
+  transport mutation, on the Host allowlist. Round 6 leaves the transport out on purpose: a
+  mutation here would survive until a test exists, and a survivor fails CI. Write the tests first.
 - Chris Ahrendt decides the defaults. Record a change in `docs/design-decisions.md`.

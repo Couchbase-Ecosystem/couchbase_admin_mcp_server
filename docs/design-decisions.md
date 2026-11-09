@@ -8,6 +8,9 @@ A header says what the code does now, and cites a question number for the reason
 
 | Date | Decision | Decided by | Where the reasoning is |
 | --- | --- | --- | --- |
+| 2026-11-09 | `capella_fixture_import` checks that the target cluster is managed and not protected, like every other write on a cluster (Q-008 option a) | Chris Ahrendt | `docs/questions.md` Q-008, `docs/design/fixtures.md` |
+| 2026-11-09 | Git history is not rewritten to remove customer names, ticket ids or a staff address from old commits. They are removed from the current tree only | Chris Ahrendt | Chat, 2026-11-09; `docs/questions.md` Q-007 |
+| 2026-11-09 | The Capella sandbox gets its own mutation round (`scripts/mutation_round_6.py`), run in CI. Transport refusals wait for tests | Chris Ahrendt | Chat, 2026-11-09; `docs/design/capella-client-and-guardrails.md` |
 | 2026-11-05 | Customer names and internal ticket ids leave the public repository; the reasoning stays (Q-007 option b) | Chris Ahrendt | `docs/questions.md` Q-007 |
 | 2026-11-05 | The lab password is read from `CB_LAB_PASSWORD`, with no default (Q-006 option a) | Chris Ahrendt | `docs/questions.md` Q-006 |
 | 2026-11-05 | `CHANGELOG.md` stays beside the top-level modules in the wheel (Q-005 option a) | Chris Ahrendt | `docs/questions.md` Q-005 |

@@ -543,6 +543,8 @@ def _stub_export_cluster(
     monkeypatch.setattr(fixture, "_data_api_credential", lambda: (("u", "p"), ""))
 
     def _invoke(op_name, args, body=None, composite=""):
+        if op_name == "capella_cluster_get":
+            return {"id": "c", "name": "mcptest-c"}
         if op_name == "capella_buckets_list":
             return {"data": [{"name": "b", "id": "Yg=="}]}
         if op_name == "capella_scopes_list":
@@ -894,6 +896,8 @@ def _import_against(monkeypatch, tmp_path, structure, keyspace_map=None):
     attempted: list[str] = []
 
     def _invoke(op_name, args, body=None, composite=""):
+        if op_name == "capella_cluster_get":
+            return {"id": "c", "name": "mcptest-c"}
         if op_name == "capella_buckets_list":
             return {"data": [{"name": "b", "id": "Yg=="}]}
         if op_name == "capella_scope_create":
@@ -1228,6 +1232,8 @@ def test_the_default_collection_is_asked_for_with_the_bucket_alone(
     real_invoke = env._invoke
 
     def _invoke(op_name, args, body=None, composite=""):
+        if op_name == "capella_cluster_get":
+            return {"id": "c", "name": "mcptest-c"}
         if op_name == "capella_scopes_list":
             return {
                 "scopes": [{"name": "_default", "collections": [{"name": "_default"}]}]

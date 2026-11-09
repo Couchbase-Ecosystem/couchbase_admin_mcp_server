@@ -144,7 +144,8 @@ manifest, the integrity check, path containment under `CB_ADMIN_FIXTURE_ROOT` an
 statement are shared (`handlers/fixture_core.py`). A fixture is not a backup: CAS is not kept and
 export is not point-in-time. Why it is built this way: `docs/design/fixtures.md`. The older
 `docs/FIXTURE_DESIGN.md` holds the history and the measured Capella limits. The fixture part of
-this section was re-read on 2026-11-09.
+this section was re-read on 2026-11-09. The Capella import refuses a target cluster that is not
+managed or is protected, by the same rule as the other Capella writes (S8, Q-008).
 
 The backup catalogue records user-defined metadata about backups on both control planes
 (`handlers/backup_catalog.py`). [VERIFY] Not re-read for this draft.

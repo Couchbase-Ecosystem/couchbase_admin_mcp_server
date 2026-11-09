@@ -1523,6 +1523,47 @@ def _import(args: dict) -> list[TextContent]:
 
     ids = {"organization_id": org, "project_id": project, "cluster_id": cluster_id}
 
+    # OWNERSHIP OF THE TARGET CLUSTER (docs/questions.md Q-008, decided by Chris Ahrendt
+    # 2026-11-09). An import overwrites documents on a cluster the caller names, so it gets the
+    # same check as every other write on a cluster's children: the live cluster must carry the
+    # name prefix and must not be in CAPELLA_PROTECTED_CLUSTERS. Before this, only the project
+    # allowlist and the prefix of buckets the import would CREATE were checked, so a protected or
+    # hand-made cluster in an allowlisted project could be imported into.
+    #
+    # FAIL CLOSED, as in handlers/capella/__init__.py `_fetch_cluster`: a response that is not a
+    # cluster object with a name is a refusal, never "nothing to check".
+    try:
+        target_cluster = _env._invoke(
+            "capella_cluster_get", ids, composite="capella_fixture_import"
+        )
+    except Exception as exc:
+        return err(
+            f"could not read the target cluster to establish its ownership: {exc}\n"
+            "Nothing was imported.",
+            tool="capella_fixture_import",
+        )
+    if not isinstance(target_cluster, dict) or not target_cluster.get("name"):
+        return err(
+            "Could not establish ownership of the target cluster: Capella did not return a "
+            "usable cluster object. Nothing was imported.",
+            tool="capella_fixture_import",
+            hint="Verify the ids with capella_clusters_list.",
+        )
+    try:
+        g.assert_managed(
+            target_cluster,
+            project,
+            kind="cluster",
+            policy=policy,
+            verb="import into",
+        )
+    except g.GuardrailError as exc:
+        return err(
+            f"Refused by guardrail policy: {exc}\nNothing was imported.",
+            tool="capella_fixture_import",
+            hint=exc.hint,
+        )
+
     structure = manifest.get("structure")
     if not isinstance(structure, list):
         structure = []

@@ -14,6 +14,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 
 ### Added
 
+- `scripts/mutation_round_6.py`, run in CI: 13 mutations of the Capella sandbox (guardrail policy, ownership of the cluster a call writes to, fixture import ownership). Two behaviour tests for the written-cluster rule in `tests/test_capella_guardrail_hardening.py`.
 - The documentation gate, `tests/test_documentation_gate.py`, which lists every gap
   against the documentation standard (rules D1 to D15) on each test run.
 - The handover set in `docs/`: `README.md`, `MODULE_MAP.md`, `BUILD_GUIDE.md`,
@@ -29,6 +30,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 
 ### Fixed
 
+- `capella_fixture_import` now checks the target cluster. It fetches the live cluster and refuses one that lacks `CAPELLA_ENV_NAME_PREFIX` or is in `CAPELLA_PROTECTED_CLUSTERS`, before anything is written, and refuses when the cluster response is unusable. Before, an import could overwrite documents on a protected or hand-made cluster in an allowlisted project. Behavior change: an import into such a cluster is now refused (Q-008).
 - The cached SDK cluster connection is now built under a lock. Two calls that arrived together before the first connection existed each built a cluster, and one was never closed (Q-001).
 
 ### Changed

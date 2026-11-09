@@ -98,6 +98,7 @@ READ_ONLY_SCRIPTS = {
     "mutation_round_4.py": "changes only a temporary copy of the repository",
     "mutation_round_5.py": "changes only a temporary copy of the repository",
     "mutation_round_6.py": "changes only a temporary copy of the repository",
+    "mutation_round_7.py": "changes only a temporary copy of the repository",
     "find-couchbase-clusters.ps1": "GET requests only",
     "measure-egress.ps1": "GET requests only",
     "probe_backup_paths.ps1": "GET requests only",

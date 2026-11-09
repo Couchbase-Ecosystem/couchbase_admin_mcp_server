@@ -54,9 +54,11 @@ deleted the wrong thing".
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -198,6 +200,48 @@ def _root(args: dict, *, writing: bool = False) -> pathlib.Path:
             f"plain relative one; traversal is refused rather than normalised."
         )
     return resolved
+
+
+#: Serialises every tool that writes. A catalogue entry is read, changed and written back, so two
+#: calls on the same entry could otherwise lose one change. Calls run on worker threads in one
+#: process (see `handle`), and this closes the race there. Two server PROCESSES sharing one
+#: directory are not covered; see docs/design/backup-catalogue.md.
+_WRITE_LOCK = threading.Lock()
+
+_WRITERS = frozenset(
+    {
+        "cb_backup_catalog_record",
+        "cb_backup_catalog_update",
+        "cb_backup_catalog_delete",
+        "cb_backup_catalog_sync",
+    }
+)
+
+
+def _write_entry(path: pathlib.Path, entry: dict) -> None:
+    """Write an entry so a crash leaves the old file or the new one, never half of either.
+
+    Writes a temporary file beside the entry, then replaces the entry with it in one step. The
+    temporary name ends in `.tmp`, so `_read_entries` (which reads `*.json`) never sees it. On a
+    failure the temporary file is removed and the original entry is untouched.
+
+    Args:
+        path: where the entry lives.
+        entry: the entry, without the private `_file` key.
+
+    Raises:
+        OSError: the temporary file could not be written or moved into place.
+    """
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(entry, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        os.replace(temporary, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            temporary.unlink()
+        raise
 
 
 def _now() -> str:
@@ -536,7 +580,7 @@ def _record(args: dict):
     }
     try:
         root.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(entry, indent=2, sort_keys=True), encoding="utf-8")
+        _write_entry(path, entry)
     except OSError as exc:
         return err(
             f"could not write the entry: {exc}",
@@ -641,7 +685,7 @@ def _update(args: dict):
     entry["updated_at"] = _now()
 
     try:
-        path.write_text(json.dumps(entry, indent=2, sort_keys=True), encoding="utf-8")
+        _write_entry(path, entry)
     except OSError as exc:
         return err(f"could not write the entry: {exc}", tool="cb_backup_catalog_update")
     entry["_file"] = str(path)
@@ -714,13 +758,9 @@ def _sync(args: dict):
         entry["sync"] = {"status": status, "checked_at": checked_at}
         (present if status == "present" else missing).append(entry.get("catalog_id"))
         try:
-            pathlib.Path(entry["_file"]).write_text(
-                json.dumps(
-                    {k: v for k, v in entry.items() if k != "_file"},
-                    indent=2,
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+            _write_entry(
+                pathlib.Path(entry["_file"]),
+                {k: v for k, v in entry.items() if k != "_file"},
             )
         except OSError as exc:
             _log.warning("catalogue entry could not be updated: %s", exc)
@@ -774,11 +814,16 @@ def handle(name: str, args: dict[str, Any]):
         The tool's result, built by the handler registered for `name` in `HANDLERS`.
 
     Threading: called on a worker thread. Entries are files under `CB_ADMIN_CATALOG_ROOT`, one
-    per entry, so two calls touch different files unless they name the same entry.
+    per entry. The four tools that write hold `_WRITE_LOCK`, so two writes in this process never
+    interleave; reads take no lock and see either the old entry or the new one, because a write
+    replaces the file in one step (`_write_entry`).
     """
     handler = HANDLERS.get(name)
     if handler is None:
         return err(f"Unknown backup catalog tool: {name}", tool=name)
+    if name in _WRITERS:
+        with _WRITE_LOCK:
+            return handler(args or {})
     return handler(args or {})
 
 

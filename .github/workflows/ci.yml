@@ -133,6 +133,10 @@ jobs:
         # cluster a call WRITES to, and the ownership check on a fixture import (Q-008).
         # Rounds 1-5 broke no guard in guardrails.py or handlers/capella/__init__.py.
         run: uv run python scripts/mutation_round_6.py
+      - name: Mutations, round 7
+        # The backup catalogue: where it writes, traversal, sync never deleting, and
+        # atomic, serialised writes. No earlier round touched handlers/backup_catalog.py.
+        run: uv run python scripts/mutation_round_7.py
   package:
     # The image and the wheel both listed their top-level modules by hand and both once
     # omitted three, so `import server` failed at startup with none of the security

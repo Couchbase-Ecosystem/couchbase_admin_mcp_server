@@ -2,7 +2,7 @@
 
 Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S9.
-Main items: 50 test function(s). Helpers and fixtures: `payload`, `is_error`, `root`, `record`,
+Main items: 53 test function(s). Helpers and fixtures: `payload`, `is_error`, `root`, `record`,
     `_recorded`.
 Callers: none; collected by pytest
 Callees: `handlers.backup_catalog`, `handlers.shared`
@@ -594,3 +594,69 @@ def test_sync_logs_an_entry_it_could_not_rewrite_and_carries_on(root, monkeypatc
     body = payload(bc.handle("cb_backup_catalog_sync", {"backup_ids": ["bk-1"]}))
     assert body["present"] == ["e1"]
     assert body["missing"] == ["e2"]
+
+
+# ── A write never leaves half an entry, and two writes never interleave ──────
+
+
+def test_a_failed_replace_leaves_the_original_entry_and_no_temporary_file(
+    root, monkeypatch
+):
+    """A crash or an OSError between writing and replacing must cost nothing: the entry
+    on disk is still the old one, and no `.tmp` file is left for a later run to trip on."""
+    _recorded(catalog_id="e1", notes="before")
+
+    def refuse(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", refuse)
+    result = bc.handle(
+        "cb_backup_catalog_update", {"catalog_id": "e1", "notes": "after"}
+    )
+    assert is_error(result)
+    monkeypatch.undo()
+    monkeypatch.setenv(ENV, str(root))
+    kept = payload(bc.handle("cb_backup_catalog_get", {"catalog_id": "e1"}))
+    assert kept["notes"] == "before"
+    assert [p.name for p in root.iterdir()] == ["e1.json"]
+
+
+def test_a_temporary_file_is_never_listed_as_an_entry(root):
+    _recorded(catalog_id="e1")
+    (root / "e2.json.tmp").write_text("{}", encoding="utf-8")
+    body = payload(bc.handle("cb_backup_catalog_list", {}))
+    assert body["matched"] == 1
+    assert "unreadable" not in body
+
+
+def test_simultaneous_updates_to_one_entry_all_persist(root, monkeypatch):
+    """Eight threads each add a different tag to the same entry. Each reads the entry, then
+    writes it back. Slowing the write makes every thread read before any has written, which
+    loses seven of the eight tags unless the writes are serialised."""
+    import threading
+    import time
+
+    _recorded(catalog_id="e1")
+    real_write = bc._write_entry
+
+    def slow(path, entry):
+        time.sleep(0.05)
+        real_write(path, entry)
+
+    monkeypatch.setattr(bc, "_write_entry", slow)
+    threads = [
+        threading.Thread(
+            target=bc.handle,
+            args=(
+                "cb_backup_catalog_update",
+                {"catalog_id": "e1", "tags": {f"k{i}": "v"}},
+            ),
+        )
+        for i in range(8)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    tags = payload(bc.handle("cb_backup_catalog_get", {"catalog_id": "e1"}))["tags"]
+    assert sorted(tags) == [f"k{i}" for i in range(8)]

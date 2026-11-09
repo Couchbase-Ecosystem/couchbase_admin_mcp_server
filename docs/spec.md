@@ -155,7 +155,8 @@ location is `CB_ADMIN_CATALOG_ROOT` or the `catalog_root` argument. Reads fall b
 `.backup-catalog/`, and writes refuse to run until a location is stated. An Enterprise Edition entry
 needs a `repository_id`. List filters by tags (`match_tags`, `exclude_tags`), `plane`,
 `cluster_id`, `bucket` and dates, newest first. Sync takes the ids the plane reports from the caller
-and marks entries `present` or `missing`, and never deletes one. Re-read on 2026-11-09. Why:
+and marks entries `present` or `missing`, and never deletes one. An entry is written atomically,
+and the writing tools are serialised within a process. Re-read on 2026-11-09. Why:
 `docs/design/backup-catalogue.md`.
 
 ## S10. Egress allowlist

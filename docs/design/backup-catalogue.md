@@ -34,6 +34,12 @@ no error, which is the worst failure this module has, because the catalogue is t
 a backup existed. The refusal was also earned in the test run: the contract harness calls every tool
 with the value `"sample"`, and two real entries appeared in the repository tree on 2026-09-14.
 
+**Writes are atomic and serialised.** An entry is written to a `.tmp` file beside it and moved into
+place in one step (`_write_entry`), so a crash leaves the old entry or the new one and never half.
+The four tools that write hold one lock, so two updates to the same entry in this process cannot
+both read the old version and lose one change. This was added on 2026-11-09 after the first version
+of this note found the gap. The lock does not span processes.
+
 **An entry is a pointer, and deleting it never touches a backup.** The tools never delete backup
 bytes, and the delete result says so. A tool that could delete a customer's backup while claiming to
 tidy metadata is one nobody should run.
@@ -85,6 +91,7 @@ accepted, and a `catalog_root` containing `..` is refused, not normalized.
 | Update merges or replaces tags; delete is idempotent and says the backup is untouched | same file |
 | Sync marks and never deletes; an empty list warns; scope by plane and cluster | same file |
 | A failed write, update, delete or sync write is reported, not hidden | same file |
+| A failed replace keeps the original and leaves no `.tmp`; a `.tmp` is never listed; eight simultaneous updates all persist | same file (`test_a_failed_replace_leaves_the_original_entry_and_no_temporary_file`, `test_a_temporary_file_is_never_listed_as_an_entry`, `test_simultaneous_updates_to_one_entry_all_persist`) |
 
 ## Before you change it
 
@@ -92,11 +99,11 @@ accepted, and a `catalog_root` containing `..` is refused, not normalized.
 - Never make a write fall back to a default location.
 - Never make sync delete an entry.
 - Bump `CATALOG_SCHEMA` on a breaking change to the entry shape.
-- GAP: `CB_ADMIN_CATALOG_ROOT` is named in no README, Dockerfile or deploy file (searched on
-  2026-11-09), so an operator finds it only by hitting the refusal. A container deployment must
-  mount a volume and set it.
-- GAP: no mutation breaks a guard in this module (`scripts/mutation_*.py`, searched 2026-11-09).
-- GAP: an entry is read, changed and rewritten with no lock and no atomic replace, so two calls that
-  update the same entry at once can lose one of the changes. A crash during a rewrite can truncate
-  that one file. Not reproduced, read from the code.
+- A container deployment must mount a volume and set `CB_ADMIN_CATALOG_ROOT`. It is described in
+  `.env.example`, which also now describes `CB_ADMIN_FIXTURE_ROOT` (neither was documented before
+  2026-11-09).
+- Ten guards are mutation-checked in `scripts/mutation_round_7.py`. Add one for any guard you add.
+- GAP: the write lock is per process. Two server processes sharing one catalogue directory can
+  still lose an update, because nothing locks across processes. The replace is atomic, so a crash
+  or a lost race never leaves a half-written entry. Run one server per catalogue directory.
 - Chris Ahrendt decides the behavior. Record a change in `docs/design-decisions.md`.

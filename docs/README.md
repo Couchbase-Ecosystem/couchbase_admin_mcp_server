@@ -26,7 +26,7 @@ Read these in order if you are new.
 
 | File | What it covers |
 | --- | --- |
-| [design/README.md](design/README.md) | One note per hard subsystem: what it decides, why it is built that way, what went wrong before, which tests hold it. Starts with authorization |
+| [design/README.md](design/README.md) | One note per hard subsystem: what it decides, why it is built that way, what went wrong before, which tests hold it. Authorization, the Capella client and guardrails, the egress allowlist, fixtures, the transports |
 | [FIXTURE_DESIGN.md](FIXTURE_DESIGN.md) | How data, indexes and functions are exported and re-imported |
 | [CONTAINER_DEPLOYMENT.md](CONTAINER_DEPLOYMENT.md) | Container and Kubernetes deployment, one container per control plane |
 | [CAPELLA_SURFACE_TODO.md](CAPELLA_SURFACE_TODO.md) | The Capella operations to add, in what order, and what is left out on purpose |

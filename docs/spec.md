@@ -112,8 +112,11 @@ refused at start-up.
 - **streamable HTTP** (`CB_ADMIN_TRANSPORT=http`): a session manager gives each client
   its own session. The caller's authorization is resolved from the request inside the
   dispatch task (`auth/request_auth.py`). Origin and host validation are on, and TLS is
-  set up by `tls_config.py`. [VERIFY] The exact defaults for allowed origins and hosts:
-  read `_allowed_origins` and `_allowed_hosts` in `server.py`.
+  set up by `tls_config.py`. Allowed origins are exactly those in `CB_ADMIN_ALLOWED_ORIGINS`
+  (none by default). Allowed hosts are the bind address, `localhost` and `127.0.0.1`, each with
+  and without the port, plus any in `CB_ADMIN_ALLOWED_HOSTS` (read from `_allowed_origins` and
+  `_allowed_hosts` in `server.py`, 2026-11-09). Why, and what each refusal protects:
+  `docs/design/transports.md`.
 
 ## S7. Protocol error flag
 
@@ -133,14 +136,24 @@ dated. [VERIFY] Not re-read for this draft.
 
 ## S9. Fixtures and the backup catalogue
 
-A fixture is a portable export of data, indexes and functions that can be imported again
-(`handlers/fixture.py`, `handlers/capella/fixture.py`, `handlers/fixture_core.py`). The
-backup catalogue records user-defined metadata about backups on both control planes
-(`handlers/backup_catalog.py`). Behavior and file formats are in `docs/FIXTURE_DESIGN.md`.
-[VERIFY] Not re-read for this draft.
+A fixture is a manifest plus one hash-verified JSON Lines file per keyspace: structure, index
+definitions, eventing functions and documents with their expiry. It can be imported again, on the
+same plane or the other. Four tools per plane, export, import, list and verify
+(`handlers/fixture.py` for Enterprise Edition, `handlers/capella/fixture.py` for Capella). The
+manifest, the integrity check, path containment under `CB_ADMIN_FIXTURE_ROOT` and the export
+statement are shared (`handlers/fixture_core.py`). A fixture is not a backup: CAS is not kept and
+export is not point-in-time. Why it is built this way: `docs/design/fixtures.md`. The older
+`docs/FIXTURE_DESIGN.md` holds the history and the measured Capella limits. The fixture part of
+this section was re-read on 2026-11-09.
+
+The backup catalogue records user-defined metadata about backups on both control planes
+(`handlers/backup_catalog.py`). [VERIFY] Not re-read for this draft.
 
 ## S10. Egress allowlist
 
 Tools that ask the cluster to contact a destination are checked against an allowlist
-(`handlers/egress.py`) and refused with `denied_egress`. [VERIFY] The configuration names
-and the default: read the module header.
+(`handlers/egress.py`) and refused with `denied_egress`. The list is `CB_ADMIN_EGRESS_ALLOWED_HOSTS`
+(hosts, IPs, CIDRs, or a leading-dot domain suffix). With it unset, every destination is refused.
+`CB_ADMIN_EGRESS_ALLOW_ANY` admits public destinations only. Loopback, link-local and cloud
+metadata addresses are always refused, and private ranges need an explicit entry. Read from the
+module on 2026-11-09. Why: `docs/design/egress-allowlist.md`.

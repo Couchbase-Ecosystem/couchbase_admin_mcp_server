@@ -112,3 +112,26 @@ The repository is public.
   Not done until Chris decides.
 
 **Decision (Chris Ahrendt, 2026-11-05):** option (b). Replace customer names with "a customer" or "the customer" and drop internal ticket ids, keeping the reasoning. Done on 2026-11-05. The "personal email address" was a staff address in an example manifest in `docs/FIXTURE_DESIGN.md`, now `someone@example.com`. D5 in the gate now fails on a ticket id or a staff mailbox. Customer names are not in the gate, because the gate file would then contain them.
+
+## Q-008 [OPEN]. Should `capella_fixture_import` check that the target cluster is managed and not protected?
+
+**Found 2026-11-09**, by reading `handlers/capella/fixture.py` (around line 1520) while writing
+`docs/design/fixtures.md`. `capella_fixture_import` writes documents into a cluster the caller
+names. It checks the project allowlist and the name prefix of any bucket it would **create**. It
+does not fetch the target cluster and run `assert_managed`, which every other write on a cluster's
+children does through `_apply_guardrails` (finding F1 in
+`tests/test_capella_guardrail_hardening.py`). That check refuses a cluster whose name lacks
+`CAPELLA_ENV_NAME_PREFIX` and a cluster named in `CAPELLA_PROTECTED_CLUSTERS`. So, from reading:
+a fixture could be imported into an existing bucket on a protected or hand-made cluster that
+sits in an allowlisted project. `tests/test_capella_fixture_import_flow.py` states the intent as
+"the rule governs what this server brings into existence", so the omission may be deliberate.
+Not reproduced, and not tested against a live organization.
+
+- (a) Add the cluster ownership check to the import. Same rule as every other write on a
+  cluster. Cost: one cluster fetch, and an import into a hand-made cluster is refused.
+- (b) Leave it. Existing buckets are the caller's business, as the test says. Cost: the
+  protected list and the prefix do not protect a cluster from a fixture import.
+- Recommendation: (a). The protected list reads as configured, and an operator would expect it to
+  hold for an import that overwrites documents.
+
+Not decided. No code changed.

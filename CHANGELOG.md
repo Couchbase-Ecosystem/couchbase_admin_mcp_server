@@ -24,6 +24,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 - The documentation standard, in `CONTRIBUTING.md`.
 - A header on every Python file, PowerShell script and the console page: component, spec section, main items, callers and callees (D1). Two gate rules check them: every Python header has the five fields, and its callers and callees match what the code imports. No behavior changed.
 - A doc comment on every public function and class (D2). The gate now fails the build when one is missing.
+- Design notes for the Capella client and guardrails, the egress allowlist, fixtures and the transports, in `docs/design/`. Documentation only. Writing them found one open question, Q-008 (the Capella fixture import does not check the target cluster's ownership).
 - A gate rule, `scripts-preview`: every script previews, has an action flag, or is declared read-only with a reason. `scripts/README.md` has a new section listing which.
 
 ### Fixed

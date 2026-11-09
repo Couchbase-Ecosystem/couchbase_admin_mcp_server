@@ -35,6 +35,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 
 ### Changed
 
+- `.gitignore` lists `cb-data.tgz` and `reexport.json`, run artifacts that kept showing as untracked.
 - `scripts/load_test_data.py` now previews by default and loads only with `--perform`. Before, it wrote about 2,200 documents as soon as it started. Anyone running it as before gets a plan and no data until they add `--perform`.
 - The three mutation scripts take `--help` and `--list`. `--help` used to start a full round. With no option they run the round exactly as before.
 - Eight PowerShell scripts take `-WhatIf` (`start-ee-cluster`, `ee-lab`, `seed-ee-bucket`, `add-local-services`, `probe-alternate-ports`, `run-docker-verification`, `commit-session`, `fetch-ee-backup`). It prints what they would change and changes nothing. Not run in CI, which has no PowerShell.

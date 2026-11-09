@@ -265,3 +265,8 @@ fixtures/
 # ignores only the default scratch location used when nobody set
 # CB_ADMIN_CATALOG_ROOT. Point that at a real directory to commit a catalogue.
 .backup-catalog/
+
+# Run artifacts from the fixture and export checks. Re-created by the scripts that use them,
+# never part of the source.
+/cb-data.tgz
+/reexport.json

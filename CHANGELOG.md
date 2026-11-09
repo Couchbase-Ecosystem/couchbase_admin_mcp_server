@@ -14,6 +14,7 @@ reconstructed from it here, so this file claims nothing about those changes.
 
 ### Added
 
+- Design note for the backup catalogue, `docs/design/backup-catalogue.md`, and `docs/spec.md` S9 re-read for it. Documentation only. It found three gaps, listed in the note.
 - `scripts/mutation_round_6.py`, run in CI: 13 mutations of the Capella sandbox (guardrail policy, ownership of the cluster a call writes to, fixture import ownership). Two behaviour tests for the written-cluster rule in `tests/test_capella_guardrail_hardening.py`.
 - The documentation gate, `tests/test_documentation_gate.py`, which lists every gap
   against the documentation standard (rules D1 to D15) on each test run.

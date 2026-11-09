@@ -148,7 +148,15 @@ this section was re-read on 2026-11-09. The Capella import refuses a target clus
 managed or is protected, by the same rule as the other Capella writes (S8, Q-008).
 
 The backup catalogue records user-defined metadata about backups on both control planes
-(`handlers/backup_catalog.py`). [VERIFY] Not re-read for this draft.
+(`handlers/backup_catalog.py`), because neither plane can tag a backup. It is a directory of JSON
+files, one per entry, each pointing at a backup. It never changes a backup or calls a plane.
+Six tools: `cb_backup_catalog_record`, `_list`, `_get`, `_update`, `_delete` and `_sync`. The
+location is `CB_ADMIN_CATALOG_ROOT` or the `catalog_root` argument. Reads fall back to
+`.backup-catalog/`, and writes refuse to run until a location is stated. An Enterprise Edition entry
+needs a `repository_id`. List filters by tags (`match_tags`, `exclude_tags`), `plane`,
+`cluster_id`, `bucket` and dates, newest first. Sync takes the ids the plane reports from the caller
+and marks entries `present` or `missing`, and never deletes one. Re-read on 2026-11-09. Why:
+`docs/design/backup-catalogue.md`.
 
 ## S10. Egress allowlist
 

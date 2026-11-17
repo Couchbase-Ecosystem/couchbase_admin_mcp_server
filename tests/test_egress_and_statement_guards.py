@@ -132,11 +132,23 @@ def test_port_and_scheme_are_stripped_before_the_decision(monkeypatch):
         "vault.example.com",
         "vault.example.com:5696",
         "https://vault.example.com",
-        "https://vault.example.com/v1/keys",
+        "https://vault.example.com:8200",
     ):
         assert egress.assert_egress_allowed(value, field="h", tool="t") == (
             "vault.example.com"
         )
+    # A value with a path is refused by the strict default (changed: it used to have
+    # its host extracted) and still accepted where the caller opts out.
+    with pytest.raises(egress.EgressDeniedError):
+        egress.assert_egress_allowed(
+            "https://vault.example.com/v1/keys", field="h", tool="t"
+        )
+    assert (
+        egress.assert_egress_allowed(
+            "https://vault.example.com/v1/keys", field="h", tool="t", strict=False
+        )
+        == "vault.example.com"
+    )
 
 
 def test_empty_host_is_refused():

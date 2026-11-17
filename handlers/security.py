@@ -419,6 +419,27 @@ TOOLS: list[Tool] = [
 ]
 
 
+def _direct_roles(user: dict) -> dict:
+    """`user` with only the roles held directly, not through a group.
+
+    A GET lists every effective role, each with an `origins` list. A role whose
+    origins are all of type group is inherited; writing it back as a direct role
+    would keep it after the group is changed or the user leaves the group. Kept:
+    entries with no `origins` key and entries with a `user` origin.
+    """
+    kept = []
+    for entry in user.get("roles") or []:
+        if not isinstance(entry, dict):
+            continue
+        origins = entry.get("origins")
+        if origins is not None and not any(
+            isinstance(o, dict) and o.get("type") == "user" for o in origins
+        ):
+            continue
+        kept.append(entry)
+    return {**user, "roles": kept}
+
+
 def _roles_to_form(user: dict) -> str:
     """Re-encode a GET's `roles` array into the comma-separated form a PUT expects.
 
@@ -545,7 +566,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
                         "user exists with admin_user_get."
                     ),
                 )
-            data = {"password": args["password"], "roles": _roles_to_form(current)}
+            data = {
+                "password": args["password"],
+                "roles": _roles_to_form(_direct_roles(current)),
+            }
             groups = current.get("groups")
             if groups:
                 data["groups"] = ",".join(str(g) for g in groups)

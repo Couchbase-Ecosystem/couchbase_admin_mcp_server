@@ -4,10 +4,10 @@ Component: the container health probe for the HTTP transport. A 401 counts as he
     it proves the process is serving HTTP.
 Spec: docs/spec.md S2 (one container), S6 (transports); docs/questions.md Q-004 (other entry
     points).
-Main items: `check`, `main`.
+Main items: `check`, `main`; helpers `_endpoint`, `_tls_direct`, `_tcp_probe`.
 Callers: none; run by the `Dockerfile` HEALTHCHECK and the manifests in `deploy/k8s/`, never
     imported; 1 test file(s)
-Callees: none; standard library only.
+Callees: `tls_config`; otherwise standard library only.
 
 ONE DEFINITION, THREE CALLERS: the image's HEALTHCHECK and both Kubernetes
 manifests run this file. It used to be an inline one-liner in the Dockerfile and
@@ -67,14 +67,32 @@ the failure mode this file exists to remove rather than relocate.
 from __future__ import annotations
 
 import os
+import socket
+import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 #: Statuses that prove the application answered. 4xx is the application refusing,
 #: which is the application working.
 _ANSWERED_FLOOR = 200
 _ANSWERED_CEILING = 499
+
+#: CB_ADMIN_TRANSPORT values that mean the HTTP transport; the same aliases `server.main` accepts.
+#: "streamable-http" is the spelling the MCP SDK itself uses.
+_HTTP_TRANSPORTS = ("http", "streamable_http", "streamablehttp", "streamable-http")
+
+
+def _tls_direct() -> tuple[bool, bool]:
+    """Return (this process terminates TLS, clients must present a certificate), from `tls_config`."""
+    try:
+        import tls_config
+
+        settings = tls_config.from_env()
+        return settings.direct, settings.require_client_cert
+    except Exception:
+        return False, False
 
 
 def _endpoint() -> str:
@@ -85,17 +103,45 @@ def _endpoint() -> str:
     if host in ("0.0.0.0", "::", "[::]"):
         host = "127.0.0.1"
     port = os.environ.get("CB_ADMIN_PORT", "8000").strip() or "8000"
-    return f"http://{host}:{port}/mcp"
+    scheme = "https" if _tls_direct()[0] else "http"
+    return f"{scheme}://{host}:{port}/mcp"
+
+
+def _tcp_probe(target: str, timeout: float) -> tuple[int, str]:
+    """Healthy when the port accepts a TCP connection (used when mutual TLS blocks an HTTP probe)."""
+    parsed = urllib.parse.urlparse(target)
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port), timeout=timeout):
+            return 0, "port accepted a connection (mutual TLS: no HTTP probe possible)"
+    except OSError as exc:
+        return 1, f"no answer from {target}: {exc}"
 
 
 def check(url: str | None = None, timeout: float = 5.0) -> tuple[int, str]:
     """(exit_code, reason). 0 is healthy."""
-    if os.environ.get("CB_ADMIN_TRANSPORT", "stdio").strip().lower() != "http":
+    if (
+        os.environ.get("CB_ADMIN_TRANSPORT", "stdio").strip().lower()
+        not in _HTTP_TRANSPORTS
+    ):
         return 0, "transport is not http; nothing to probe"
 
     target = url or _endpoint()
+    _, mutual = _tls_direct()
+    context = None
+    if target.startswith("https://"):
+        if mutual and url is None:
+            # Mutual TLS: this probe has no client certificate, so the handshake would be
+            # refused by design. An accepted TCP connection is the strongest check available.
+            return _tcp_probe(target, timeout)
+        # The probe dials this same process on loopback, where the certificate's name will
+        # not match; there is no remote party to authenticate, so skip verification here only.
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     try:
-        with urllib.request.urlopen(target, timeout=timeout) as response:
+        with urllib.request.urlopen(
+            target, timeout=timeout, context=context
+        ) as response:
             return 0, f"answered {response.status}"
     except urllib.error.HTTPError as exc:
         if _ANSWERED_FLOOR <= exc.code <= _ANSWERED_CEILING:

@@ -116,6 +116,26 @@ def _exact_level_filter(levelno: int):
     return _filter
 
 
+#: Characters that start a new line in some log viewers or can drive a terminal: CR, LF,
+#: NEL (U+0085), line and paragraph separators (U+2028, U+2029) and ESC. Each is escaped.
+_LINE_BREAKS = {
+    "\r": "\\r",
+    "\n": "\\n",
+    "\x85": "\\x85",
+    "\u2028": "\\u2028",
+    "\u2029": "\\u2029",
+    "\x1b": "\\x1b",
+}
+
+
+def _flatten(text: str) -> str:
+    """Escape every line-breaking or terminal-control character in `text` so it stays one line."""
+    for char, escaped in _LINE_BREAKS.items():
+        if char in text:
+            text = text.replace(char, escaped)
+    return text
+
+
 class SafeRecordFilter(logging.Filter):
     """Sink-level scrubbing: credential masking and log-forgery prevention.
 
@@ -169,9 +189,36 @@ class SafeRecordFilter(logging.Filter):
             message = record.getMessage()
         except Exception:
             return True
-        if "\r" in message or "\n" in message:
-            record.msg = message.replace("\r", "\\r").replace("\n", "\\n")
+        flat = _flatten(message)
+        if flat != message:
+            record.msg = flat
             record.args = ()
+        # Tracebacks: the formatter would append them AFTER this filter, raw. Format
+        # now, mask credentials, flatten line breaks, and hand the result over as
+        # exc_text with exc_info cleared, so an exception message carrying a newline
+        # or a secret can neither forge a log line nor leak.
+        try:
+            if record.exc_info or record.exc_text:
+                text = record.exc_text or logging.Formatter().formatException(
+                    record.exc_info
+                )
+                try:
+                    from handlers.shared import redact_text as _redact_text
+
+                    text = _redact_text(text)
+                except Exception:
+                    pass
+                # Folded into the message, not left in exc_text: the formatter would put
+                # exc_text on a new line, and every record must stay one line.
+                record.msg = f"{record.getMessage()} | {_flatten(text)}"
+                record.args = ()
+                record.exc_text = None
+                record.exc_info = None
+        except Exception:
+            record.msg = f"{record.msg} | (traceback withheld: could not be scrubbed)"
+            record.args = ()
+            record.exc_text = None
+            record.exc_info = None
         return True
 
 

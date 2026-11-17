@@ -126,7 +126,11 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from .egress import guard_nested_host_fields
+from .egress import (
+    archive_value_is_remote,
+    assert_destination_uri_allowed,
+    guard_nested_host_fields,
+)
 from .shared import admin_request, arg_truthy, err, ok, quote_path
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -436,6 +440,16 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # same guard the restore target gets applies: an archive pointing at
             # an unallowlisted host is exfiltration with a backup's name on it.
             guard_nested_host_fields(body, tool=name, path="archive")
+            # `archive` matches no host-like key fragment, so the walk above is not
+            # enough on its own. Check it explicitly: a filesystem path is left alone;
+            # s3://, az://, gs:// buckets must be in the allowlist (or ALLOW_ANY is set);
+            # an https:// endpoint gets the full host check, so metadata, loopback and
+            # private hosts are refused.
+            archive = body["archive"]
+            if not isinstance(archive, str):
+                raise ValueError("archive must be a string")
+            if archive_value_is_remote(archive):
+                assert_destination_uri_allowed(archive, field="archive", tool=name)
 
             return ok(
                 admin_request(
@@ -499,6 +513,15 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # definitions get applies here: any destination-shaped value at any depth
             # must be in the allowlist.
             guard_nested_host_fields(args["target"], tool=name, path="target")
+            # The destination cluster URL sits under the key `target`, which matches no
+            # host-like fragment, so check it explicitly. It is always a destination, so
+            # it gets the full host check (denied ranges, private ranges, allowlist) and
+            # is never treated as a filesystem path.
+            if isinstance(args["target"], dict) and "target" in args["target"]:
+                dest = args["target"]["target"]
+                if not isinstance(dest, str) or not dest.strip():
+                    raise ValueError("target.target must be a non-empty string")
+                assert_destination_uri_allowed(dest, field="target.target", tool=name)
             return ok(
                 admin_request(
                     "POST",

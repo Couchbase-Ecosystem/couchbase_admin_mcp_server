@@ -306,7 +306,7 @@ def test_the_backoff_grows_between_attempts(cluster, monkeypatch):
 def _count_network_failures(monkeypatch, method: str) -> int:
     """Attempts made when the connection itself fails. Returns the call count.
 
-    Counted by intercepting `urlopen`, not by pointing at a closed port: the first version of
+    Counted by intercepting `OpenerDirector.open`, not by pointing at a closed port: the first version of
     this test only asserted that a RuntimeError was raised, which is true whether the client
     tried once or three times. The mutation that retried a POST on a network error survived it.
     """
@@ -319,7 +319,8 @@ def _count_network_failures(monkeypatch, method: str) -> int:
         attempts["n"] += 1
         raise urllib.error.URLError("connection reset by peer")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+    # admin_request opens through an opener that refuses redirects, not urlopen.
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", _refuse)
     with pytest.raises(RuntimeError, match="Network error"):
         shared.admin_request(method, "/controller/failOver")
     return attempts["n"]

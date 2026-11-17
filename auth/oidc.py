@@ -69,23 +69,82 @@ def _env_required(key: str) -> str:
 
 # ── OIDC discovery (cached) ───────────────────────────────────────────────────
 
-_discovery_cache: dict[str, Any] = {}
+#: issuer -> (fetched_at_monotonic, document). Entries older than `_DISCOVERY_TTL` are refetched.
+_discovery_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _jwks_clients: dict[str, Any] = {}  # jwks_uri -> PyJWKClient (cached per URI)
 _JWKS_TTL = 3600  # PyJWKClient cache lifespan in seconds
+#: How long a discovery document is trusted before it is fetched again, so a rotated
+#: endpoint or key location is picked up without a restart.
+_DISCOVERY_TTL = 3600
+#: Upper bound on the discovery response body. Real documents are a few KB; this stops a
+#: hostile or broken issuer from making the server buffer an unbounded body.
+_DISCOVERY_MAX_BYTES = 1024 * 1024
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1", "[::1]")
+
+
+def _require_https_issuer(issuer: str) -> None:
+    """Refuse an issuer that is not https, unless it names a loopback host (local test IdP).
+
+    Security rule: discovery names the token and JWKS endpoints, so fetching it over plain
+    http lets a network attacker substitute them.
+    """
+    parsed = urllib.parse.urlparse(issuer)
+    if parsed.scheme == "https" and parsed.hostname:
+        return
+    if parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS:
+        return
+    raise RuntimeError(
+        "OIDC configuration error: OAUTH_ISSUER must be an https URL "
+        "(http is allowed only for localhost)."
+    )
 
 
 def _discover() -> dict[str, Any]:
-    """Fetch and cache the OIDC discovery document."""
+    """Fetch and cache the OIDC discovery document.
+
+    The issuer must be https (loopback excepted), the document's own ``issuer`` must equal
+    the configured one (OpenID Connect Discovery 1.0 S4.3), the body is size-capped, and
+    redirects are not followed. The cache entry expires after `_DISCOVERY_TTL` seconds.
+
+    Raises:
+        RuntimeError: on an insecure issuer, an issuer mismatch, or an oversized or invalid
+            document.
+    """
     issuer = _env_required("OAUTH_ISSUER").rstrip("/")
-    if issuer in _discovery_cache:
-        return _discovery_cache[issuer]
+    _require_https_issuer(issuer)
+    cached = _discovery_cache.get(issuer)
+    if cached and (time.monotonic() - cached[0]) < _DISCOVERY_TTL:
+        return cached[1]
 
     # Standard discovery URL (RFC 8414 / OpenID Connect Discovery 1.0)
     well_known = f"{issuer}/.well-known/openid-configuration"
-    resp = _requests.get(well_known, timeout=10)
-    resp.raise_for_status()
-    doc = resp.json()
-    _discovery_cache[issuer] = doc
+    resp = _requests.get(well_known, timeout=10, allow_redirects=False, stream=True)
+    try:
+        resp.raise_for_status()
+        # Read in chunks and stop at the cap rather than trusting Content-Length.
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > _DISCOVERY_MAX_BYTES:
+                raise RuntimeError("OIDC discovery response is too large")
+            chunks.append(chunk)
+    finally:
+        resp.close()
+    import json as _json
+
+    try:
+        doc = _json.loads(b"".join(chunks).decode("utf-8"))
+    except ValueError as exc:
+        raise RuntimeError("OIDC discovery response is not valid JSON") from exc
+    if not isinstance(doc, dict):
+        raise RuntimeError("OIDC discovery document is not a JSON object")
+    doc_issuer = doc.get("issuer")
+    if not isinstance(doc_issuer, str) or doc_issuer.rstrip("/") != issuer:
+        raise RuntimeError(
+            "OIDC discovery document issuer does not match OAUTH_ISSUER; refusing it."
+        )
+    _discovery_cache[issuer] = (time.monotonic(), doc)
     return doc
 
 
@@ -137,7 +196,7 @@ def exchange_code(code: str, code_verifier: str) -> dict[str, Any]:
         "client_secret": _env_required("OAUTH_CLIENT_SECRET"),
         "code_verifier": code_verifier,
     }
-    resp = _requests.post(token_ep, data=payload, timeout=15)
+    resp = _requests.post(token_ep, data=payload, timeout=15, allow_redirects=False)
     resp.raise_for_status()
     return resp.json()
 
@@ -152,7 +211,7 @@ def refresh_access_token(refresh_token: str) -> dict[str, Any]:
         "client_id": _env_required("OAUTH_CLIENT_ID"),
         "client_secret": _env_required("OAUTH_CLIENT_SECRET"),
     }
-    resp = _requests.post(token_ep, data=payload, timeout=15)
+    resp = _requests.post(token_ep, data=payload, timeout=15, allow_redirects=False)
     resp.raise_for_status()
     return resp.json()
 
@@ -197,7 +256,7 @@ def client_credentials_token() -> dict[str, Any]:
     if aud:
         payload["audience"] = aud
 
-    resp = _requests.post(token_ep, data=payload, timeout=15)
+    resp = _requests.post(token_ep, data=payload, timeout=15, allow_redirects=False)
     resp.raise_for_status()
     return resp.json()
 

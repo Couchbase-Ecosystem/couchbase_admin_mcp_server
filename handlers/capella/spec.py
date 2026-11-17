@@ -3315,6 +3315,10 @@ OPS: tuple[Op, ...] = (
         ),
         group="backup",
         idempotent=False,
+        # GUARDED: the project allowlist and cluster ownership apply, because a backup of an
+        # unmanaged cluster in a non-allowlisted project is still a write to someone else's
+        # cluster.
+        guarded=True,
         # EMPTY BY OBSERVATION, not by omission. Until 2026-09-12 this `{}` meant
         # "nobody has checked" -- the operation's 405 came from an OPTIONS probe,
         # and OPTIONS never sends a body. Three bodies in this registry were
@@ -3517,6 +3521,8 @@ OPS: tuple[Op, ...] = (
             "log. Poll capella_cluster_audit_log_export_get for the download. [LIVE 405]"
         ),
         group="diagnostics",
+        # Guarded so the project allowlist and cluster ownership apply to the export job.
+        guarded=True,
         body=_AUDIT_EXPORT_BODY,
         body_required=("start", "end"),
     ),

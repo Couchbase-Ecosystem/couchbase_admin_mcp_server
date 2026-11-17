@@ -79,7 +79,7 @@ def test_f9_post_makes_exactly_one_attempt_on_500(monkeypatch):
         attempts.append(req.get_method())
         raise _http_error(500)
 
-    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client, "_urlopen", fake_urlopen)
     monkeypatch.setenv("CAPELLA_API_KEY_SECRET", "secret")
     monkeypatch.setenv("CAPELLA_HTTP_RETRIES", "3")
 
@@ -99,7 +99,7 @@ def test_f9_delete_retries_up_to_the_limit_on_500(monkeypatch):
         attempts.append(req.get_method())
         raise _http_error(503)
 
-    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client, "_urlopen", fake_urlopen)
     monkeypatch.setattr(client.time, "sleep", lambda _s: None)
     monkeypatch.setenv("CAPELLA_API_KEY_SECRET", "secret")
     monkeypatch.setenv("CAPELLA_HTTP_RETRIES", "3")
@@ -118,7 +118,7 @@ def test_f9_post_is_not_retried_on_a_dropped_connection(monkeypatch):
         attempts.append(req.get_method())
         raise urllib.error.URLError("connection reset")
 
-    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client, "_urlopen", fake_urlopen)
     monkeypatch.setattr(client.time, "sleep", lambda _s: None)
     monkeypatch.setenv("CAPELLA_API_KEY_SECRET", "secret")
     monkeypatch.setenv("CAPELLA_HTTP_RETRIES", "3")
@@ -137,7 +137,7 @@ def test_f9_get_is_retried_on_a_dropped_connection(monkeypatch):
         attempts.append(req.get_method())
         raise urllib.error.URLError("temporary dns failure")
 
-    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client, "_urlopen", fake_urlopen)
     monkeypatch.setattr(client.time, "sleep", lambda _s: None)
     monkeypatch.setenv("CAPELLA_API_KEY_SECRET", "secret")
     monkeypatch.setenv("CAPELLA_HTTP_RETRIES", "2")
@@ -154,7 +154,7 @@ def test_f9_api_key_secret_never_appears_in_an_error(monkeypatch):
     def fake_urlopen(req, timeout=None, context=None):
         raise _http_error(403)
 
-    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client, "_urlopen", fake_urlopen)
     monkeypatch.setenv("CAPELLA_API_KEY_SECRET", "super-secret-token-value")
 
     with pytest.raises(client.CapellaError) as excinfo:

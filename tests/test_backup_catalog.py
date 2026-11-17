@@ -100,11 +100,23 @@ def test_a_traversing_catalog_root_is_refused_rather_than_normalised(root):
     assert "traversal is refused" in payload(result)["error"]
 
 
-def test_an_explicit_catalog_root_overrides_the_environment(root, tmp_path):
-    other = tmp_path / "elsewhere"
-    entry = _recorded(catalog_root=str(other))
-    assert str(other) in entry["_file"]
-    assert not root.exists()
+def test_an_explicit_catalog_root_inside_the_configured_root_is_accepted(root):
+    """Changed from "overrides the environment": a caller-supplied root used to replace
+    CB_ADMIN_CATALOG_ROOT outright, which let any caller aim the tools at any directory.
+    It may now only narrow the configured root."""
+    inner = root / "elsewhere"
+    entry = _recorded(catalog_root=str(inner))
+    assert str(inner) in entry["_file"]
+
+
+def test_an_explicit_catalog_root_outside_the_configured_root_is_refused(
+    root, tmp_path
+):
+    result = record(
+        plane="capella", backup_id="bk-1", catalog_root=str(tmp_path / "elsewhere")
+    )
+    assert is_error(result)
+    assert "outside" in payload(result)["error"]
 
 
 # ── Tags: what is stored must be what a filter can ask for ───────────────────
@@ -414,12 +426,14 @@ def test_delete_says_the_backup_itself_is_untouched(root):
     assert "BACKUP is untouched" in body["note"]
 
 
-def test_delete_still_removes_an_entry_it_could_not_parse(root):
+def test_delete_refuses_a_file_it_cannot_prove_is_an_entry(root):
+    """Changed from "still removes an entry it could not parse": delete now requires the
+    schema marker, so it never removes a file this module cannot show it wrote."""
     root.mkdir(parents=True, exist_ok=True)
     (root / "bent.json").write_text("{ not json", encoding="utf-8")
-    body = payload(bc.handle("cb_backup_catalog_delete", {"catalog_id": "bent"}))
-    assert body["deleted"] is True
-    assert body["removed_entry"] == {}
+    result = bc.handle("cb_backup_catalog_delete", {"catalog_id": "bent"})
+    assert is_error(result)
+    assert (root / "bent.json").exists()
 
 
 # ── sync ─────────────────────────────────────────────────────────────────────

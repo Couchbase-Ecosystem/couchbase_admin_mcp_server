@@ -71,6 +71,7 @@ stray cluster was for and who to ask.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -160,14 +161,15 @@ class Policy:
 def load_policy() -> Policy:
     """Build the guardrail `Policy` from the environment, fresh on every call.
 
-    Reads `CAPELLA_ORG_ID`, `CAPELLA_ALLOWED_PROJECTS`, `CAPELLA_ENV_NAME_PREFIX`,
+    Reads `CAPELLA_ORG_ID` (or `CB_CAPELLA_ORG_ID` as an alias, which the shipped deploy templates
+    use; `CAPELLA_ORG_ID` wins when both are set), `CAPELLA_ALLOWED_PROJECTS`, `CAPELLA_ENV_NAME_PREFIX`,
     `CAPELLA_MAX_ENVIRONMENTS` (default 10), `CAPELLA_ENV_TTL_HOURS` (default 8),
     `CAPELLA_ALLOW_UNSCOPED_DESTRUCTIVE` (true only for 1, true, yes, on) and
     `CAPELLA_PROTECTED_CLUSTERS`. Nothing is cached, so a test can change the environment
     without fighting a cache.
     """
     return Policy(
-        organization_id=_env("CAPELLA_ORG_ID"),
+        organization_id=_env("CAPELLA_ORG_ID") or _env("CB_CAPELLA_ORG_ID"),
         allowed_projects=_env_list("CAPELLA_ALLOWED_PROJECTS"),
         name_prefix=_env("CAPELLA_ENV_NAME_PREFIX"),
         max_environments=_env_int("CAPELLA_MAX_ENVIRONMENTS", 10),
@@ -179,6 +181,67 @@ def load_policy() -> Policy:
 
 
 # ── Assertions ───────────────────────────────────────────────────────────────
+
+
+_OPEN_CIDRS = frozenset({"0.0.0.0/0", "::/0"})
+
+
+def assert_cidr_not_open(cidr: object, *, field: str = "cidr") -> None:
+    """Refuse a CIDR that opens a cluster to the whole internet.
+
+    `0.0.0.0/0` and `::/0` are refused unless the operator sets `CAPELLA_ALLOW_OPEN_CIDR` to a
+    truthy value (1, true, yes, on). This is an operator environment setting and never a tool
+    argument, so an agent cannot lift it. Any equivalent spelling that parses to a zero-length
+    prefix is refused too.
+
+    Raises:
+        GuardrailError: the value is an all-addresses CIDR and the operator has not allowed it.
+    """
+    text = str(cidr or "").strip()
+    try:
+        net = ipaddress.ip_network(text, strict=False)
+        is_open = net.prefixlen == 0
+    except ValueError:
+        is_open = text in _OPEN_CIDRS
+    if not is_open:
+        return
+    if _env("CAPELLA_ALLOW_OPEN_CIDR").lower() in ("1", "true", "yes", "on"):
+        return
+    raise GuardrailError(
+        f"`{field}`={text!r} would open the cluster to the whole internet and is refused.",
+        hint=(
+            "Use a narrow range such as a /32 for the client. An operator who really needs "
+            "an open range sets CAPELLA_ALLOW_OPEN_CIDR=true in the server environment; "
+            "a tool argument cannot do that."
+        ),
+    )
+
+
+def assert_no_case_collisions(value: object, *, where: str = "body") -> None:
+    """Refuse a body holding two keys that differ only in letter case.
+
+    A server that reads keys case-insensitively can see a different value from the one the
+    guards inspected (`name` checked, `Name` used), so such a body is refused outright. Nested
+    objects and lists are checked too.
+
+    Raises:
+        GuardrailError: two keys of one object fold to the same lowercase spelling.
+    """
+    if isinstance(value, dict):
+        seen: dict[str, str] = {}
+        for key, item in value.items():
+            folded = str(key).casefold()
+            if folded in seen:
+                raise GuardrailError(
+                    f"{where} has keys {seen[folded]!r} and {key!r}, which differ only in "
+                    "letter case.",
+                    hint="Send each field once, spelled exactly as the schema names it.",
+                )
+            seen[folded] = str(key)
+            assert_no_case_collisions(item, where=f"{where}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            assert_no_case_collisions(item, where=f"{where}[{index}]")
 
 
 def resolve_org(args: dict, policy: Policy | None = None) -> str:

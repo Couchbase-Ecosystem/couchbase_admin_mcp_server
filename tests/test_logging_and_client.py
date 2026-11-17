@@ -694,7 +694,6 @@ def test_a_missing_api_key_is_reported_by_name(capella, monkeypatch):
 def test_the_credential_is_looked_up_before_any_request_is_sent(capella, monkeypatch):
     """The lookup has to come first, or a misconfigured server sends an unauthenticated
     request and reports Capella's 401 rather than its own missing variable."""
-    import urllib.request
 
     client, _ = capella
     monkeypatch.delenv("CAPELLA_API_KEY_SECRET", raising=False)
@@ -702,7 +701,7 @@ def test_the_credential_is_looked_up_before_any_request_is_sent(capella, monkeyp
     def _must_not_be_called(*_args, **_kwargs):
         raise AssertionError("a request was sent with no credential configured")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _must_not_be_called)
+    monkeypatch.setattr(client, "_urlopen", _must_not_be_called)
     with pytest.raises(RuntimeError, match="CAPELLA_API_KEY_SECRET"):
         client.capella_request("GET", "/v4/organizations")
 
@@ -853,7 +852,7 @@ def test_a_network_error_on_a_capella_CREATE_says_the_outcome_is_unknown(
         attempts["n"] += 1
         raise urllib.error.URLError("connection reset by peer")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+    monkeypatch.setattr(client, "_urlopen", _refuse)
 
     with pytest.raises(client.CapellaError) as excinfo:
         client.capella_request("POST", "/v4/x/clusters", body={})
@@ -880,7 +879,7 @@ def test_a_network_error_on_a_read_is_retried_and_says_where_to_look(
         attempts["n"] += 1
         raise urllib.error.URLError("no route to host")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+    monkeypatch.setattr(client, "_urlopen", _refuse)
     monkeypatch.setattr(client.time, "sleep", lambda _s: None)
 
     with pytest.raises(client.CapellaError) as excinfo:

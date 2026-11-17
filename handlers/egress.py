@@ -5,9 +5,9 @@ Component: the allowlist for destinations the cluster is asked to contact: log u
     hostnames, node-add host, KMIP host and alert mail host.
 Spec: docs/spec.md S10 (egress allowlist), S3 step 8 (`denied_egress`).
 Main items: `assert_egress_allowed`, `guard_host_like_fields`, `guard_nested_host_fields`,
-    `split_host`, `describe_policy`, `EgressDeniedError`.
-Callers: `handlers/backup.py`, `handlers/cluster.py`, `handlers/encryption.py`,
-    `handlers/eventing.py`, `handlers/search_admin.py`, `handlers/xdcr.py`; 5 test file(s)
+    `split_host`, `assert_destination_uri_allowed`, `describe_policy`, `EgressDeniedError`.
+Callers: `handlers/backup.py`, `handlers/cluster.py`, `handlers/capella/__init__.py`,
+    `handlers/encryption.py`, `handlers/eventing.py`, `handlers/search_admin.py`, `handlers/xdcr.py`; 5 test file(s)
 Callees: none
 
 THE PROBLEM
@@ -94,6 +94,19 @@ _ALWAYS_DENIED_NETWORKS = (
     # customer's IPv6 KMIP appliance or SMTP relay legitimately lives there. It is
     # covered by _PRIVATE_NETWORKS below, which requires an explicit entry.
     ipaddress.ip_network("fd00:ec2::254/128"),
+    # Ranges that are never a customer destination but each reach something a
+    # cluster must not dial. Azure's wireserver is the Azure metadata-adjacent
+    # control endpoint; NAT64 and 6to4 embed an IPv4 address (possibly 169.254.169.254)
+    # inside an IPv6 literal that the IPv4 denials above cannot see; the rest are
+    # reserved, benchmarking, multicast, class E and deprecated site-local space.
+    ipaddress.ip_network("168.63.129.16/32"),  # Azure wireserver
+    ipaddress.ip_network("64:ff9b::/96"),  # NAT64 (embeds an IPv4 address)
+    ipaddress.ip_network("2002::/16"),  # 6to4 (embeds an IPv4 address)
+    ipaddress.ip_network("192.0.0.0/24"),  # IETF protocol assignments
+    ipaddress.ip_network("198.18.0.0/15"),  # benchmarking
+    ipaddress.ip_network("224.0.0.0/4"),  # multicast
+    ipaddress.ip_network("240.0.0.0/4"),  # reserved / class E
+    ipaddress.ip_network("fec0::/10"),  # deprecated site-local
 )
 
 #: Private / internal ranges. NOT absolutely denied — a customer's backup target,
@@ -183,6 +196,33 @@ def split_host(value: str) -> str:
     if host.count(":") == 1:
         host = host.split(":", 1)[0]
     return host.strip().rstrip(".").lower()
+
+
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+#: Characters that can never be part of a plain host, `host:port` or `scheme://host[:port]`.
+_STRICT_FORBIDDEN = re.compile(r"[/?#\\\s]")
+
+
+def _strict_shape_problem(value: str) -> str | None:
+    """Why `value` is not a plain destination, or None when it is.
+
+    A plain destination is a host, `host:port`, a bracketed IPv6 literal, or
+    `scheme://host[:port]`. Anything with a path, query, fragment, backslash, whitespace or a
+    second `://` is a value that this server and the cluster (or the HTTP client behind it)
+    can parse differently, so `split_host` extracting a host from it is the differential an
+    attacker needs. Such a value is refused rather than interpreted.
+    """
+    text = (value or "").strip()
+    match = _SCHEME_RE.match(text)
+    rest = text[match.end() :] if match else text
+    if "://" in rest:
+        return "a second '://'"
+    found = _STRICT_FORBIDDEN.search(rest)
+    if found:
+        char = found.group(0)
+        return "whitespace" if char.isspace() else repr(char)
+    return None
 
 
 def _is_plausible_host(host: str) -> bool:
@@ -283,7 +323,9 @@ def _resolve_all(host: str) -> list:
     return found
 
 
-def assert_egress_allowed(value: str, *, field: str, tool: str) -> str:
+def assert_egress_allowed(
+    value: str, *, field: str, tool: str, strict: bool = True
+) -> str:
     """Authorize a destination the CLUSTER will be asked to contact.
 
     The caller names the destination and Couchbase itself opens the connection, from inside the
@@ -308,6 +350,10 @@ def assert_egress_allowed(value: str, *, field: str, tool: str) -> str:
         value: the destination as the caller wrote it: a host, `host:port` or a URL.
         field: the argument name, so a refusal says which argument was refused.
         tool: the tool name, for the same reason.
+        strict: when true (the default, used for node_add, XDCR, uploadHost and emailHost), a
+            value holding `/`, `?`, `#`, a backslash, whitespace or a second `://` after the
+            optional scheme is refused instead of having a host extracted from it. Pass false
+            only for a field that legitimately carries a URL with a path.
 
     Returns:
         The extracted host, when the destination is allowed.
@@ -320,6 +366,18 @@ def assert_egress_allowed(value: str, *, field: str, tool: str) -> str:
     anything sensitive. Why the rules are built this way, and what broke before:
     `docs/design/egress-allowlist.md`. Spec: `docs/spec.md` S10 and S3 step 8.
     """
+    if strict:
+        problem = _strict_shape_problem(value)
+        if problem:
+            raise EgressDeniedError(
+                f"{tool}: `{field}` contains {problem}, so it is not a plain host.",
+                hint=(
+                    "Supply a host, host:port, a bracketed IPv6 literal or "
+                    "scheme://host[:port]. Values with a path, query, fragment, "
+                    "backslash, whitespace or a second '://' are refused because this "
+                    "server and the cluster may read a different host out of them."
+                ),
+            )
     host = split_host(value)
     if not host:
         raise EgressDeniedError(
@@ -561,6 +619,118 @@ def _assert_not_absolutely_denied(value: str, *, field: str, tool: str) -> None:
             )
 
 
+#: Exact key names (case-insensitive) that carry a destination although they match no
+#: host-like fragment. A backup restore body names the cluster to restore into under
+#: `target` and a repository names its storage under `archive`; neither contains "host",
+#: "url" or "uri", so the fragment scan let `http://169.254.169.254/` and
+#: `s3://attacker-bucket/x` through. Exact names, not fragments: `targetScope` and the like
+#: stay unguarded, and an operator can still exempt a field via CB_ADMIN_EGRESS_EXEMPT_FIELDS.
+_EXPLICIT_DESTINATION_KEYS: frozenset[str] = frozenset(
+    {"target", "archive", "remote", "destination"}
+)
+
+#: Object-store schemes. The first path segment is a bucket or account name, not a host the
+#: cluster resolves, so it is judged by name against the allowlist and not by DNS.
+_OBJECT_STORE_SCHEMES = frozenset({"s3", "az", "azure", "gs", "gcs"})
+
+
+def _is_explicit_destination_key(key: object) -> bool:
+    """Whether `key`, as the last segment of its path, is one of the explicit destination names."""
+    return (
+        str(key).lower().rsplit(".", 1)[-1].split("[")[0] in _EXPLICIT_DESTINATION_KEYS
+    )
+
+
+def _is_filesystem_path(text: str) -> bool:
+    """Whether a value is a local path (absolute, relative with a dot prefix, `~`, or a drive)."""
+    return bool(
+        text.startswith(("/", "./", "../", "~", "\\"))
+        or re.match(r"^[A-Za-z]:[\\/]", text)
+    )
+
+
+def archive_value_is_remote(text: str) -> bool:
+    """Whether a value under an explicit destination key names something other than a path.
+
+    Args:
+        text: the value as the caller wrote it.
+
+    Returns:
+        False for an empty value or a filesystem path; true for any URL or destination-shaped
+        value, which the caller must then pass to `assert_destination_uri_allowed`.
+    """
+    text = text.strip()
+    if not text or ("://" not in text and _is_filesystem_path(text)):
+        return False
+    return "://" in text or _looks_like_a_destination(text)
+
+
+def assert_destination_uri_allowed(value: str, *, field: str, tool: str) -> str:
+    """Authorize a destination that may be a URL, a cluster address or an object-store URI.
+
+    Behaviour by form:
+
+    * `s3://`, `az://`, `azure://`, `gs://`, `gcs://`: the bucket (or account) name is refused
+      when it is a metadata or loopback name or address, refused in a private range unless an
+      allowlist entry names it, and otherwise admitted only by an allowlist entry or
+      `CB_ADMIN_EGRESS_ALLOW_ANY`. It is not resolved by DNS, because a bucket name is not a
+      host this server can look up. The allowlist entry for a bucket is the bucket name.
+    * any other scheme, or a bare `host[:port]`: the full `assert_egress_allowed` check on the
+      host (denied ranges, private ranges, resolution, allowlist), without the strict-shape
+      rule so a path after the host is tolerated and ignored.
+
+    Args:
+        value: the destination as the caller wrote it.
+        field: the argument name, for the refusal text.
+        tool: the tool name, for the refusal text.
+
+    Returns:
+        The host or bucket that was authorized.
+
+    Raises:
+        EgressDeniedError: the destination is refused. Nothing has been sent.
+    """
+    text = (value or "").strip()
+    match = _SCHEME_RE.match(text)
+    scheme = text[: match.end() - 3].lower() if match else ""
+    if scheme not in _OBJECT_STORE_SCHEMES:
+        return assert_egress_allowed(text, field=field, tool=tool, strict=False)
+
+    bucket = text[match.end() :].split("/", 1)[0].strip().lower()
+    if not bucket or "://" in bucket or re.search(r"[@\\?#\s]", bucket):
+        raise EgressDeniedError(
+            f"{tool}: `{field}` does not name a plain {scheme}:// bucket.",
+            hint="Use scheme://bucket/prefix with no credentials, query or fragment.",
+        )
+    _assert_not_absolutely_denied(bucket, field=field, tool=tool)
+    if not _is_plausible_host(bucket.replace("_", "-")):
+        raise EgressDeniedError(
+            f"{tool}: `{field}` bucket {bucket!r} is not a valid bucket name.",
+            hint="Bucket names hold letters, digits, hyphens and dots.",
+        )
+    ip = _as_ip(bucket)
+    entries = _allowed_entries()
+    listed = any(_matches_entry(bucket, ip, e) for e in entries)
+    if ip is not None and not listed:
+        for net in _PRIVATE_NETWORKS:
+            if ip in net:
+                raise EgressDeniedError(
+                    f"{tool}: `{field}` bucket {bucket!r} is in the private range {net} "
+                    "and is not listed in CB_ADMIN_EGRESS_ALLOWED_HOSTS.",
+                    hint="Name the address in the allowlist if it is intended.",
+                )
+    if listed or _allow_any():
+        return bucket
+    raise EgressDeniedError(
+        f"{tool}: `{field}` bucket {bucket!r} is not in CB_ADMIN_EGRESS_ALLOWED_HOSTS.",
+        hint=(
+            "Add the bucket name to CB_ADMIN_EGRESS_ALLOWED_HOSTS if this object store "
+            "destination is intended; with no allowlist the cluster would be asked to "
+            "write backup data to a bucket the operator never named."
+        ),
+    )
+
+
 def guard_host_like_fields(data: dict, *, tool: str) -> None:
     """Apply the egress allowlist to every value in `data` that names a destination.
 
@@ -583,6 +753,12 @@ def guard_host_like_fields(data: dict, *, tool: str) -> None:
         exempt = lowered in _host_like_exempt()
         host_like = any(fragment in lowered for fragment in _HOST_LIKE_FRAGMENTS)
         if not host_like and not exempt:
+            if (
+                _is_explicit_destination_key(key)
+                and isinstance(value, str)
+                and archive_value_is_remote(value)
+            ):
+                assert_destination_uri_allowed(value, field=str(key), tool=tool)
             continue
         if exempt:
             # An EXEMPTION suppresses the allowlist, never the absolute denials.
@@ -593,7 +769,7 @@ def guard_host_like_fields(data: dict, *, tool: str) -> None:
             # twice promises "cannot be configured away".
             _assert_not_absolutely_denied(str(value), field=str(key), tool=tool)
             continue
-        assert_egress_allowed(str(value), field=str(key), tool=tool)
+        assert_egress_allowed(str(value), field=str(key), tool=tool, strict=False)
 
 
 #: Depth cap for the recursive walk. A caller-supplied object nested a few hundred
@@ -712,6 +888,20 @@ def guard_nested_host_fields(
                 )
                 return
             if not any(fragment in lowered for fragment in _HOST_LIKE_FRAGMENTS):
+                if (
+                    _is_explicit_destination_key(key_name)
+                    and isinstance(value, str)
+                    and archive_value_is_remote(value)
+                ):
+                    _budget[0] -= 1
+                    if _budget[0] < 0:
+                        raise EgressDeniedError(
+                            f"{tool}: payload contains more than {_MAX_WALK_LEAVES} "
+                            "destination-shaped values, which cannot all be checked in "
+                            "one call.",
+                            hint="Split the request.",
+                        )
+                    assert_destination_uri_allowed(value, field=where, tool=tool)
                 return
         # Stringify rather than skip. A non-str leaf under a host-like key was
         # dropped entirely, so `{"hostname": 2852039166}` was unchecked while
@@ -739,7 +929,7 @@ def guard_nested_host_fields(
                     "it as a DNS side channel. Split the request."
                 ),
             )
-        assert_egress_allowed(str(value), field=where, tool=tool)
+        assert_egress_allowed(str(value), field=where, tool=tool, strict=False)
 
     if not isinstance(obj, (dict, list, tuple, set)):
         # A SCALAR ROOT. This branch silently returned, and handlers/backup.py passes

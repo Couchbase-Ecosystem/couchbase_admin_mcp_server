@@ -632,6 +632,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # matters for every other tool, where the flag must not reach a REST body.
     if not dryrun.handler_owns(tool_obj):
         dryrun.strip(arguments)
+    else:
+        # Operator-wide preview mode also binds handler-owned tools: a caller's
+        # dry_run=false must not escape CB_ADMIN_DRY_RUN=true.
+        dryrun.force_handler_owned(arguments, tool_obj)
     if dry and not read_side:
         _log.info("dry run: %s withheld (%s)", name, dry_reason)
         _audit("dry_run", reason=dry_reason)
@@ -671,6 +675,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _audit(decision, reason=reason, duration_ms=elapsed)
         _log.info("tool %s: %s (%.1f ms)", decision, name, elapsed)
         return result
+    except asyncio.CancelledError:
+        # A client disconnect or timeout cancels this task, but the handler thread
+        # cannot be interrupted and may still finish its write. Audit the cancellation
+        # so the trail shows the call started, then re-raise so cancellation still works.
+        elapsed = (time.perf_counter() - start) * 1000
+        _audit(
+            "error",
+            reason="CancelledError: call cancelled; handler may still complete",
+            duration_ms=elapsed,
+        )
+        raise
     except Exception as exc:
         # exc_info=True writes the traceback to the error log — the record
         # Couchbase support asks a customer to send.
@@ -678,6 +693,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         _audit("error", reason=f"{type(exc).__name__}", duration_ms=elapsed)
         _log.error("tool error: %s: %s (%.1f ms)", name, exc, elapsed, exc_info=True)
         return err(f"{type(exc).__name__}: {exc}", tool=name, args=arguments)
+    except BaseException as exc:
+        # KeyboardInterrupt, SystemExit and the like: still leave a record, then re-raise.
+        elapsed = (time.perf_counter() - start) * 1000
+        _audit(
+            "error", reason=f"{type(exc).__name__}: call aborted", duration_ms=elapsed
+        )
+        raise
 
 
 # ── The protocol-level isError flag ──────────────────────────────────────────
@@ -845,6 +867,12 @@ def _startup_banner() -> None:
             "[couchbase-admin-mcp] *** OAUTH_SKIP_VERIFY IS ENABLED *** JWT "
             "signatures, issuer, audience and expiry are NOT verified. Any token is "
             "accepted. This must never be set outside loopback development.",
+            file=sys.stderr,
+            flush=True,
+        )
+    for _posture_warning in profile_config.PROFILE_WARNINGS:
+        print(
+            f"[couchbase-admin-mcp] WARNING: {_posture_warning}",
             file=sys.stderr,
             flush=True,
         )

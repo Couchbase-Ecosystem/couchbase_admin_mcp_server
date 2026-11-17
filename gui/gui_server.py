@@ -961,6 +961,10 @@ def auth_status():
     )
 
 
+#: The only shape of post-login redirect target accepted: a same-origin absolute path.
+_NEXT_OK = re.compile(r"^/(?![/\\])[^\x00-\x1f\x7f]*\Z")
+
+
 @app.route("/auth/login")
 def auth_login():
     """
@@ -974,10 +978,9 @@ def auth_login():
     raw_next = request.args.get("next", "/")
     # Validate next_url is a relative path — reject anything with a scheme
     # or host to prevent open redirect attacks.
-    from urllib.parse import urlparse as _urlparse
-
-    parsed = _urlparse(raw_next)
-    next_url = raw_next if (not parsed.scheme and not parsed.netloc) else "/"
+    # Browsers read "/\\evil.com" and "//evil.com" as a host, so accept only a single
+    # leading slash followed by a non-slash, non-backslash, and no control characters.
+    next_url = raw_next if _NEXT_OK.match(raw_next) and "\\" not in raw_next else "/"
 
     from auth import session as _session
 
@@ -1504,6 +1507,8 @@ def call_tool():
     if not dryrun.handler_owns(tool_obj):
         _strip_keys.add(dryrun.ARG)
     arguments = {k: v for k, v in arguments.items() if k not in _strip_keys}
+    # Server-wide preview mode also binds handler-owned tools (same rule as server.py).
+    dryrun.force_handler_owned(arguments, tool_obj)
 
     handler = HANDLERS.get(tool_name)
     if handler is None:

@@ -4,7 +4,7 @@ profile_config.py — the two deployments this server actually has, made explici
 Component: the two deployment profiles (workstation and enterprise), their defaults and the
     start-up coherence check.
 Spec: docs/spec.md S5 (profiles).
-Main items: `Profile`, `profile_name`, `apply_profile`, `validate`, `local_identity`,
+Main items: `Profile`, `profile_name`, `apply_profile`, `validate`, `warnings_for`, `local_identity`,
     `describe`.
 Callers: `authz.py`, `gui/gui_server.py`, `server.py`; 16 test file(s)
 Callees: `handlers.shared`, `logging_config`
@@ -465,6 +465,42 @@ def validate(name: str | None) -> list[str]:
     return errors
 
 
+def warnings_for(name: str | None) -> list[str]:
+    """Return loud, non-fatal warnings for the enterprise profile.
+
+    These are controls that are legitimately optional but leave the deployment with a weaker
+    posture when absent: an empty hard ceiling (`CB_ADMIN_ALWAYS_CONFIRM`), and unset
+    `CB_ADMIN_FIXTURE_ROOT` or `CB_ADMIN_CATALOG_ROOT`, which are the directory confinements for
+    fixture and backup-catalog file access. They never block start-up; `server.py` prints them
+    to stderr at boot.
+
+    Args:
+        name: the profile name, or None.
+
+    Returns:
+        One sentence per problem. Empty for any profile other than enterprise.
+    """
+    if name != ENTERPRISE:
+        return []
+    found: list[str] = []
+    if not _env("CB_ADMIN_ALWAYS_CONFIRM"):
+        found.append(
+            "CB_ADMIN_ALWAYS_CONFIRM is empty in the enterprise profile, so no tool is held "
+            "behind the human-only hard ceiling: an automation principal can run every write "
+            "its token scopes allow. Name the most destructive tools in it."
+        )
+    for var, what in (
+        ("CB_ADMIN_FIXTURE_ROOT", "fixture files"),
+        ("CB_ADMIN_CATALOG_ROOT", "backup catalog files"),
+    ):
+        if not _env(var):
+            found.append(
+                f"{var} is unset in the enterprise profile, so access to {what} is not "
+                "confined to one directory. Set it to the directory that may be read and written."
+            )
+    return found
+
+
 def local_identity() -> dict[str, str]:
     """Identity for the audit record when there is no token.
 
@@ -519,3 +555,4 @@ def describe(name: str | None) -> str:
 # The results are module attributes so server.py can report and enforce them.
 PROFILE_NAME, PROFILE_NOTES = apply_profile()
 PROFILE_ERRORS = validate(PROFILE_NAME)
+PROFILE_WARNINGS = warnings_for(PROFILE_NAME)

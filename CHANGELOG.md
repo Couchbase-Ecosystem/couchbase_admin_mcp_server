@@ -12,6 +12,23 @@ reconstructed from it here, so this file claims nothing about those changes.
 
 ## [Unreleased]
 
+### Security
+
+Fixes from the 2026-11 security review (static review plus executable probes). Each has a regression test in `tests/test_fix_*.py`.
+
+- The HTTP clients no longer follow redirects, so the cluster admin credential (`admin_request`) and the Capella API key are never re-sent to another URL. A non-https `CAPELLA_BASE_URL` is refused unless it is loopback.
+- `redact_text` now truncates before it masks, so nothing past the cap is returned unmasked. `quote_path` encodes `.` and `..` segments. An unrecognised `CB_ADMIN_READ_ONLY_MODE` value now means read-only, with a warning.
+- Backup: the restore `target` and the repository `archive` are checked by the egress guard, host values with a path, query or backslash are refused, and eight more address ranges are always denied. `catalog_root` must resolve inside the configured catalogue root, and catalogue tools only touch files that carry the catalogue schema marker.
+- Fixtures (both planes): manifest index definitions go through the index DDL guard, manifest file paths cannot leave the fixture directory, and keyspace, xattr and REST path names are escaped.
+- Capella: `capella_backup_create` and `capella_cluster_audit_log_export_create` are guarded; a two-way replication also checks the source cluster; request bodies with case-colliding keys are refused; `CB_CAPELLA_ORG_ID` now pins the organization; alert webhook URLs go through the egress guard; open CIDRs (`0.0.0.0/0`) need `CAPELLA_ALLOW_OPEN_CIDR`.
+- Server and console: a cancelled call writes an audit record; `next` on login accepts only a same-origin path; tracebacks are redacted and flattened in logs; server-wide `CB_ADMIN_DRY_RUN` now covers `capella_env_reap`; OIDC discovery requires https, checks the issuer, caps its size and expires its cache; the healthcheck probes https when the process terminates TLS.
+- `admin_xdcr_conflict_log_query` clamps `limit`; `admin_user_create_temporary` checks the shape of `roles`; `admin_user_change_password` no longer turns group-derived roles into direct roles.
+- Enterprise profile prints a warning at start when the hard ceiling, fixture root or catalogue root is not set.
+
+Behaviour changes to expect: alert webhooks are refused until `CB_ADMIN_EGRESS_ALLOWED_HOSTS` or `CB_ADMIN_EGRESS_ALLOW_ANY` is set; a cluster that answers with a redirect is now an error; a restore target on loopback is always refused.
+
+Not fixed (design decisions): the TLS 1.2 floor in `tls_config.py` (uvicorn builds its own context), a conflict-log-only restriction on the conflict query, and a role allow-list for temporary users.
+
 ### Added
 
 - Full doc comments (what it does, the order of the steps, arguments, returns, what it raises, why, and the spec and design note) on five of the hardest functions: `assert_egress_allowed`, `profile_config.validate`, `_apply_guardrails`, `capella_request` and the backup catalogue `_matches` (D15). Documentation only. 29 more functions over the complexity limit remain; most already have long comments.

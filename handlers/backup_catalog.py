@@ -83,6 +83,10 @@ CATALOG_SCHEMA = "couchbase.backup.catalog/v1"
 _CATALOG_ROOT_ENV = "CB_ADMIN_CATALOG_ROOT"
 _DEFAULT_CATALOG_DIR = ".backup-catalog"
 
+#: Operator switch that lets a caller-supplied `catalog_root` point anywhere when
+#: `CB_ADMIN_CATALOG_ROOT` is NOT set. Off by default: see `_confine_to_root`.
+_ALLOW_ANY_ROOT_ENV = "CB_ADMIN_CATALOG_ALLOW_ANY_ROOT"
+
 _READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 #: Writes touch LOCAL FILES ONLY -- never a cluster, never a backup. destructiveHint
 #: is still true for the delete: it destroys a record someone may be relying on.
@@ -170,6 +174,12 @@ def _root(args: dict, *, writing: bool = False) -> pathlib.Path:
     success every single time until someone went looking.
 
     So: set CB_ADMIN_CATALOG_ROOT to a mounted volume, or pass catalog_root.
+
+    A CALLER-SUPPLIED `catalog_root` IS CONFINED. It used to override the configured root, so
+    any caller could list, read, rewrite or delete every JSON file in any directory the
+    server could reach. Now it must resolve (symlinks followed) inside `CB_ADMIN_CATALOG_ROOT`
+    when that is set, or inside the default root when it is not, unless the operator sets
+    `CB_ADMIN_CATALOG_ALLOW_ANY_ROOT` to a true value. See `_confine_to_root`.
     """
     explicit = (
         (args.get("catalog_root") or "").strip()
@@ -199,7 +209,85 @@ def _root(args: dict, *, writing: bool = False) -> pathlib.Path:
             f"catalog_root {raw!r} contains '..'. Give an absolute path or a "
             f"plain relative one; traversal is refused rather than normalised."
         )
+    if explicit:
+        _confine_to_root(resolved, configured)
     return resolved
+
+
+def _confine_to_root(resolved: pathlib.Path, configured: str) -> None:
+    """Refuse a caller-supplied root that falls outside the allowed subtree.
+
+    The allowed subtree is `CB_ADMIN_CATALOG_ROOT` when set. When it is not set, it is the
+    default root (`_DEFAULT_CATALOG_DIR` resolved against the working directory), unless
+    `CB_ADMIN_CATALOG_ALLOW_ANY_ROOT` is truthy. Both sides are resolved first, so a symlink
+    inside the root that points elsewhere does not carry the caller out of it. Same rule as
+    `handlers/fixture_core.py` `resolve_under_root`.
+
+    Args:
+        resolved: the caller's path, already resolved.
+        configured: the stripped value of `CB_ADMIN_CATALOG_ROOT`, or an empty string.
+
+    Raises:
+        ValueError: the path is outside the allowed subtree.
+    """
+    if not configured and (
+        (os.environ.get(_ALLOW_ANY_ROOT_ENV) or "").strip().lower()
+        in ("1", "true", "yes", "on")
+    ):
+        return
+    try:
+        base = (
+            pathlib.Path(configured or _DEFAULT_CATALOG_DIR)
+            .expanduser()
+            .resolve(strict=False)
+        )
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"the catalogue root could not be resolved: {exc}") from exc
+    if resolved != base and base not in resolved.parents:
+        which = (
+            _CATALOG_ROOT_ENV
+            if configured
+            else f"the default root {_DEFAULT_CATALOG_DIR!r}"
+        )
+        raise ValueError(
+            f"catalog_root {resolved} is outside {which} ({base}). A caller may only "
+            f"name a directory inside it. Set {_CATALOG_ROOT_ENV} to the volume that "
+            f"should hold the catalogue"
+            + (
+                ""
+                if configured
+                else f", or set {_ALLOW_ANY_ROOT_ENV}=true to accept any directory"
+            )
+            + "."
+        )
+
+
+def _entry_problem(payload: Any) -> str | None:
+    """Why a parsed file is not a catalogue entry, or None when it is one.
+
+    A file is an entry only if it is a JSON object carrying the schema marker this module
+    writes. Without that, update, delete and sync would rewrite or remove any JSON file that
+    happens to sit in the directory.
+    """
+    if not isinstance(payload, dict):
+        return "not a JSON object"
+    if payload.get("schema") != CATALOG_SCHEMA:
+        return f"missing the {CATALOG_SCHEMA!r} schema marker; not a catalogue entry"
+    return None
+
+
+def _load_entry(path: pathlib.Path) -> dict:
+    """Read one entry file, requiring the schema marker.
+
+    Raises:
+        ValueError: the file is not readable text, not JSON, or not a catalogue entry.
+        OSError: the file could not be opened.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    problem = _entry_problem(payload)
+    if problem:
+        raise ValueError(problem)
+    return payload
 
 
 #: Serialises every tool that writes. A catalogue entry is read, changed and written back, so two
@@ -282,11 +370,14 @@ def _read_entries(root: pathlib.Path) -> tuple[list[dict], list[dict]]:
     for path in sorted(root.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
+            # ValueError covers JSONDecodeError and UnicodeDecodeError, so a file that is
+            # not UTF-8 is reported as unreadable instead of aborting the whole scan.
             unreadable.append({"file": str(path), "error": str(exc)})
             continue
-        if not isinstance(payload, dict):
-            unreadable.append({"file": str(path), "error": "not a JSON object"})
+        problem = _entry_problem(payload)
+        if problem:
+            unreadable.append({"file": str(path), "error": problem})
             continue
         payload["_file"] = str(path)
         entries.append(payload)
@@ -667,8 +758,8 @@ def _get(args: dict):
             tool="cb_backup_catalog_get",
         )
     try:
-        entry = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        entry = _load_entry(path)
+    except (OSError, ValueError) as exc:
         return err(f"entry could not be read: {exc}", tool="cb_backup_catalog_get")
     entry["_file"] = str(path)
     return ok(entry)
@@ -686,8 +777,8 @@ def _update(args: dict):
             tool="cb_backup_catalog_update",
         )
     try:
-        entry = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        entry = _load_entry(path)
+    except (OSError, ValueError) as exc:
         return err(f"entry could not be read: {exc}", tool="cb_backup_catalog_update")
 
     if args.get("tags") is not None:
@@ -727,9 +818,10 @@ def _delete(args: dict):
             }
         )
     try:
-        entry = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        entry = {}
+        entry = _load_entry(path)
+    except (OSError, ValueError) as exc:
+        # Never remove a file this module cannot prove it wrote.
+        return err(f"refusing to delete {path}: {exc}", tool="cb_backup_catalog_delete")
     try:
         path.unlink()
     except OSError as exc:

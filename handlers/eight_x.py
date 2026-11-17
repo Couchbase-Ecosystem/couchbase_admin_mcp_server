@@ -319,7 +319,10 @@ TOOLS: list[Tool] = [
                     "type": "string",
                     "description": "default: _default",
                 },
-                "limit": {"type": "integer", "description": "default 50"},
+                "limit": {
+                    "type": "integer",
+                    "description": "default 50, clamped to 1-1000",
+                },
             },
             "required": ["bucket_name"],
         },
@@ -482,11 +485,45 @@ def _user_unlock(args: dict) -> list[TextContent]:
     return ok(admin_request("POST", f"/settings/rbac/users/local/{u}/unlock"))
 
 
+#: Shape of one role entry in `roles`: a role name, optionally followed by a
+#: bucket spec such as `[travel:inventory:*]` or `[*]`. Names may hold letters,
+#: digits and underscores; a bucket spec may also hold dots, stars, hyphens and
+#: percent signs (bucket and collection names). This is a SHAPE check only -- it
+#: does not say which roles may be granted, see `_user_temp`.
+_ROLE_ENTRY_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(\[[A-Za-z0-9_.*%\-]+(:[A-Za-z0-9_.*%\-]+){0,2}\])?$"
+)
+
+
+def _roles_problem(roles: object) -> str | None:
+    """Why `roles` is not a comma-separated list of role entries, else None."""
+    if not isinstance(roles, str) or not roles.strip():
+        return "roles must be a non-empty comma-separated string"
+    for entry in roles.split(","):
+        if not _ROLE_ENTRY_RE.match(entry.strip()):
+            return (
+                f"role entry {entry.strip()[:80]!r} is not a role name with an "
+                "optional [bucket:scope:collection] spec. Use letters, digits and "
+                "underscores for the name, e.g. data_reader[travel:inventory]."
+            )
+    return None
+
+
 def _user_temp(args: dict) -> list[TextContent]:
+    """Create a local user whose password must be changed at first login.
+
+    DESIGN DECISION (open): `roles` is checked for SHAPE only, not against an
+    allow-list. A caller holding this tool can therefore grant any role,
+    including `admin`; the confirmation gate and the profile's tool access are
+    what limit that. Whether to add an allow-list is for the architect to decide.
+    """
+    bad_roles = _roles_problem(args.get("roles"))
+    if bad_roles:
+        return err(bad_roles, tool="admin_user_create_temporary")
     u = quote_path(args["username"])
     data = {
         "password": args["password"],
-        "roles": args["roles"],
+        "roles": ",".join(r.strip() for r in args["roles"].split(",")),
         "temporaryPassword": "true",
     }
     if args.get("name"):
@@ -496,11 +533,37 @@ def _user_temp(args: dict) -> list[TextContent]:
     return ok(admin_request("PUT", f"/settings/rbac/users/local/{u}", data=data))
 
 
+#: Rows `admin_xdcr_conflict_log_query` returns when `limit` is absent, and the
+#: most it will return however large a `limit` is asked for.
+_CONFLICT_LIMIT_DEFAULT = 50
+_CONFLICT_LIMIT_MAX = 1000
+
+
 def _conflict_query(args: dict) -> list[TextContent]:
+    """Read rows from the collection the caller names as the conflict log.
+
+    DESIGN DECISION (open): this is a read-annotated reader of ANY collection the
+    connected user can query. Nothing in the code or docs defines a naming or
+    schema convention for a conflict-log collection (the replication's
+    conflictLoggingMapping chooses it freely), so the target is not restricted
+    to one. `limit` is capped to bound what one call returns; whether to
+    restrict the target is for the architect to decide.
+    """
     from couchbase.options import QueryOptions
 
     cluster = get_sdk_cluster()
-    limit = int(args.get("limit", 50))
+    raw_limit = args.get("limit")
+    if raw_limit is None:
+        limit = _CONFLICT_LIMIT_DEFAULT
+    else:
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return err(
+                f"limit must be an integer, got {raw_limit!r}",
+                tool="admin_xdcr_conflict_log_query",
+            )
+        limit = max(1, min(limit, _CONFLICT_LIMIT_MAX))
     keyspace = _keyspace(
         args["bucket_name"],
         args.get("scope_name"),

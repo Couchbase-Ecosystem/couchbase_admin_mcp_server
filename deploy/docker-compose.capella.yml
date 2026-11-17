@@ -36,6 +36,8 @@ services:
       # different values, and the 401 Capella returns for the wrong one blames
       # the IP allowlist -- which sends you debugging the network instead.
       CAPELLA_API_KEY_SECRET: ${CAPELLA_API_KEY_SECRET:?required}
+      # Pins the organization guard. Empty means unpinned: the org is NOT discovered from
+      # the key. CAPELLA_ORG_ID is read too and wins when both are set.
       CB_CAPELLA_ORG_ID: ${CB_CAPELLA_ORG_ID:-}
 
       CB_ADMIN_PROFILE: ${CB_ADMIN_PROFILE:-enterprise}

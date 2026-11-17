@@ -8,7 +8,7 @@ Main items: `TOOLS` (138 tools) and `handle`.
 Callers: `docs/generate_tools_json.py`, `gui/gui_server.py`, `handlers/capella/environment.py`,
     `handlers/capella/fixture.py`, `scripts/verify_mcp_surface.py`, `server.py`; 22 test file(s)
 Callees: `handlers.capella.client`, `handlers.capella.environment`, `handlers.capella.fixture`,
-    `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.shared`, `logging_config`
+    `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.egress`, `handlers.shared`, `logging_config`
 
 Two layers, deliberately separated:
 
@@ -40,10 +40,12 @@ App Services pathed under /projects/{p}/appservices (the real path is under
 from __future__ import annotations
 
 import json
+import urllib.parse
 from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from handlers.egress import EgressDeniedError, assert_egress_allowed
 from handlers.shared import err, ok
 from logging_config import get_logger
 
@@ -170,6 +172,55 @@ def _fetch_cluster(args: dict) -> dict:
     return cluster
 
 
+#: Alert-integration writes whose `config.webhook.url` Capella will contact.
+_WEBHOOK_OPS = frozenset(
+    {
+        "capella_alert_integration_create",
+        "capella_alert_integration_update",
+        "capella_alert_integration_test",
+    }
+)
+
+#: Allowlist creates whose `cidr` must not be an all-addresses range.
+_CIDR_CREATE_OPS = frozenset(
+    {"capella_allowed_cidr_create", "capella_app_service_allowed_cidr_create"}
+)
+
+
+def _assert_webhook_egress(name: str, body: dict) -> None:
+    """Refuse a webhook URL that is not https or that the egress policy does not admit.
+
+    Raises:
+        guardrails.GuardrailError: the scheme is not https, or `handlers.egress` refused the
+            host. Nothing was sent to Capella.
+    """
+    config = body.get("config")
+    webhook = config.get("webhook") if isinstance(config, dict) else None
+    url = webhook.get("url") if isinstance(webhook, dict) else None
+    if url is None:
+        return
+    if not isinstance(url, str) or not url.strip().lower().startswith("https://"):
+        raise guardrails.GuardrailError(
+            f"`{name}` config.webhook.url must be an https URL.",
+            hint="Capella rejects every other scheme, and this server never sends one.",
+        )
+    parts = urllib.parse.urlsplit(url.strip())
+    try:
+        if (
+            parts.username is not None
+            or parts.password is not None
+            or not parts.hostname
+        ):
+            raise guardrails.GuardrailError(
+                f"`{name}` config.webhook.url must name a host and carry no credentials.",
+                hint="Put credentials in basicAuth or token, not in the URL.",
+            )
+        # Only the host is judged, so the path and query never influence the verdict.
+        assert_egress_allowed(parts.hostname, field="config.webhook.url", tool=name)
+    except EgressDeniedError as exc:
+        raise guardrails.GuardrailError(str(exc), hint=exc.hint) from exc
+
+
 def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> None:
     """Enforce the sandbox for one mutating operation.
 
@@ -293,6 +344,32 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
                     f"Supply {spelling}. See capella_clusters_list."
                 ),
             )
+        if name == "capella_replication_create":
+            # A twoWay replication writes into the SOURCE as well, so the path cluster
+            # must be owned too. Only oneWay and twoWay exist; anything else is refused
+            # rather than guessed at.
+            direction = (
+                body_dir.get("direction")
+                if isinstance(body_dir := args.get("body"), dict)
+                else None
+            )
+            if direction is not None:
+                if not isinstance(direction, str) or direction.casefold() not in (
+                    "oneway",
+                    "twoway",
+                ):
+                    raise guardrails.GuardrailError(
+                        f"`{name}` body.direction {direction!r} is not recognised.",
+                        hint="direction is 'oneWay' or 'twoWay'.",
+                    )
+                if direction.casefold() == "twoway":
+                    guardrails.assert_managed(
+                        _fetch_cluster(args),
+                        str(args.get("project_id") or ""),
+                        kind="cluster",
+                        policy=policy,
+                        verb="replicate into",
+                    )
         project_id = str(args.get("project_id") or "")
         target = _fetch_cluster({**args, "cluster_id": target_id})
         guardrails.assert_managed(
@@ -382,6 +459,15 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
         and "name" in body_in
     ):
         guardrails.assert_name_allowed(str(body_in.get("name") or ""), policy)
+
+    # 3-egress. An alert-integration write makes Capella call the webhook URL, so the URL goes
+    #     through the egress policy (https only, then `handlers.egress`) before anything is sent.
+    if name in _WEBHOOK_OPS and isinstance(body_in, dict):
+        _assert_webhook_egress(name, body_in)
+
+    # 3-cidr. An allowlist entry that opens the cluster to every address is refused.
+    if name in _CIDR_CREATE_OPS and isinstance(body_in, dict) and "cidr" in body_in:
+        guardrails.assert_cidr_not_open(body_in.get("cidr"))
 
     # 3a. An UPDATE must not be able to launder a resource out of the sandbox.
     #
@@ -523,6 +609,9 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
         guardrails.resolve_org(args, policy)
 
     if op.guarded:
+        # Before any guard: a body with `name` and `Name` could pass the checks on one
+        # spelling and be read by Capella as the other.
+        guardrails.assert_no_case_collisions(args.get("body"))
         _apply_guardrails(name, op, args, policy)
 
     path = build_path(op.path, args)

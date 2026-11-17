@@ -150,7 +150,7 @@ def test_only_idempotent_methods_are_retried_after_a_transport_failure(monkeypat
         attempts.append("call")
         raise TimeoutError("read timed out")
 
-    monkeypatch.setattr(shared.urllib.request, "urlopen", explode)
+    monkeypatch.setattr(shared.urllib.request.OpenerDirector, "open", explode)
     monkeypatch.setattr(shared.time, "sleep", lambda s: slept.append(s))
     monkeypatch.setenv("CB_CONNECTION_STRING", "couchbase://localhost")
     monkeypatch.setenv("CB_USERNAME", "u")
@@ -173,8 +173,8 @@ def test_only_idempotent_methods_are_retried_after_a_transport_failure(monkeypat
 def test_the_backoff_doubles(monkeypatch):
     slept: list[float] = []
     monkeypatch.setattr(
-        shared.urllib.request,
-        "urlopen",
+        shared.urllib.request.OpenerDirector,
+        "open",
         lambda *a, **k: (_ for _ in ()).throw(TimeoutError("read timed out")),
     )
     monkeypatch.setattr(shared.time, "sleep", lambda s: slept.append(s))

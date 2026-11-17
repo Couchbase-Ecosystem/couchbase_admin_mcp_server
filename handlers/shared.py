@@ -122,9 +122,10 @@ _MAX_HINT_BLOCKS = 32
 #: below where the guards' worst-case cost becomes a denial of service.
 _MAX_STATEMENT_CHARS = 16384
 
-#: Upper bound on the text redaction will SCAN. Above it the value is truncated
-#: unscanned: the patterns are super-linear, the input can be caller- or
-#: cluster-controlled, and this runs on the event-loop thread inside err().
+#: Upper bound on the text redaction will SCAN. Above it the value is cut to this length
+#: and the remainder is dropped, never returned: the patterns are super-linear, the input
+#: can be caller- or cluster-controlled, and this runs on the event-loop thread inside
+#: err().
 _REDACT_MAX_TEXT = 4096
 
 #: The single accepted spelling set for boolean environment variables.
@@ -167,16 +168,36 @@ def arg_truthy(value: Any) -> bool:
     return bool(value)
 
 
-def get_env_bool(key: str, default: bool) -> bool:
+#: The spellings read as an explicit "off" by `get_env_bool(..., fail_closed=True)`.
+FALSY_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off", "n", "f"})
+
+
+def get_env_bool(key: str, default: bool, *, fail_closed: bool = False) -> bool:
     """Read a boolean from an environment variable.
 
     Returns `default` when the variable is unset or empty. Otherwise returns True only when the
     lowercased, stripped value is in `TRUTHY_VALUES`; any other text is False.
+
+    With `fail_closed=True`, text that is in neither `TRUTHY_VALUES` nor `FALSY_VALUES` is
+    read as True and a warning is logged. Use it for a safety switch whose True state is the
+    restrictive one, so that a typo such as `flase` cannot silently turn the protection off.
+    The default keeps the older reading, so every other caller is unchanged.
     """
     raw = os.environ.get(key)
     if raw is None or raw == "":
         return default
-    return raw.strip().lower() in TRUTHY_VALUES
+    value = raw.strip().lower()
+    if value in TRUTHY_VALUES:
+        return True
+    if fail_closed and value not in FALSY_VALUES:
+        _log.warning(
+            "%s has the unrecognised value %r; treating it as true (restrictive). "
+            "Use one of the recognised spellings to say what you mean.",
+            key,
+            raw,
+        )
+        return True
+    return False
 
 
 def get_env_int(key: str, default: int) -> int:
@@ -214,7 +235,7 @@ def _parse_tool_list(raw: str | None) -> set[str]:
     return {n.strip() for n in raw.split(",") if n.strip()}
 
 
-READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True)
+READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True, fail_closed=True)
 DISABLED_TOOLS: set[str] = _parse_tool_list(os.environ.get("CB_ADMIN_DISABLED_TOOLS"))
 _CUSTOM_CONFIRMATION_TOOLS: set[str] = _parse_tool_list(
     os.environ.get("CB_ADMIN_CONFIRMATION_REQUIRED_TOOLS")
@@ -487,6 +508,30 @@ def _retryable(status: int, method: str = "GET") -> bool:
     return False
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect so the Authorization header is only sent to the admin URL.
+
+    Returning None from `redirect_request` makes urllib surface the 3xx response as an
+    `HTTPError` instead of building a second request that carries the same headers.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return None so the redirect is not followed."""
+        return None
+
+
+#: Statuses that mean "go and ask somewhere else". `admin_request` never follows them.
+_REDIRECT_STATUSES: frozenset[int] = frozenset({300, 301, 302, 303, 305, 307, 308})
+
+
+def _open_without_redirects(req, timeout: float, context: ssl.SSLContext | None):
+    """Open `req` with the TLS context and with redirect following switched off."""
+    handlers: list[Any] = [_NoRedirectHandler()]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers).open(req, timeout=timeout)
+
+
 def admin_request(
     method: str,
     path: str,
@@ -504,7 +549,8 @@ def admin_request(
     json_body: if True, send `data` as JSON (Content-Type: application/json).
                Otherwise send as application/x-www-form-urlencoded (default).
 
-    Retries on transient 5xx and 429 with exponential backoff.
+    Retries on transient 5xx and 429 with exponential backoff. A 3xx redirect is never
+    followed: it raises RuntimeError saying it was refused.
     Returns parsed JSON, or {"status": "ok"} for empty responses.
     Raises RuntimeError with diagnostic context on permanent failure.
     """
@@ -533,9 +579,7 @@ def admin_request(
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(
-                req, timeout=_HTTP_TIMEOUT, context=context
-            ) as resp:
+            with _open_without_redirects(req, _HTTP_TIMEOUT, context) as resp:
                 raw = resp.read()
                 if not raw:
                     return {"status": "ok"}
@@ -563,6 +607,14 @@ def admin_request(
                 f"Network error on {method} {path}: {redact_text(last_error)}"
             ) from exc
         except urllib.error.HTTPError as exc:
+            if exc.code in _REDIRECT_STATUSES:
+                # Not retried and not followed: the credentials belong to the admin
+                # URL only, and a redirect would send them to whatever it names.
+                raise RuntimeError(
+                    f"HTTP {exc.code} redirect on {method} {path} was refused: the "
+                    "admin client does not follow redirects, so credentials are never "
+                    "sent to another URL. Check CB_CONNECTION_STRING and CB_MGMT_PORT."
+                ) from exc
             body_bytes = exc.read() if hasattr(exc, "read") else b""
             try:
                 detail = json.loads(body_bytes)
@@ -1004,8 +1056,16 @@ def quote_path(segment: str) -> str:
     containing slashes, spaces, '@', '#', etc. can never escape its segment or
     inject extra path components. Use this for every user-supplied value that
     is interpolated into an admin_request path.
+
+    The dot-segments `.` and `..` are unreserved characters, so quoting leaves them as
+    they are, and an HTTP client or proxy then collapses them: `.../scopes/..` addresses
+    the parent resource. A segment that is exactly `.` or `..` is therefore written as
+    `%2E` or `%2E%2E`. Every other value is encoded as before.
     """
-    return urllib.parse.quote(segment or "", safe="")
+    quoted = urllib.parse.quote(segment or "", safe="")
+    if quoted in (".", ".."):
+        return quoted.replace(".", "%2E")
+    return quoted
 
 
 def form_data(args: dict, exclude: Iterable[str] = ("confirm",)) -> dict:
@@ -1464,11 +1524,9 @@ def redact_text(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
 
-    # Connection strings reach logs and error messages constantly — "failed to connect to
-    # couchbase://admin:pw@host" is the single most likely place this leaks.
-    text = redact_uri_credentials(text)
-
-    # A single oversized token is refused work rather than scanned.
+    # Truncate FIRST, then mask the kept head. The unscanned remainder is dropped and
+    # replaced by the notice, so nothing past the cap is ever returned unmasked. Every
+    # pattern below therefore runs over at most _REDACT_MAX_TEXT characters.
     #
     # The key group below is a bounded-but-still-costly pattern, and the value it
     # guards can be caller-controlled: `err()` runs this over the message AND the
@@ -1476,14 +1534,25 @@ def redact_text(text: str) -> str:
     # needs no authentication, since an unknown name is refused after this runs --
     # stalled the event-loop thread for 25 seconds and every other client with it.
     # A cluster error body reaches the same path through each handler's except block.
-    # Nothing legitimate in a log line is a single unbroken 4KB token.
+    notice = ""
     if len(text) > _REDACT_MAX_TEXT:
-        return (
-            text[:_REDACT_MAX_TEXT]
-            + f"...(truncated at {_REDACT_MAX_TEXT} characters before redaction; "
-            "an oversized value is not scanned, because scanning it is a denial of "
-            "service against this server)"
+        # Back the cut up to a whitespace boundary (at most 512 characters) so a secret
+        # straddling the cap is dropped whole instead of being cut where its key or
+        # its `@` no longer shows and the pattern cannot recognise it.
+        window = _REDACT_MAX_TEXT - 512
+        cut = max(text.rfind(" ", window, _REDACT_MAX_TEXT), window)
+        for ws in ("\n", "\t"):
+            cut = max(cut, text.rfind(ws, window, _REDACT_MAX_TEXT))
+        text = text[:cut]
+        notice = (
+            f"...(truncated at {_REDACT_MAX_TEXT} characters; the remainder was "
+            "dropped rather than returned unmasked, and an oversized value is not "
+            "scanned, because scanning it is a denial of service against this server)"
         )
+
+    # Connection strings reach logs and error messages constantly — "failed to connect to
+    # couchbase://admin:pw@host" is the single most likely place this leaks.
+    text = redact_uri_credentials(text)
 
     fragments = "|".join(re.escape(part) for part in _SENSITIVE_KEY_PARTS)
     pattern = re.compile(
@@ -1511,7 +1580,11 @@ def redact_text(text: str) -> str:
         return f"{match.group('key')}{match.group('sep')}{REDACTED}"
 
     text = pattern.sub(_mask, text)
+    return _mask_auth_schemes(text) + notice
 
+
+def _mask_auth_schemes(text: str) -> str:
+    """Mask the token after a `Bearer`, `Basic` or `Digest` scheme word in `text`."""
     # `Authorization: Bearer <jwt>` carries the credential in the VALUE with no
     # sensitive key name at all, and a space between scheme and token — so neither rule
     # above sees it. It is the single most common way a token reaches a log.

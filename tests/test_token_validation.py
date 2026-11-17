@@ -669,7 +669,9 @@ class _TokenEndpoint:
         self.response = response if response is not None else {"access_token": "at"}
         self.status = status
 
-    def __call__(self, url, data=None, timeout=None):
+    def __call__(self, url, data=None, timeout=None, allow_redirects=True):
+        # Redirects must be refused on the token endpoint, which carries the client secret.
+        assert allow_redirects is False
         self.calls.append((url, dict(data or {})))
         endpoint = self
 

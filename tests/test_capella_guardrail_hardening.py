@@ -438,7 +438,7 @@ def test_f15_ensure_refuses_to_adopt_a_protected_cluster(monkeypatch):
             {
                 "env_name": "ios-4821",
                 "project_id": "test-proj",
-                "allowed_cidrs": ["0.0.0.0/0"],
+                "allowed_cidrs": ["203.0.113.4/32"],
             },
         )[0].text
     )

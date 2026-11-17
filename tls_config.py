@@ -5,7 +5,7 @@ Component: transport encryption for the HTTP transport, in both shapes: the serv
     TLS itself, or an ingress or sidecar in front of it does.
 Spec: docs/spec.md S6 (transports).
 Main items: `TlsSettings`, `from_env`, `validate`, `is_loopback`.
-Callers: `auth/session.py`, `gui/gui_server.py`, `server.py`; 4 test file(s)
+Callers: `auth/session.py`, `gui/gui_server.py`, `healthcheck.py`, `server.py`; 4 test file(s)
 Callees: none
 
 WHY THIS EXISTS
@@ -99,9 +99,9 @@ class TlsSettings:
         kwargs: dict = {
             "ssl_certfile": self.cert_file,
             "ssl_keyfile": self.key_file,
-            # TLS 1.2 floor. Uvicorn's default already negotiates the best available,
-            # but stating the minimum means a future default change cannot silently
-            # admit TLS 1.0/1.1 for an administration endpoint.
+            # Uvicorn builds its own SSLContext from this protocol constant and accepts no
+            # minimum_version, so the TLS 1.2 floor is the Python/OpenSSL default for a
+            # server context, not something this module sets (see docs: open item).
             "ssl_version": ssl.PROTOCOL_TLS_SERVER,
         }
         if self.key_password:

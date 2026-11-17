@@ -781,6 +781,13 @@ def _ensure(args: dict) -> dict:
     cluster_name = _cluster_name(env_name)
     g.assert_name_allowed(cluster_name, policy)
 
+    # An all-addresses CIDR is refused up front, before a cluster is created that would then
+    # fail half-configured. `_invoke` does not pass through the primitive guardrails.
+    for cidr in list(args.get("allowed_cidrs") or []) + list(
+        args.get("app_service_cidrs") or []
+    ):
+        g.assert_cidr_not_open(cidr)
+
     want_app_services = bool(args.get("app_services"))
     actions: list[str] = []
 
@@ -1591,7 +1598,7 @@ def _reap(args: dict) -> dict:
                 )
             else:
                 reaped.append({"environment": env_name, "outcome": result_kind})
-        except (g.GuardrailError, CapellaError) as exc:
+        except (g.GuardrailError, CapellaError, CompositeRefusedError) as exc:
             # One environment refusing must not abort the whole sweep.
             refused.append({"environment": env_name, "error": str(exc)})
             _log.warning("reap skipped %s: %s", env_name, exc)

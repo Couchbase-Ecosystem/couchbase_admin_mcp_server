@@ -141,7 +141,8 @@ output as the artifact attached to the change request. Note that a dry run is no
 authorization and not validation — the gates all run first, and the payload is
 never sent, so it tells you what the agent decided to do, not whether the cluster
 would accept it. `capella_env_reap` keeps its own `dry_run`, which defaults to
-**true** and really does list what it would reap.
+**true** and really does list what it would reap. Under `CB_ADMIN_DRY_RUN=true` the
+server forces that `dry_run` to true, so a caller's `false` cannot make it reap.
 
 ### Layer 2 — confirmation, and the two ways to satisfy it
 

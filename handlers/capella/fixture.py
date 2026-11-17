@@ -127,10 +127,22 @@ from handlers.fixture_core import (
     fixture_integrity as _fixture_integrity,
 )
 from handlers.fixture_core import (
+    index_definition_problems as _index_definition_problems,
+)
+from handlers.fixture_core import (
     index_target as _index_target,
 )
 from handlers.fixture_core import (
+    invalid_xattr_names as _invalid_xattr_names,
+)
+from handlers.fixture_core import (
     parse_timestamp as _parse_timestamp,
+)
+from handlers.fixture_core import (
+    quote_identifier as _quote_identifier,
+)
+from handlers.fixture_core import (
+    quote_keyspace_parts as _quote_keyspace_parts,
 )
 from handlers.fixture_core import (
     read_manifest as _read_manifest,
@@ -145,6 +157,9 @@ from handlers.fixture_core import (
     rewrite_index_keyspace as _rewrite_index_keyspace,
 )
 from handlers.fixture_core import (
+    safe_fixture_file as _safe_fixture_file,
+)
+from handlers.fixture_core import (
     schema_problem as _schema_problem,
 )
 from handlers.fixture_core import (
@@ -156,7 +171,16 @@ from handlers.fixture_core import (
 from handlers.fixture_core import (
     strip_index_nodes as _strip_index_nodes,
 )
-from handlers.shared import err, ok
+from handlers.fixture_core import (
+    xattr_name_problem as _xattr_name_problem,
+)
+from handlers.shared import (
+    assert_index_create_ddl,
+    assert_single_statement,
+    err,
+    ok,
+    quote_path,
+)
 from logging_config import get_logger
 
 from .client import build_path, capella_request
@@ -565,18 +589,17 @@ def _put_document(
     """
     import base64
     import urllib.error
-    import urllib.parse
     import urllib.request
 
     path = _DOCUMENT_PATH.format(
-        bucket=urllib.parse.quote(bucket, safe=""),
-        scope=urllib.parse.quote(scope, safe=""),
-        collection=urllib.parse.quote(collection, safe=""),
+        bucket=quote_path(bucket),
+        scope=quote_path(scope),
+        collection=quote_path(collection),
         # A DOCUMENT KEY IS NOT A PATH SEGMENT UNTIL IT IS ESCAPED. Couchbase keys
         # routinely carry '/', ':' and '#' -- "_sync:user:alice", "order/2026/01" --
         # and an unescaped one would silently address a different URL, or a
         # different document.
-        key=urllib.parse.quote(str(key), safe=""),
+        key=quote_path(str(key)),
     )
     payload = json.dumps(body).encode()
     request = urllib.request.Request(base + path, data=payload, method="PUT")
@@ -893,6 +916,11 @@ def _export(args: dict) -> list[TextContent]:
 
         page_size = int(args.get("page_size") or 1000)
         xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
+        _bad_xattrs = _invalid_xattr_names(xattrs)
+        if _bad_xattrs:
+            return err(
+                _xattr_name_problem(_bad_xattrs[0]), tool="capella_fixture_export"
+            )
         wanted_keyspaces = {k for k in (args.get("keyspaces") or []) if k}
         # MATCHED, so an unmatched request can be refused rather than ignored.
         # Without this a single typo in `keyspaces` produced a SILENT SUCCESS: no
@@ -1460,6 +1488,19 @@ def _import(args: dict) -> list[TextContent]:
             files_checked=checks,
         )
 
+    # The manifest is data from outside this server: every recorded index
+    # definition must be one index-DDL statement before anything is executed.
+    _index_problems = _index_definition_problems(
+        manifest, (assert_single_statement, assert_index_create_ddl)
+    )
+    if _index_problems:
+        return err(
+            "the fixture's index definitions are not plain index DDL, so "
+            "NOTHING was imported:\n  - " + "\n  - ".join(_index_problems),
+            tool="capella_fixture_import",
+            fixture_path=str(directory),
+        )
+
     # ── 2. mode ──────────────────────────────────────────────────────────
     mode = str(manifest.get("mode") or "server")
     if mode != _IMPORT_MODE_SUPPORTED:
@@ -1844,8 +1885,15 @@ def _import(args: dict) -> list[TextContent]:
                 document_report.append(report)
                 continue
 
+            source_path, unsafe = _safe_fixture_file(directory, relative)
+            if source_path is None:
+                report["error"] = unsafe
+                step_problems.append(unsafe)
+                document_report.append(report)
+                continue
+
             loaded, failures, expiries_dropped, fatal = _load_documents(
-                directory / relative, base, credential, parts
+                source_path, base, credential, parts
             )
             report["loaded"] = loaded
             documents_loaded += loaded
@@ -1971,11 +2019,18 @@ def _import(args: dict) -> list[TextContent]:
         if not build_buckets:
             build_buckets = list(planned_buckets)
 
-        names = ", ".join(f"`{n}`" for n in created_names)
+        try:
+            names = ", ".join(_quote_identifier(n) for n in created_names)
+        except ValueError as exc:
+            names = ""
+            step_problems.append(f"BUILD INDEX not issued: {exc}")
+            build_buckets = []
         for bucket_name in build_buckets:
             try:
                 _sql_query(
-                    base, credential, f"BUILD INDEX ON `{bucket_name}` ({names})"
+                    base,
+                    credential,
+                    f"BUILD INDEX ON {_quote_identifier(bucket_name)} ({names})",
                 )
                 built.append(bucket_name)
             except RuntimeError as exc:
@@ -2206,6 +2261,23 @@ def _configured_replica_count(row: dict) -> int | None:
     return None
 
 
+def _build_with(keyspace: str, name: str) -> str:
+    """A BUILD INDEX statement for the operator, with every identifier escaped.
+
+    Empty when the keyspace is not bucket.scope.collection or a name cannot be
+    quoted safely (a control character), rather than a half-escaped statement.
+    """
+    if keyspace.count(".") != 2:
+        return ""
+    try:
+        return (
+            f"BUILD INDEX ON {_quote_keyspace_parts(keyspace.split('.', 2))} "
+            f"({_quote_identifier(name)})"
+        )
+    except ValueError:
+        return ""
+
+
 def _cluster_checks(manifest: dict, args: dict) -> dict:
     """Compare a live cluster against the fixture that claims to describe it.
 
@@ -2292,14 +2364,18 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
         if parts is None:
             problems.append(f"{keyspace!r} is not a bucket.scope.collection keyspace")
             continue
-        bucket, scope, collection = parts
         check: dict[str, Any] = {"keyspace": keyspace, "expected": expected}
         try:
             result = _sql_query(
                 base,
                 credential,
-                f"SELECT COUNT(*) AS n FROM `{bucket}`.`{scope}`.`{collection}`",
+                f"SELECT COUNT(*) AS n FROM {_quote_keyspace_parts(parts)}",
             )
+        except ValueError as exc:
+            check.update(ok=False, error=str(exc))
+            problems.append(f"{keyspace} could not be counted: {exc}")
+            keyspace_checks.append(check)
+            continue
         except RuntimeError as exc:
             check.update(ok=False, error=str(exc))
             problems.append(f"{keyspace} could not be counted: {exc}")
@@ -2405,13 +2481,7 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
                 "name": name,
                 "state": state,
                 "keyspace": keyspace_of.get(name, "unknown"),
-                "build_with": (
-                    f"BUILD INDEX ON `{keyspace_of[name].split('.', 2)[0]}`"
-                    f".`{keyspace_of[name].split('.', 2)[1]}`"
-                    f".`{keyspace_of[name].split('.', 2)[2]}` (`{name}`)"
-                    if keyspace_of.get(name, "").count(".") == 2
-                    else ""
-                ),
+                "build_with": _build_with(keyspace_of.get(name, ""), name),
             }
             for name, states in sorted(on_cluster.items())
             for state in states

@@ -511,7 +511,8 @@ def test_read_only_mode_defaults_to_on():
 
     source = inspect.getsource(shared)
     assert (
-        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True)' in source
+        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True, fail_closed=True)'
+        in source
     ), "read-only mode no longer defaults to on"
     # And the parser it relies on genuinely returns the default when unset.
     import os

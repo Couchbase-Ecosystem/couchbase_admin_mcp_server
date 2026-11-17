@@ -823,10 +823,10 @@ MUTATIONS = [
     (
         "auth: a failed token exchange returns quietly instead of raising",
         "auth/oidc.py",
-        "    resp = _requests.post(token_ep, data=payload, timeout=15)\n"
+        "    resp = _requests.post(token_ep, data=payload, timeout=15, allow_redirects=False)\n"
         "    resp.raise_for_status()\n"
         "    return resp.json()\n\n\ndef refresh_access_token",
-        "    resp = _requests.post(token_ep, data=payload, timeout=15)\n"
+        "    resp = _requests.post(token_ep, data=payload, timeout=15, allow_redirects=False)\n"
         "    return resp.json()\n\n\ndef refresh_access_token",
         TOKEN,
     ),
@@ -946,8 +946,8 @@ MUTATIONS = [
     (
         "shared: read-only mode defaults to off",
         "handlers/shared.py",
-        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True)',
-        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", False)',
+        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", True, fail_closed=True)',
+        'READ_ONLY_MODE: bool = get_env_bool("CB_ADMIN_READ_ONLY_MODE", False, fail_closed=True)',
         SHARED,
     ),
     # ── The console's browser login flow ────────────────────────────────────
@@ -986,7 +986,7 @@ MUTATIONS = [
     (
         "console: next becomes an open redirect on an authenticated endpoint",
         "gui/gui_server.py",
-        '    next_url = raw_next if (not parsed.scheme and not parsed.netloc) else "/"',
+        '    next_url = raw_next if _NEXT_OK.match(raw_next) and "\\\\" not in raw_next else "/"',
         "    next_url = raw_next",
         GUI_OAUTH,
     ),

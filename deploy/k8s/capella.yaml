@@ -34,6 +34,8 @@ metadata:
 data:
   CB_ADMIN_REQUIRE_DEPLOYMENT: "capella"
   CB_DEPLOYMENT: "capella"
+  # Pins the organization guard. Empty means unpinned: the org is NOT discovered from
+  # the key. CAPELLA_ORG_ID is read too and wins when both are set.
   CB_CAPELLA_ORG_ID: ""
   CB_ADMIN_PROFILE: "enterprise"
   CB_ADMIN_TRANSPORT: "http"

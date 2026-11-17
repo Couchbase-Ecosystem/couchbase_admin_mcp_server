@@ -137,6 +137,11 @@ def export_statement(
         "d.*",
     ]
     for name in user_xattrs or []:
+        # XATTR_SELECT drops the name between backticks, so a name carrying a
+        # backtick would close the identifier and the rest would run as SQL++.
+        # Refuse anything that is not a plain identifier.
+        if not XATTR_NAME_RE.match(str(name)):
+            raise ValueError(xattr_name_problem(name))
         select.append(XATTR_SELECT.format(name=name))
 
     # Identifier quoting: a bucket, scope or collection name may contain a
@@ -162,6 +167,119 @@ def export_statement(
 #: a document field literally named `xattr_foo` would otherwise be
 #: indistinguishable from the carried xattr `foo`.
 XATTR_SELECT = "META().xattrs.`{name}` AS `__fixture_xattr_{name}`"
+
+#: The only shape a user xattr name may take before it is placed in XATTR_SELECT.
+XATTR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def xattr_name_problem(name: Any) -> str:
+    """The refusal text for a `user_xattrs` entry that is not a plain identifier."""
+    return (
+        f"user_xattrs entry {str(name)[:80]!r} is not a plain identifier. A name "
+        "must start with a letter or underscore and hold only letters, digits and "
+        "underscores (64 characters at most), because it is placed inside a "
+        "quoted SQL++ identifier."
+    )
+
+
+def invalid_xattr_names(names: Any) -> list[str]:
+    """The entries of `names` that fail XATTR_NAME_RE, as text."""
+    return [str(n) for n in (names or []) if not XATTR_NAME_RE.match(str(n))]
+
+
+def quote_identifier(part: Any) -> str:
+    """One SQL++ identifier in backticks, embedded backticks doubled.
+
+    Raises ValueError on an empty name or one holding a control character
+    (newline, NUL and the like), which no legitimate bucket, scope, collection
+    or index name carries and which has no safe quoted spelling in a log or a
+    statement the operator reviews.
+    """
+    text = str(part)
+    if not text:
+        raise ValueError("an empty identifier cannot be quoted")
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        raise ValueError(f"identifier {text!r} contains a control character")
+    return "`" + text.replace("`", "``") + "`"
+
+
+def quote_keyspace_parts(parts: Any) -> str:
+    """`bucket`.`scope`.`collection` from already-split parts, each escaped."""
+    return ".".join(quote_identifier(p) for p in parts)
+
+
+def safe_fixture_file(
+    directory: pathlib.Path, relative: Any
+) -> tuple[pathlib.Path | None, str]:
+    """(path, "") for a manifest file path inside the fixture, else (None, reason).
+
+    A manifest is data from outside this server, so `files[].path` is not trusted
+    to stay inside the fixture directory. `directory / "/etc/passwd"` is
+    `/etc/passwd`, and `..` or a symlink walks out just as well. Refused here:
+    an empty path, an absolute path (either separator style, or a drive), any
+    `..` part, a NUL byte, and any path whose symlink-resolved location is not
+    under the resolved fixture directory.
+    """
+    rel = str(relative or "")
+    if not rel:
+        return None, "a file entry has no path"
+    if "\x00" in rel:
+        return None, f"file path {rel!r} contains a NUL byte"
+    windows = pathlib.PureWindowsPath(rel)
+    posix = pathlib.PurePosixPath(rel)
+    if (
+        posix.is_absolute()
+        or windows.is_absolute()
+        or windows.drive
+        or rel.startswith(("/", "\\"))
+    ):
+        return (
+            None,
+            f"file path {rel!r} is absolute; manifest paths must be relative to the fixture",
+        )
+    if ".." in posix.parts or ".." in windows.parts:
+        return (
+            None,
+            f"file path {rel!r} contains '..'; manifest paths must stay inside the fixture",
+        )
+    try:
+        base = directory.resolve()
+        resolved = (directory / rel).resolve()
+        resolved.relative_to(base)
+    except (ValueError, OSError):
+        return None, f"file path {rel!r} resolves outside the fixture directory"
+    return directory / rel, ""
+
+
+def index_definition_problems(manifest: dict, guards: Any) -> list[str]:
+    """One message per recorded index definition that is not plain index DDL.
+
+    `guards` is a sequence of callables taking the statement and returning an
+    error string or None (the shared single-statement and index-DDL checks, passed
+    in because this module is standard library only). Run BEFORE any definition is
+    executed: a fixture manifest is data from outside this server and its
+    `definition` text would otherwise be sent to the query service as written.
+    """
+    problems: list[str] = []
+    definitions = manifest.get("gsi_definitions")
+    if not isinstance(definitions, list):
+        return problems
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
+        statement = definition.get("definition")
+        if not statement:
+            continue
+        name = str(definition.get("indexName") or definition.get("name") or "?")
+        if not isinstance(statement, str):
+            problems.append(f"index {name!r}: definition is not a string")
+            continue
+        for guard in guards:
+            why = guard(statement)
+            if why:
+                problems.append(f"index {name!r}: {why}")
+                break
+    return problems
 
 
 #: Manifest schema identifier. PLANE-NEUTRAL BY DESIGN.
@@ -638,9 +756,14 @@ def fixture_integrity(
             continue
         rel = str(record.get("path") or "")
         check: dict[str, Any] = {"path": rel}
-        target = directory / rel
         if not rel:
             problems.append("a file entry has no path")
+            continue
+        target, unsafe = safe_fixture_file(directory, rel)
+        if target is None:
+            check.update(present=False, ok=False)
+            problems.append(unsafe)
+            checks.append(check)
             continue
         if not target.is_file():
             check.update(present=False, ok=False)

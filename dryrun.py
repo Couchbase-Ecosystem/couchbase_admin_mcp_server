@@ -4,7 +4,7 @@ Component: the dry-run gate: withholds a write after every other gate and return
     instead.
 Spec: docs/spec.md S3 step 7; docs/questions.md Q-002 (the cycle with `mcp_compat`).
 Main items: `requested`, `in_effect`, `strip`, `preview`, `server_wide`,
-    `register_handler_owned`, `handler_owns`.
+    `register_handler_owned`, `handler_owns`, `force_handler_owned`.
 Callers: `gui/gui_server.py`, `handlers/mcp_status.py`, `mcp_compat.py`, `server.py`; 2 test
     file(s)
 Callees: `handlers.shared`, `mcp_compat`
@@ -34,7 +34,10 @@ THE POLICY
    does not intercept it. ``capella_env_reap`` needs a real dry run that lists which
    clusters it would reap, which means reading Capella -- something only the handler can
    do. Intercepting it centrally would have replaced a useful preview with a stub, and
-   silently changed its default from true to false.
+   silently changed its default from true to false. The one exception is the operator's
+   ``CB_ADMIN_DRY_RUN=true``: then `force_handler_owned` sets the flag to true on the call,
+   overriding a caller's ``false``, so the handler produces its own preview and cannot be
+   told to act.
 
 2. Otherwise a dry run is requested by ``dry_run: true`` on the call, or demanded for
    every call by ``CB_ADMIN_DRY_RUN=true`` in the environment. The environment wins: a
@@ -166,6 +169,27 @@ def in_effect(arguments: dict[str, Any] | None, tool: Any) -> tuple[bool, str]:
     if requested(arguments):
         return True, f"{ARG}=true on this call"
     return False, ""
+
+
+def force_handler_owned(arguments: dict[str, Any], tool: Any) -> bool:
+    """Force ``dry_run`` true for a handler-owned tool when the operator set the server-wide flag.
+
+    Security rule: ``CB_ADMIN_DRY_RUN=true`` is an operator control, so a caller's
+    ``dry_run: false`` must not escape it. `in_effect` leaves handler-owned tools alone
+    (only the handler can build their preview), so this overwrites the argument instead and
+    the handler then takes its own dry-run branch.
+
+    Args:
+        arguments: the call arguments, changed in place.
+        tool: the tool object, or None.
+
+    Returns:
+        True when the argument was forced, False when nothing applied.
+    """
+    if handler_owns(tool) and server_wide():
+        arguments[ARG] = True
+        return True
+    return False
 
 
 def strip(arguments: dict[str, Any]) -> None:

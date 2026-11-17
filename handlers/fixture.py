@@ -107,16 +107,30 @@ from handlers.fixture_core import (
     META_ID_ALIAS,
     export_statement,
     fixture_integrity,
+    index_definition_problems,
+    invalid_xattr_names,
+    quote_identifier,
+    quote_keyspace_parts,
     read_manifest,
     resolve_under_root,
     rewrite_index_keyspace,
+    safe_fixture_file,
     schema_problem,
     sha256_file,
     split_keyspace,
     strip_index_nodes,
     with_defer_build,
+    xattr_name_problem,
 )
-from handlers.shared import admin_request, err, get_sdk_cluster, ok
+from handlers.shared import (
+    admin_request,
+    assert_index_create_ddl,
+    assert_single_statement,
+    err,
+    get_sdk_cluster,
+    ok,
+    quote_path,
+)
 from logging_config import get_logger
 
 _log = get_logger("handlers.fixture")
@@ -634,6 +648,9 @@ def _export(args: dict) -> list[TextContent]:
     include_data = bool(args.get("include_data", True))
     page_size = int(args.get("page_size") or 1000)
     xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
+    bad_xattrs = invalid_xattr_names(xattrs)
+    if bad_xattrs:
+        return err(xattr_name_problem(bad_xattrs[0]), tool=tool)
     wanted_keyspaces = {str(k) for k in (args.get("keyspaces") or []) if k}
     wanted_buckets = {k.split(".")[0] for k in wanted_keyspaces}
 
@@ -993,6 +1010,20 @@ def _import(args: dict) -> list[TextContent]:
             tool=tool,
         )
 
+    # The manifest is data from outside this server. Every recorded index
+    # definition must be a single index-DDL statement BEFORE anything runs, so a
+    # tampered fixture cannot reach the query service with other SQL++.
+    index_problems = index_definition_problems(
+        manifest, (assert_single_statement, assert_index_create_ddl)
+    )
+    if index_problems:
+        return err(
+            "the fixture's index definitions are not plain index DDL, so "
+            "NOTHING was imported:\n  - " + "\n  - ".join(index_problems),
+            tool=tool,
+            fixture_path=str(directory),
+        )
+
     steps: dict[str, Any] = {}
     steps["structure"] = _import_structure(manifest, keyspace_map)
     steps["documents"] = _import_documents(directory, manifest, keyspace_map)
@@ -1036,9 +1067,10 @@ def _import_structure(manifest: dict, keyspace_map: dict) -> dict:
             failures.append(f"{target!r} is not bucket.scope.collection")
             continue
         bucket, scope, collection = parts
+        q_bucket, q_scope = quote_path(bucket), quote_path(scope)
 
         try:
-            payload = admin_request("GET", f"/pools/default/buckets/{bucket}/scopes")
+            payload = admin_request("GET", f"/pools/default/buckets/{q_bucket}/scopes")
         except Exception as exc:
             failures.append(
                 f"{target}: bucket {bucket!r} could not be read ({exc}). This "
@@ -1052,7 +1084,7 @@ def _import_structure(manifest: dict, keyspace_map: dict) -> dict:
             try:
                 admin_request(
                     "POST",
-                    f"/pools/default/buckets/{bucket}/scopes",
+                    f"/pools/default/buckets/{q_bucket}/scopes",
                     data={"name": scope},
                 )
                 created_scopes.append(f"{bucket}.{scope}")
@@ -1077,7 +1109,7 @@ def _import_structure(manifest: dict, keyspace_map: dict) -> dict:
         try:
             admin_request(
                 "POST",
-                f"/pools/default/buckets/{bucket}/scopes/{scope}/collections",
+                f"/pools/default/buckets/{q_bucket}/scopes/{q_scope}/collections",
                 data=body,
             )
             created_collections.append(target)
@@ -1147,8 +1179,12 @@ def _import_documents(
         source = str(record.get("keyspace") or "")
         target = str(keyspace_map.get(source) or source)
         parts = split_keyspace(target)
-        path = directory / str(record.get("path") or "")
+        path, unsafe = safe_fixture_file(directory, record.get("path"))
         entry: dict[str, Any] = {"source": source, "target": target}
+        if path is None:
+            entry.update(ok=False, error=unsafe)
+            per_keyspace.append(entry)
+            continue
         if not parts:
             entry.update(ok=False, error=f"{target!r} is not bucket.scope.collection")
             per_keyspace.append(entry)
@@ -1293,8 +1329,12 @@ def _import_indexes(manifest: dict, keyspace_map: dict) -> dict:
         if not parts:
             failures.append(f"{keyspace!r} is not bucket.scope.collection")
             continue
-        quoted_keyspace = "`" + "`.`".join(parts) + "`"
-        index_list = ", ".join(f"`{n}`" for n in names)
+        try:
+            quoted_keyspace = quote_keyspace_parts(parts)
+            index_list = ", ".join(quote_identifier(n) for n in names)
+        except ValueError as exc:
+            failures.append(f"BUILD INDEX on {keyspace}: {exc}")
+            continue
         try:
             _query(f"BUILD INDEX ON {quoted_keyspace}({index_list})")
             built.append(keyspace)
@@ -1447,7 +1487,13 @@ def _cluster_counts(manifest: dict, keyspace_map: dict) -> dict:
             problems.append(entry["error"])
             per_keyspace.append(entry)
             continue
-        quoted = "`" + "`.`".join(parts) + "`"
+        try:
+            quoted = quote_keyspace_parts(parts)
+        except ValueError as exc:
+            entry.update(ok=False, error=str(exc))
+            problems.append(f"{target}: {exc}")
+            per_keyspace.append(entry)
+            continue
         try:
             rows = _query(f"SELECT COUNT(*) AS total FROM {quoted}")
             actual = (rows[0] or {}).get("total") if rows else 0

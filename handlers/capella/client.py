@@ -306,6 +306,55 @@ def _hint_body(status: int) -> str:
     return ""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect so the Bearer key is never forwarded to another host.
+
+    Returning `None` from `redirect_request` makes urllib raise the 3xx as an `HTTPError`,
+    which `capella_request` reports like any other error status.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return `None`, which tells urllib not to build a follow-up request."""
+        return None
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _check_base_url(url: str) -> None:
+    """Refuse a `CAPELLA_BASE_URL` that would send the key over a clear or odd channel.
+
+    Only `https` is accepted, except for a loopback host, which the offline test servers
+    and a local lab use.
+
+    Raises:
+        CapellaError: the scheme is not https and the host is not loopback.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" or (
+        parsed.scheme == "http" and host in _LOOPBACK_HOSTS
+    ):
+        return
+    raise CapellaError(
+        "CAPELLA_BASE_URL must use https (http is allowed only for a loopback host); "
+        "the API key is never sent over another scheme.",
+        status=None,
+    )
+
+
+def _urlopen(req: urllib.request.Request, *, timeout: float, context: ssl.SSLContext):
+    """Open one request through an opener that refuses every redirect.
+
+    A separate function so a test can stand in for the network without the redirect
+    protection being skipped by accident.
+    """
+    opener = urllib.request.build_opener(
+        _NoRedirect, urllib.request.HTTPSHandler(context=context)
+    )
+    return opener.open(req, timeout=timeout)
+
+
 def _ssl_context() -> ssl.SSLContext:
     # cloudapi presents a publicly-trusted certificate. There is intentionally no
     # insecure escape hatch here: CB_ADMIN_TLS_INSECURE exists for self-signed
@@ -418,6 +467,7 @@ def capella_request(
     `docs/design/capella-client-and-guardrails.md`.
     """
     secret = _secret()
+    _check_base_url(base_url())
     url = base_url() + (path if path.startswith("/") else "/" + path)
     url += _encode_params(params)
 
@@ -466,13 +516,13 @@ def capella_request(
     timeout = get_env_int("CAPELLA_HTTP_TIMEOUT", 30)
     max_attempts = max(1, get_env_int("CAPELLA_HTTP_RETRIES", 3))
     backoff = 0.5
-    context = _ssl_context()
 
     last: CapellaError | None = None
+    context = _ssl_context()
     for attempt in range(1, max_attempts + 1):
         req = urllib.request.Request(url, data=payload, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
+            with _urlopen(req, timeout=timeout, context=context) as resp:
                 raw = resp.read()
                 if not raw:
                     return {"status": "ok", "http_status": resp.status}

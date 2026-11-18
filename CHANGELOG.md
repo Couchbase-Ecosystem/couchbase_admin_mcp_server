@@ -25,6 +25,19 @@ Fixes from the 2026-11 security review (static review plus executable probes). E
 - `admin_xdcr_conflict_log_query` clamps `limit`; `admin_user_create_temporary` checks the shape of `roles`; `admin_user_change_password` no longer turns group-derived roles into direct roles.
 - Enterprise profile prints a warning at start when the hard ceiling, fixture root or catalogue root is not set.
 
+Round 2 (re-scan of the fixed tree). Regression tests are in `tests/test_fix_capella_round2.py` and the existing `test_fix_*.py` files.
+
+- Redaction: `redact_text` masks first, then chunks, so nothing is truncated and nothing past a window is unmasked; URI passwords with `/`, `?`, `#` are masked; more key names (cookie, api-key, client key) are masked; an exception that is a log argument is scrubbed in the message head.
+- Capella: a caller description can no longer shadow the ownership marker (all markers are parsed, caller text containing `mcp-env:` is refused on create, a caller marker cannot replace the stored one); CIDRs wider than /8 (IPv4) or /16 (IPv6) are refused; `..` ids are encoded; non-canonical spellings of guarded body keys are refused; `capella_env_reap` treats only an explicit `dry_run: false` as a real reap; fixture export and verify now apply the project allowlist and protected-cluster list; the Data API client does not follow redirects, requires https and checks the host (`CB_CAPELLA_DATA_API_HOSTS` adds trusted hosts).
+- SQL++: the statement lexer skips a closed `/*+ ... */` hint, so a quote inside it can no longer hide a `;`; index DDL is validated again after it is rewritten on import (both planes).
+- Egress: `split_host` only treats a scheme at the start as a scheme and reads a backslash as a path separator; destination keys are matched after NFKC and casefold; a falsy `emailHost` no longer skips the check.
+- Auth and console: one parser for `CB_ADMIN_HTTP_REQUIRE_AUTH`; `resource_access` roles count only for the audience client (or `CB_ADMIN_TRUSTED_CLIENTS`, `*` for all); OIDC discovery serves the last good document if a refresh fails and checks the endpoints it names are https; `/api/call` validates the body and arguments against the served schema and audits a refusal as `denied_invalid_arguments`; `/api/tools` lists only tools the caller's scopes allow.
+- Fixtures: export honours server-wide preview mode, refuses cluster names containing a path separator, and quotes the bucket name in the scopes URL.
+- Admin core: `admin_alerts_set` no longer double-wraps its refusal, sends recipients comma-separated and refuses a partial call that would clear the SMTP password; bucket create and update refuse undeclared keys; a wildcard bucket role is written as `role[*]` and an inner scope gap is refused; diagnostics `limit` and `sample_size` are capped; a tool-list path that does not exist is warned about.
+- Deploy: compose files default the scope names and pass through the hardening variables; `.dockerignore` secret patterns match at any depth.
+
+Behaviour changes to expect from round 2: a cluster whose Data API host is outside `.cloud.couchbase.com` needs `CB_CAPELLA_DATA_API_HOSTS`; alert updates against an authenticated SMTP server must repeat `emailPass`; a token whose roles sit under a client other than the audience loses them unless `CB_ADMIN_TRUSTED_CLIENTS` names it.
+
 Behaviour changes to expect: alert webhooks are refused until `CB_ADMIN_EGRESS_ALLOWED_HOSTS` or `CB_ADMIN_EGRESS_ALLOW_ANY` is set; a cluster that answers with a redirect is now an error; a restore target on loopback is always refused.
 
 Not fixed (design decisions): the TLS 1.2 floor in `tls_config.py` (uvicorn builds its own context), a conflict-log-only restriction on the conflict query, and a role allow-list for temporary users.

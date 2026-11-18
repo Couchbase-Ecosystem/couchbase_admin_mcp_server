@@ -1306,6 +1306,13 @@ def _import_indexes(manifest: dict, keyspace_map: dict) -> dict:
         if defer_why:
             failures.append(f"{name}: {defer_why}")
             continue
+        # Re-validate the statement that will actually run. The recorded definition came
+        # from the fixture manifest and was then REWRITTEN (nodes stripped, keyspace
+        # remapped, deferred), so a check of the original proves nothing about the result.
+        guard_why = assert_index_create_ddl(statement)
+        if guard_why:
+            failures.append(f"{name}: refused after rewrite: {guard_why}")
+            continue
         try:
             _query(statement)
             created.append(name)

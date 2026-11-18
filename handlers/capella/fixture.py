@@ -2089,6 +2089,17 @@ def _import(args: dict) -> list[TextContent]:
             index_report.append({"name": raw_name, "created": False, "error": why_not})
             step_problems.append(f"index {raw_name}: {why_not}")
             continue
+        guard_why = assert_index_create_ddl(statement)
+        if guard_why:
+            # Re-validate the REWRITTEN statement: the manifest definition was changed
+            # after any earlier check, so only the final text proves anything.
+            index_report.append(
+                {"name": raw_name, "created": False, "error": guard_why}
+            )
+            step_problems.append(
+                f"index {raw_name}: refused after rewrite: {guard_why}"
+            )
+            continue
         if statement in seen_statements:
             continue
         seen_statements.add(statement)

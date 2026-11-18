@@ -5,8 +5,9 @@ Spec: docs/spec.md S3 step 8, S8.
 Main items: tests for marker shadowing, the CIDR floor, dot-segment ids, the Data API
     host and redirect checks, the read-side project policy and the reap dry-run parse.
 Callers: none; collected by pytest
-Callees: `handlers.capella.client`, `handlers.capella.fixture`,
-    `handlers.capella.guardrails`
+Callees: `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.fixture`, `handlers.capella.guardrails`, `handlers.fixture_core`,
+    `handlers.shared`
 
 Each test fails on the code before the fix.
 """
@@ -124,3 +125,12 @@ def test_read_side_policy_allows_an_ordinary_cluster(monkeypatch):
     assert (
         fixture._read_side_problem({"cluster_id": "c"}, "p", None, "export from") == ""
     )
+
+
+def test_a_rewritten_index_statement_is_guarded_again(monkeypatch):
+    """A nodes clause that flips quote parity must not smuggle a second statement."""
+    from handlers import fixture_core, shared
+
+    evil = 'CREATE INDEX i ON `b`(x) WITH {"nodes": ["a"]}; DROP SCOPE `b`.`p`'
+    rewritten, _ = fixture_core.strip_index_nodes(evil)
+    assert shared.assert_index_create_ddl(rewritten) is not None

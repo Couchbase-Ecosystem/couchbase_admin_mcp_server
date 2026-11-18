@@ -751,8 +751,24 @@ def _lex_sql_literals(text: str) -> tuple[str, bool]:
     out: list[str] = []
     quote: str | None = None
     i = 0
+    last_close = text.rfind("*/")
     while i < len(text):
         ch = text[i]
+        # An optimizer hint is a closed block comment, so a quote INSIDE it opens nothing.
+        # Without this the lexer entered a literal at a `"` in the hint, stayed in it past
+        # the hint's end and blanked a following `;` that the query service reads as live.
+        # Only a CLOSED hint is skipped; an unclosed `/*+` is left in the text, where the
+        # comment check refuses it. `last_close` keeps this linear for many openers.
+        if (
+            not quote
+            and ch == "/"
+            and text.startswith("/*+", i)
+            and last_close >= i + 3
+        ):
+            end = text.find("*/", i + 3)
+            out.append(" " * (end + 2 - i))
+            i = end + 2
+            continue
         if quote:
             if ch == "\\" and quote in ("'", '"'):
                 out.append(" ")

@@ -183,3 +183,13 @@ def test_plain_get_env_bool_is_unchanged_for_other_callers(monkeypatch):
     monkeypatch.setenv("SOME_FLAG", "flase")
     assert shared.get_env_bool("SOME_FLAG", True) is False
     assert shared.get_env_bool("SOME_UNSET_FLAG", True) is True
+
+
+def test_a_quote_inside_an_optimizer_hint_does_not_hide_a_second_statement():
+    stmt = 'CREATE INDEX i ON `b`(x) /*+ " */ ; DROP SCOPE `b`.`prod` /*" */'
+    assert shared.assert_single_statement(stmt) is not None
+
+
+def test_a_plain_optimizer_hint_is_still_accepted():
+    stmt = "SELECT /*+ INDEX(t idx_a) */ * FROM `b` t WHERE a = 1"
+    assert shared.assert_single_statement(stmt) is None

@@ -140,7 +140,10 @@ MUTATIONS = [
         "auth/scope_gate.py",
         """    resource_access = claims.get("resource_access")
     if isinstance(resource_access, dict):
-        for per_client in resource_access.values():
+        trusted = _trusted_clients()
+        for client_id, per_client in resource_access.items():
+            if trusted is not None and client_id not in trusted:
+                continue
             if isinstance(per_client, dict):
                 granted |= _flatten_grant(per_client.get("roles"))""",
         """    resource_access = None""",

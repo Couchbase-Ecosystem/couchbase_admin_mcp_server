@@ -166,3 +166,20 @@ def test_every_truthy_spelling_demands_auth_in_every_parser(monkeypatch, spellin
     monkeypatch.setenv("CB_ADMIN_HTTP_REQUIRE_AUTH", spelling)
     assert oidc.require_auth_enabled() is True
     assert scope_gate._auth_required() is True
+
+
+def test_resource_access_roles_come_only_from_the_audience_client(monkeypatch):
+    from auth import scope_gate
+
+    claims = {
+        "resource_access": {
+            "mcp-admin": {"roles": ["mcp:read"]},
+            "other-app": {"roles": ["mcp:write"]},
+        }
+    }
+    monkeypatch.delenv("CB_ADMIN_TRUSTED_CLIENTS", raising=False)
+    monkeypatch.setenv("OAUTH_AUDIENCE", "mcp-admin")
+    granted = scope_gate._claims_scopes(claims)
+    assert "mcp:read" in granted and "mcp:write" not in granted
+    monkeypatch.setenv("CB_ADMIN_TRUSTED_CLIENTS", "*")
+    assert "mcp:write" in scope_gate._claims_scopes(claims)

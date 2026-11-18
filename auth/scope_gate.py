@@ -196,10 +196,12 @@ def _claims_scopes(claims: dict[str, Any]) -> set[str]:
     over-reaching. But it stopped while reporting "needs confirmation", which
     says nothing about the grant being in a claim nobody read.
 
-    `resource_access` is walked across every client rather than only the
-    configured audience, deliberately: the client a role is attached to is the
-    IdP administrator's choice, and refusing a grant because it arrived under a
-    neighbouring client id would reproduce the same silence one level down.
+    `resource_access` is limited to the clients named by CB_ADMIN_TRUSTED_CLIENTS
+    (comma-separated; `*` means every client), and when that is unset to the
+    configured OAUTH_AUDIENCE. Walking every client let an administrator of ANY
+    client in the realm mint a role that this server read as a write or automation
+    scope. With neither setting present there is nothing to narrow by, so every
+    client is read as before.
     """
     granted: set[str] = set()
     for claim in _SCOPE_CLAIMS:
@@ -211,11 +213,27 @@ def _claims_scopes(claims: dict[str, Any]) -> set[str]:
 
     resource_access = claims.get("resource_access")
     if isinstance(resource_access, dict):
-        for per_client in resource_access.values():
+        trusted = _trusted_clients()
+        for client_id, per_client in resource_access.items():
+            if trusted is not None and client_id not in trusted:
+                continue
             if isinstance(per_client, dict):
                 granted |= _flatten_grant(per_client.get("roles"))
 
     return granted
+
+
+def _trusted_clients() -> frozenset[str] | None:
+    """The `resource_access` client ids whose roles count as scopes, or None for all."""
+    raw = (os.environ.get("CB_ADMIN_TRUSTED_CLIENTS", "") or "").strip()
+    if raw == "*":
+        return None
+    if raw:
+        return frozenset(item.strip() for item in raw.split(",") if item.strip())
+    audience = (os.environ.get("OAUTH_AUDIENCE", "") or "").strip()
+    if audience:
+        return frozenset(item.strip() for item in audience.split(",") if item.strip())
+    return None
 
 
 def principal_of(claims: dict[str, Any] | None) -> dict[str, Any]:

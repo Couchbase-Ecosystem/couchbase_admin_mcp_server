@@ -307,6 +307,41 @@ def test_a_supplied_value_wins_over_the_one_already_on_the_cluster(wire):
         ),
         # A wildcard bucket keeps its parameter: `data_reader[*]`, never the bare role.
         ([{"role": "data_reader", "bucket_name": "*"}], "data_reader[*]"),
+        # Shapes read back from Enterprise 8.0.1, which fills every unnarrowed part with
+        # "*" and rejects `[x:*:*]` on the way in (measured live, 2026-11-18).
+        (
+            [
+                {
+                    "role": "data_reader",
+                    "bucket_name": "*",
+                    "scope_name": "*",
+                    "collection_name": "*",
+                }
+            ],
+            "data_reader[*]",
+        ),
+        (
+            [
+                {
+                    "role": "data_reader",
+                    "bucket_name": "travel",
+                    "scope_name": "*",
+                    "collection_name": "*",
+                }
+            ],
+            "data_reader[travel]",
+        ),
+        (
+            [
+                {
+                    "role": "data_reader",
+                    "bucket_name": "travel",
+                    "scope_name": "inv",
+                    "collection_name": "*",
+                }
+            ],
+            "data_reader[travel:inv]",
+        ),
         # A TRAILING gap is harmless and stops the encoding.
         (
             [{"role": "data_reader", "bucket_name": "travel", "scope_name": ""}],

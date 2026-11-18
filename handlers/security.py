@@ -479,6 +479,14 @@ def _roles_to_form(user: dict) -> str:
                 break
             # "*" (every bucket) is a real parameter value, written as `role[*]`.
             parts.append(str(value))
+        # MEASURED 2026-11-18 against Enterprise 8.0.1: ns_server ANSWERS with "*" for every
+        # part the role does not narrow (`data_reader[mcptest]` reads back as bucket
+        # mcptest, scope "*", collection "*"), but REJECTS that spelling on the way back in
+        # (`data_reader[mcptest:*:*]` is 400 "unknown, malformed or role parameters are
+        # undefined"). A trailing "*" is the same role as leaving it off, so drop trailing
+        # stars, keeping the bucket part so a wildcard bucket stays `role[*]`.
+        while len(parts) > 1 and parts[-1] == "*":
+            parts.pop()
         encoded.append(f"{role}[{':'.join(parts)}]" if parts else role)
     return ",".join(encoded)
 

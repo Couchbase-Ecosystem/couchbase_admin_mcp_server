@@ -40,6 +40,7 @@ Optional — token validation
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 import threading
@@ -80,6 +81,8 @@ def _env_required(key: str) -> str:
     return val
 
 
+_log = logging.getLogger(__name__)
+
 # ── OIDC discovery (cached) ───────────────────────────────────────────────────
 
 #: issuer -> (fetched_at_monotonic, document). Entries older than `_DISCOVERY_TTL` are refetched.
@@ -113,6 +116,25 @@ def _require_https_issuer(issuer: str) -> None:
 
 
 def _discover() -> dict[str, Any]:
+    """Fetch and cache the OIDC discovery document, serving a stale copy if the fetch fails.
+
+    A transient IdP outage used to turn into a failed validation for every caller the moment
+    the cache entry expired. The last good document is reused instead (it was already
+    verified when it was cached), and the failure is logged. With no earlier copy the error
+    still propagates.
+    """
+    issuer = _env_required("OAUTH_ISSUER").rstrip("/")
+    try:
+        return _discover_fresh()
+    except Exception:
+        stale = _discovery_cache.get(issuer)
+        if stale is None:
+            raise
+        _log.warning("OIDC discovery refresh failed; serving the last good document")
+        return stale[1]
+
+
+def _discover_fresh() -> dict[str, Any]:
     """Fetch and cache the OIDC discovery document.
 
     The issuer must be https (loopback excepted), the document's own ``issuer`` must equal
@@ -157,6 +179,13 @@ def _discover() -> dict[str, Any]:
         raise RuntimeError(
             "OIDC discovery document issuer does not match OAUTH_ISSUER; refusing it."
         )
+    # The endpoints the document names receive tokens and codes, so they get the same
+    # scheme rule as the issuer. Without it a document that passed the issuer check could
+    # still point the token exchange at plain http.
+    for key in ("token_endpoint", "jwks_uri"):
+        endpoint = doc.get(key)
+        if endpoint is not None:
+            _require_https_issuer(str(endpoint))
     _discovery_cache[issuer] = (time.monotonic(), doc)
     return doc
 

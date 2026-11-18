@@ -195,10 +195,11 @@ def test_a_plain_optimizer_hint_is_still_accepted():
     assert shared.assert_single_statement(stmt) is None
 
 
-def test_a_tool_list_path_that_does_not_exist_is_warned_about(caplog):
-    import logging
-
-    with caplog.at_level(logging.WARNING):
-        names = shared._parse_tool_list("/no/such/dir/disabled.txt")
+def test_a_tool_list_path_that_does_not_exist_is_warned_about(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        shared._log, "warning", lambda msg, *a, **k: seen.append(msg % a)
+    )
+    names = shared._parse_tool_list("/no/such/dir/disabled.txt")
     assert names == {"/no/such/dir/disabled.txt"}
-    assert "looks like a file path" in caplog.text
+    assert any("looks like a file path" in m for m in seen)

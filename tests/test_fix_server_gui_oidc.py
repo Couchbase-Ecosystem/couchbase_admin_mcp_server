@@ -178,8 +178,18 @@ def test_discovery_requires_https_and_matching_issuer(monkeypatch):
     with pytest.raises(RuntimeError, match="too large"):
         oidc._discover()
 
-    fake_get.body = b'{"issuer": "https://idp.example.com/", "token_endpoint": "t"}'
-    assert oidc._discover()["token_endpoint"] == "t"
+    fake_get.body = (
+        b'{"issuer": "https://idp.example.com/",'
+        b' "token_endpoint": "http://idp.example.com/token"}'
+    )
+    with pytest.raises(RuntimeError, match="https"):
+        oidc._discover()
+
+    fake_get.body = (
+        b'{"issuer": "https://idp.example.com/",'
+        b' "token_endpoint": "https://idp.example.com/token"}'
+    )
+    assert oidc._discover()["token_endpoint"] == "https://idp.example.com/token"
     assert seen["allow_redirects"] is False
 
 

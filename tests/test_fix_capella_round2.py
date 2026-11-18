@@ -183,3 +183,25 @@ def test_resource_access_roles_come_only_from_the_audience_client(monkeypatch):
     assert "mcp:read" in granted and "mcp:write" not in granted
     monkeypatch.setenv("CB_ADMIN_TRUSTED_CLIENTS", "*")
     assert "mcp:write" in scope_gate._claims_scopes(claims)
+
+
+def test_discovery_serves_the_last_good_document_when_the_refresh_fails(monkeypatch):
+    import time
+
+    from auth import oidc
+
+    monkeypatch.setenv("OAUTH_ISSUER", "https://idp.example.com")
+    oidc._discovery_cache.clear()
+    oidc._discovery_cache["https://idp.example.com"] = (
+        time.monotonic() - 10**6,
+        {"issuer": "https://idp.example.com", "jwks_uri": "https://idp.example.com/k"},
+    )
+
+    def boom(*a, **k):
+        raise ConnectionError("idp down")
+
+    monkeypatch.setattr(oidc._requests, "get", boom)
+    assert oidc._discover()["jwks_uri"] == "https://idp.example.com/k"
+    oidc._discovery_cache.clear()
+    with pytest.raises(ConnectionError):
+        oidc._discover()

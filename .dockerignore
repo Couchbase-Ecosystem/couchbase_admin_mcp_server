@@ -4,14 +4,14 @@
 # is baked into a layer today — but the whole context is still shipped to the
 # daemon and the build cache, and one future `COPY . .` would turn that into a
 # published secret. Excluding it here makes that mistake harmless.
-.env
-.env.*
+**/.env
+**/.env.*
 !.env.example
-*.pem
-*.key
-*.p12
-*.pfx
-*.crt
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.crt
 
 # EXCEPT the corporate CA roots for the build. Without this the rules above
 # strip deploy/ca/ out of the build context, `COPY deploy/ca/` finds an empty

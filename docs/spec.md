@@ -77,8 +77,8 @@ names, each with its meaning in that table:
 
 `allowed`, `dry_run`, `error`, `denied_authentication`, `denied_confirmation`,
 `denied_deployment`, `denied_disabled`, `denied_egress`, `denied_guardrail`,
-`denied_handler`, `denied_hard_ceiling`, `denied_read_only`, `denied_scope`,
-`denied_unknown_tool`.
+`denied_handler`, `denied_hard_ceiling`, `denied_invalid_arguments`, `denied_read_only`,
+`denied_scope`, `denied_unknown_tool`.
 
 Where the less obvious ones come from: `denied_authentication` is written by
 `audit.emit_auth_failure` as an `auth_failure` event when a credential is rejected.

@@ -88,6 +88,7 @@ DECISIONS: dict[str, str] = {
     "denied_read_only": "read-only mode or the disabled list kept the tool from loading",
     "denied_scope": "the token lacks the scope the tool requires",
     "denied_unknown_tool": "no handler is registered under that tool name",
+    "denied_invalid_arguments": "the arguments (or the request body) did not match the served schema",
 }
 
 # The audit trail must not be subject to the operator's verbosity knob.
@@ -323,7 +324,7 @@ def build_record(
     ``decision`` is one of the names in `DECISIONS`: allowed, dry_run, error,
     denied_authentication, denied_confirmation, denied_deployment, denied_disabled,
     denied_egress, denied_guardrail, denied_handler, denied_hard_ceiling,
-    denied_read_only, denied_scope, denied_unknown_tool. The vocabulary is closed so a SIEM
+    denied_invalid_arguments, denied_read_only, denied_scope, denied_unknown_tool. The vocabulary is closed so a SIEM
     rule can match on it, and `DECISIONS` gives the meaning of each.
 
     ``dry_run`` is not a refusal and not an execution: the call was authorized and then

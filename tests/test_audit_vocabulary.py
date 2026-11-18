@@ -72,7 +72,7 @@ def _emitted_denials() -> set[str]:
 
 def test_the_vocabulary_is_the_fourteen_names_the_spec_describes():
     """A guard against the table being emptied or truncated."""
-    assert len(audit.DECISIONS) == 14
+    assert len(audit.DECISIONS) == 15
     assert {"allowed", "dry_run", "error"} <= set(audit.DECISIONS)
     assert all(meaning.strip() for meaning in audit.DECISIONS.values())
 

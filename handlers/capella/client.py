@@ -386,7 +386,13 @@ def quote_segment(segment: Any) -> str:
     Applied to every caller-supplied id so a value containing a slash, a space or
     '..' cannot escape its segment and address a different resource.
     """
-    return urllib.parse.quote(str(segment or ""), safe="")
+    quoted = urllib.parse.quote(str(segment or ""), safe="")
+    # quote() leaves "." untouched, so a segment of ".." survived as a dot-segment and a
+    # gateway that collapses it retargeted a delete to the PARENT resource (bucket_id=".."
+    # became DELETE /clusters/{id}), skipping the checks keyed to the cluster delete.
+    if quoted in (".", ".."):
+        return quoted.replace(".", "%2E")
+    return quoted
 
 
 def extract_placeholders(template: str) -> list[str]:

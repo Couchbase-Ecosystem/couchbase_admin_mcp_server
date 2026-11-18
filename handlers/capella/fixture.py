@@ -451,6 +451,44 @@ _DATA_PASSWORD_ENV = "CB_CAPELLA_CLUSTER_PASSWORD"
 _QUERY_PATH = "/_p/query/query/service"
 
 
+def _read_side_problem(ids: dict, project: str, policy: Any, verb: str) -> str:
+    """Why a document read of this cluster is refused, or "" when it is allowed.
+
+    Applies the project allowlist and the protected-cluster list to the LIVE cluster
+    (fail closed: a response that is not a cluster object is a refusal).
+    """
+    from . import environment as _env  # local imports: avoid a package cycle
+    from . import guardrails as g
+
+    try:
+        cluster = _env._invoke(
+            "capella_cluster_get", ids, composite="capella_fixture_export"
+        )
+    except Exception as exc:
+        return f"could not read the cluster to apply the project policy: {exc}"
+    if not isinstance(cluster, dict) or not cluster.get("name"):
+        return "Capella did not return a usable cluster object, so the policy cannot be applied."
+    try:
+        g.assert_not_protected(
+            cluster, project, kind="cluster", policy=policy, verb=verb
+        )
+    except g.GuardrailError as exc:
+        return str(exc)
+    return ""
+
+
+def _read_side_refusal(
+    ids: dict, project: str, policy: Any, verb: str, tool: str
+) -> list[TextContent] | None:
+    """An err() result when `_read_side_problem` refuses, else None."""
+    problem = _read_side_problem(ids, project, policy, verb)
+    if problem:
+        return err(
+            f"Refused by guardrail policy: {problem}\nNothing was read.", tool=tool
+        )
+    return None
+
+
 def _data_api_base(ids: dict) -> tuple[str, str]:
     """(base_url, why_not). Reads the connection string from the control plane.
 
@@ -486,9 +524,66 @@ def _data_api_base(ids: dict) -> tuple[str, str]:
             f"connection string is the control plane saying 'not yet', not a "
             f"lookup failure."
         )
-    if not connection.startswith("http"):
+    if "://" not in connection:
         connection = "https://" + connection
+    problem = _data_api_host_problem(connection)
+    if problem:
+        return "", problem
     return connection.rstrip("/"), ""
+
+
+#: Host suffixes a Data API connection string may name, plus any the operator adds with
+#: CB_CAPELLA_DATA_API_HOSTS (comma-separated, each a host or a ".suffix"). The string comes
+#: from a control-plane RESPONSE and the cluster credential is sent to it, so it is checked
+#: rather than trusted.
+_DATA_API_HOST_SUFFIXES = (".cloud.couchbase.com",)
+_DATA_API_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def _data_api_host_problem(url: str) -> str:
+    """Why `url` may not receive the cluster credential, or "" when it may."""
+    import urllib.parse
+
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not host or parts.username is not None or parts.password is not None:
+        return "the Data API connection string names no host, or carries credentials."
+    if host in _DATA_API_LOOPBACK:
+        return ""
+    if parts.scheme != "https":
+        return (
+            "the Data API connection string is not https; the cluster credential is "
+            "never sent over another scheme."
+        )
+    extra = tuple(
+        item.strip().lower()
+        for item in os.environ.get("CB_CAPELLA_DATA_API_HOSTS", "").split(",")
+        if item.strip()
+    )
+    for allowed in _DATA_API_HOST_SUFFIXES + extra:
+        if allowed.startswith("."):
+            if host.endswith(allowed):
+                return ""
+        elif host == allowed:
+            return ""
+    return (
+        f"the Data API host {host!r} is not under {', '.join(_DATA_API_HOST_SUFFIXES)}. "
+        "Set CB_CAPELLA_DATA_API_HOSTS to add a host or a '.suffix' the operator trusts."
+    )
+
+
+def _open_data_api(request: Any, timeout: float) -> Any:
+    """Open `request` without following redirects, so the Basic credential stays put."""
+    import urllib.request
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        """Refuse every redirect; urllib then raises the 3xx as an HTTPError."""
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            """Return None so no follow-up request is built."""
+            return None
+
+    return urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout)
 
 
 def _data_api_credential() -> tuple[tuple[str, str], str]:
@@ -607,7 +702,7 @@ def _put_document(
     request.add_header("Authorization", f"Basic {token}")
     request.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _open_data_api(request, timeout) as response:
             if 200 <= response.status < 300:
                 return ""
             return f"{response.status}"
@@ -643,7 +738,7 @@ def _sql_query(
     request.add_header("Authorization", f"Basic {token}")
     request.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _open_data_api(request, timeout) as response:
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")
@@ -736,13 +831,27 @@ def _export(args: dict) -> list[TextContent]:
     # the two it is and writes nothing.
 
     try:
-        org, project, _policy = _env._resolve_context(args)
+        org, project, policy = _env._resolve_context(args)
     except Exception as exc:  # GuardrailError and friends carry their own hints
         return err(str(exc), tool="capella_fixture_export")
 
     cluster_id = str(args.get("cluster_id") or "").strip()
     if not cluster_id:
         return err("cluster_id is required", tool="capella_fixture_export")
+
+    # The docstring promised the project allowlist and it was never applied: only import
+    # ran it. Export reads document bodies with the global Data API credential, so it gets
+    # the project allowlist and the protected-cluster list (no name prefix is required: a
+    # hand-made source cluster is a legitimate thing to export from).
+    refusal = _read_side_refusal(
+        {"organization_id": org, "project_id": project, "cluster_id": cluster_id},
+        project,
+        policy,
+        "export from",
+        "capella_fixture_export",
+    )
+    if refusal is not None:
+        return refusal
 
     try:
         root = _resolve_under_root(
@@ -2319,7 +2428,7 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
 
     cluster_id = str(args.get("cluster_id") or "").strip()
     try:
-        org, project, _policy = _env._resolve_context(args)
+        org, project, policy = _env._resolve_context(args)
     except Exception as exc:
         report["blocked"] = (
             f"the organization/project context could not be resolved: {exc}"
@@ -2327,6 +2436,10 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
         return report
 
     ids = {"organization_id": org, "project_id": project, "cluster_id": cluster_id}
+    refusal = _read_side_problem(ids, project, policy, "check")
+    if refusal:
+        report["blocked"] = f"the cluster was not checked: {refusal}"
+        return report
     base, why = _data_api_base(ids)
     credential, cred_why = _data_api_credential()
     blocker = why or cred_why

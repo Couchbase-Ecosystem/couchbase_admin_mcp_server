@@ -185,6 +185,12 @@ def load_policy() -> Policy:
 
 _OPEN_CIDRS = frozenset({"0.0.0.0/0", "::/0"})
 
+#: The shortest prefix an allowlist entry may have, per IP version. A /8 (16.7 million
+#: addresses) still admits a private 10.0.0.0/8 network, which is a legitimate entry; a
+#: /7 or shorter, or an IPv6 range shorter than /16, is an "open to the internet" range in
+#: all but name and is refused the same way a /0 is.
+_MIN_PREFIX = {4: 8, 6: 16}
+
 
 def assert_cidr_not_open(cidr: object, *, field: str = "cidr") -> None:
     """Refuse a CIDR that opens a cluster to the whole internet.
@@ -200,7 +206,9 @@ def assert_cidr_not_open(cidr: object, *, field: str = "cidr") -> None:
     text = str(cidr or "").strip()
     try:
         net = ipaddress.ip_network(text, strict=False)
-        is_open = net.prefixlen == 0
+        # Refusing only a /0 let 0.0.0.0/1 plus 128.0.0.0/1 (two accepted calls) open
+        # the whole internet, so every prefix shorter than the floor is refused.
+        is_open = net.prefixlen < _MIN_PREFIX[net.version]
     except ValueError:
         is_open = text in _OPEN_CIDRS
     if not is_open:
@@ -215,6 +223,56 @@ def assert_cidr_not_open(cidr: object, *, field: str = "cidr") -> None:
             "a tool argument cannot do that."
         ),
     )
+
+
+#: Body fields the guards read by their exact lowercase spelling, and the nested path of the
+#: webhook URL. A body that spells one of them with other letter case is refused, because a
+#: server that matches keys case-insensitively would act on a field the guard never saw.
+_GUARDED_TOP_KEYS = ("name", "description", "cidr", "config", "direction", "target")
+_GUARDED_NESTED_KEYS = {"config": ("webhook",), "webhook": ("url",)}
+
+
+def assert_guarded_keys_canonical(value: object, *, where: str = "body") -> None:
+    """Refuse a guarded body field spelled with non-canonical letter case.
+
+    `assert_no_case_collisions` only catches two keys that fold together. A single `Name`,
+    `CIDR`, `Description` or `Config.Webhook.URL` passed it, and every guard that reads
+    the exact lowercase key then saw the field as absent, so the prefix, CIDR, marker and
+    webhook checks were skipped while the server could still honour the field.
+
+    Raises:
+        GuardrailError: a guarded field is present under a different spelling.
+    """
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        folded = str(key).casefold()
+        for canonical in (*_GUARDED_TOP_KEYS, "webhook", "url"):
+            if folded == canonical and key != canonical:
+                raise GuardrailError(
+                    f"{where} has the key {key!r}; this field must be spelled {canonical!r}.",
+                    hint="Guarded fields are matched by exact spelling so a guard cannot be skipped.",
+                )
+        if key in _GUARDED_NESTED_KEYS or key in ("config", "webhook"):
+            assert_guarded_keys_canonical(item, where=f"{where}.{key}")
+
+
+def assert_no_marker_text(field: str, value: object) -> None:
+    """Refuse caller text that contains the ownership-marker prefix.
+
+    The marker is written by this server and read by parse_marker. Caller text carrying
+    the prefix can shadow or replace it, which hides a cluster from the spend ceiling and
+    the reaper.
+
+    Raises:
+        GuardrailError: `value` contains the marker prefix.
+    """
+    if isinstance(value, str) and ENV_MARKER_PREFIX in value:
+        raise GuardrailError(
+            f"{field} contains {ENV_MARKER_PREFIX!r}, which is reserved for the ownership marker "
+            "this server writes.",
+            hint="Remove that text; the marker is added and kept by the server.",
+        )
 
 
 def assert_no_case_collisions(value: object, *, where: str = "body") -> None:
@@ -402,6 +460,36 @@ def assert_managed(
 #: case-insensitively; the JSON boolean and several string spellings are all
 #: treated as "protected" because guessing wrong here fails open.
 _PROTECTION_ENABLED = frozenset({"true", "enabled", "on", "yes"})
+
+
+def assert_not_protected(
+    resource: dict,
+    project_id: str,
+    *,
+    kind: str = "cluster",
+    policy: Policy | None = None,
+    verb: str = "read from",
+) -> None:
+    """Refuse a resource in a project outside the allowlist or on the protected list.
+
+    The READ-side counterpart of `assert_managed`. It does not require the name prefix,
+    because reading from a hand-made source cluster (to seed a sandbox from it) is a
+    legitimate use; but a project outside CAPELLA_ALLOWED_PROJECTS and a cluster listed in
+    CAPELLA_PROTECTED_CLUSTERS stay out of reach, which is what the policy promises.
+
+    Raises:
+        GuardrailError: the project is not allowed, or the resource is protected.
+    """
+    policy = policy or load_policy()
+    assert_project_allowed(project_id, policy)
+    name = str(resource.get("name") or "")
+    rid = str(resource.get("id") or "")
+    protected = {p.strip().casefold() for p in policy.protected_clusters if p.strip()}
+    if (rid and rid.casefold() in protected) or (name and name.casefold() in protected):
+        raise GuardrailError(
+            f"Refusing to {verb} {kind} {name or rid!r}: it appears in CAPELLA_PROTECTED_CLUSTERS.",
+            hint="Explicitly protected by server configuration. No override exists.",
+        )
 
 
 def assert_deletable(
@@ -654,8 +742,13 @@ def build_marker(
 _MARKER_RE = re.compile(re.escape(ENV_MARKER_PREFIX) + r"\s*(?=\{)")
 
 
-def _extract_marker_json(description: str) -> str | None:
-    """Return the marker's JSON object text, or None.
+def _find_marker_json(description: str, start_at: int = 0) -> tuple[str, int] | None:
+    """Return (marker JSON text, end offset) for the first marker at or after `start_at`.
+
+    The text is empty when the marker is unbalanced or breaks across a line; None means
+    there is no further marker prefix. See `_extract_marker_json` for the parsing rules.
+
+    Original description of the parsing, kept here because it is the reason for the design:
 
     Brace-COUNTING rather than a regex, because both regex forms tried here were
     wrong in opposite directions and each failed open -- an unparsed marker means
@@ -673,7 +766,7 @@ def _extract_marker_json(description: str) -> str | None:
     Counting braces while tracking JSON string state satisfies both: it survives a
     brace inside a value AND ignores anything after the object ends.
     """
-    match = _MARKER_RE.search(description)
+    match = _MARKER_RE.search(description, start_at)
     if not match:
         return None
     text = description[match.end() :]
@@ -696,10 +789,18 @@ def _extract_marker_json(description: str) -> str | None:
         elif char == "}":
             depth -= 1
             if depth == 0:
-                return text[: index + 1]
+                return text[: index + 1], match.end()
         elif char in "\n\r" and depth == 0:
-            return None
-    return None  # unbalanced: no closing brace for the object we opened
+            return "", match.end()
+    return "", match.end()  # unbalanced: no closing brace for the object we opened
+
+
+def _extract_marker_json(description: str) -> str | None:
+    """Return the first marker's JSON object text, or None when it is absent or unbalanced."""
+    found = _find_marker_json(description)
+    if found is None or not found[0]:
+        return None
+    return found[0]
 
 
 #: Characters refused in caller-supplied marker text. Defence in depth alongside the
@@ -747,15 +848,25 @@ def parse_marker(description: str | None) -> dict | None:
     """
     if not description:
         return None
-    raw = _extract_marker_json(description)
-    if raw is None:
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        _log.debug("malformed mcp-env marker ignored: %r", description[:120])
-        return None
-    return data if isinstance(data, dict) else None
+    # EVERY occurrence is tried, in order, and the first one that is a real marker (an
+    # object with a non-empty `env`) wins. Taking only the first occurrence let a
+    # description beginning `mcp-env:{}` or an unbalanced `mcp-env:{` shadow the genuine
+    # marker written after it, so the cluster was never counted or reaped.
+    position = 0
+    while True:
+        found = _find_marker_json(description, position)
+        if found is None:
+            return None
+        raw, position = found
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            _log.debug("malformed mcp-env marker ignored: %r", description[:120])
+            continue
+        if isinstance(data, dict) and isinstance(data.get("env"), str) and data["env"]:
+            return data
 
 
 def marker_expiry(marker: dict) -> datetime | None:

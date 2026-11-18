@@ -106,13 +106,20 @@ def _preserve_ownership_marker(name: str, args: dict, body_in: dict) -> None:
     if "description" not in body_in:
         return
     supplied = str(body_in.get("description") or "")
-    if guardrails.parse_marker(supplied):
-        return  # caller kept a valid marker; leave it exactly as written
     try:
         current = _fetch_cluster(args)
     except guardrails.GuardrailError:
         raise
     existing_marker = guardrails.parse_marker(current.get("description"))
+    if guardrails.ENV_MARKER_PREFIX in supplied:
+        # A caller may echo back the description it read, marker included. Anything else
+        # that carries the prefix (a forged ttl, a decoy `mcp-env:{}`) is refused: this
+        # used to accept ANY valid marker, which let a caller re-pin or forge the
+        # ownership record and hide the cluster from the reaper.
+        if existing_marker and guardrails.parse_marker(supplied) == existing_marker:
+            if supplied.count(guardrails.ENV_MARKER_PREFIX) == 1:
+                return
+        guardrails.assert_no_marker_text("body.description", supplied)
     if not existing_marker:
         return  # nothing to preserve
     marker_line = guardrails.ENV_MARKER_PREFIX + json.dumps(
@@ -510,6 +517,7 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
     #     never auto-reaped. Deliberate lifecycle stays with capella_env_ensure, which
     #     takes ttl_hours explicitly and says so.
     if name == "capella_cluster_create" and isinstance(body_in, dict):
+        guardrails.assert_no_marker_text("body.description", body_in.get("description"))
         if not guardrails.parse_marker(body_in.get("description")):
             marker = guardrails.build_marker(
                 str(body_in.get("name") or ""), ttl_hours=0
@@ -612,6 +620,7 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
         # Before any guard: a body with `name` and `Name` could pass the checks on one
         # spelling and be read by Capella as the other.
         guardrails.assert_no_case_collisions(args.get("body"))
+        guardrails.assert_guarded_keys_canonical(args.get("body"))
         _apply_guardrails(name, op, args, policy)
 
     path = build_path(op.path, args)

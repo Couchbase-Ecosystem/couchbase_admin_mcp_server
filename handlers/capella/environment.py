@@ -1539,7 +1539,7 @@ def _classify_expired(entries: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def _reap(args: dict) -> dict:
-    dry_run = args.get("dry_run", True)
+    dry_run = args.get("dry_run", True) is not False
     listing = _list_envs({**args, "include_unmanaged": False})
     expired = [e for e in listing["managed"] if e.get("expired")]
     reapable, unpinnable = _classify_expired(expired)

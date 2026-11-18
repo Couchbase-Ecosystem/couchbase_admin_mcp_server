@@ -160,7 +160,9 @@ def test_an_unparseable_marker_is_not_recognisably_ours():
 
 
 def test_a_well_formed_marker_round_trips():
-    parsed = g.parse_marker(_described(f'{{"ttl_h": 4, "created": "{CREATED}"}}'))
+    parsed = g.parse_marker(
+        _described(f'{{"env": "e1", "ttl_h": 4, "created": "{CREATED}"}}')
+    )
     assert parsed["ttl_h"] == 4
 
 

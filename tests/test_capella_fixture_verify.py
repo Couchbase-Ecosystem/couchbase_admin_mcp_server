@@ -46,6 +46,12 @@ from handlers.capella import fixture
 from handlers.shared import ERROR_MARKER
 
 
+@pytest.fixture(autouse=True)
+def _policy_read_check_is_covered_elsewhere(monkeypatch):
+    """These tests stub the Capella control plane; the project-policy read check has its own tests."""
+    monkeypatch.setattr(fixture, "_read_side_problem", lambda *a, **k: "")
+
+
 def payload(result) -> dict:
     return json.loads(result[0].text)
 

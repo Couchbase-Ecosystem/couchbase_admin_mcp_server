@@ -126,7 +126,7 @@ def test_uri_password_with_reserved_characters_is_masked():
     "key", ["X-API-Key", "api-key", "otpCookie", "clientKey", "spKey"]
 )
 def test_header_and_cookie_spellings_are_masked(key):
-    assert "s3cr3tvalue" not in shared.redact_text('{"%s": "s3cr3tvalue"}' % key)
+    assert "s3cr3tvalue" not in shared.redact_text(f'{{"{key}": "s3cr3tvalue"}}')
     assert shared.redact({key: "s3cr3tvalue"})[key] == shared.REDACTED
 
 

@@ -29,6 +29,12 @@ import pytest
 from handlers.capella import fixture
 
 
+@pytest.fixture(autouse=True)
+def _policy_read_check_is_covered_elsewhere(monkeypatch):
+    """These tests stub the Capella control plane; the project-policy read check has its own tests."""
+    monkeypatch.setattr(fixture, "_read_side_problem", lambda *a, **k: "")
+
+
 def _payload(*hashes: str) -> str:
     return hashlib.sha256("".join(sorted(hashes)).encode()).hexdigest()
 
@@ -282,9 +288,7 @@ def test_a_document_key_is_escaped_into_the_path(monkeypatch, key, expected):
         seen["url"] = request.full_url
         return _Response()
 
-    import urllib.request
-
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(fixture, "_open_data_api", _fake_urlopen)
 
     reason = fixture._put_document(
         "https://example.invalid",
@@ -312,11 +316,9 @@ def test_a_keyspace_component_is_escaped_too(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    import urllib.request
-
     monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
+        fixture,
+        "_open_data_api",
         lambda request, timeout=None: seen.update(url=request.full_url) or _Response(),
     )
 
@@ -328,12 +330,11 @@ def test_a_keyspace_component_is_escaped_too(monkeypatch):
 
 def test_a_document_write_reports_its_failure_rather_than_raising(monkeypatch):
     """_put_document runs inside a thread pool; a raise there loses the batch."""
-    import urllib.request
 
     def _boom(request, timeout=None):
         raise OSError("connection reset")
 
-    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    monkeypatch.setattr(fixture, "_open_data_api", _boom)
     reason = fixture._put_document(
         "https://example.invalid", ("u", "p"), "b", "s", "c", "k", {}
     )

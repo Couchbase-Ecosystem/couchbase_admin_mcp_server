@@ -46,6 +46,12 @@ from handlers.capella import fixture
 from handlers.shared import ERROR_MARKER
 
 
+@pytest.fixture(autouse=True)
+def _policy_read_check_is_covered_elsewhere(monkeypatch):
+    """These tests stub the Capella control plane; the project-policy read check has its own tests."""
+    monkeypatch.setattr(fixture, "_read_side_problem", lambda *a, **k: "")
+
+
 def payload(result) -> dict:
     return json.loads(result[0].text)
 
@@ -105,9 +111,11 @@ def test_the_base_url_comes_from_the_control_plane_not_the_cluster_id(monkeypatc
 
 
 def test_a_connection_string_that_already_has_a_scheme_is_left_alone(monkeypatch):
-    _with_status(monkeypatch, {"connectionString": "https://abc.example.com/"})
+    _with_status(
+        monkeypatch, {"connectionString": "https://abc.data.cloud.couchbase.com/"}
+    )
     base, why = fixture._data_api_base(IDS)
-    assert (base, why) == ("https://abc.example.com", "")
+    assert (base, why) == ("https://abc.data.cloud.couchbase.com", "")
 
 
 def test_an_empty_connection_string_is_not_yet_rather_than_a_failure(monkeypatch):
@@ -178,7 +186,7 @@ def test_a_document_key_is_escaped_before_it_becomes_a_path_segment(monkeypatch)
         seen.append(request.full_url)
         return _Response(200)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(fixture, "_open_data_api", fake_urlopen)
     why = fixture._put_document(
         "https://base", ("u", "p"), "b", "s", "c", "order/2026/01", {"a": 1}
     )
@@ -197,7 +205,7 @@ def test_a_put_sends_basic_auth_and_json(monkeypatch):
         captured["body"] = request.data
         return _Response(201)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(fixture, "_open_data_api", fake_urlopen)
     assert (
         fixture._put_document("https://base", ("u", "p"), "b", "s", "c", "k", {"a": 1})
         == ""
@@ -210,7 +218,7 @@ def test_a_put_sends_basic_auth_and_json(monkeypatch):
 
 def test_a_non_2xx_status_is_returned_as_the_reason(monkeypatch):
     monkeypatch.setattr(
-        "urllib.request.urlopen", lambda r, timeout=None: _Response(302)
+        fixture, "_open_data_api", lambda r, timeout=None: _Response(302)
     )
     assert (
         fixture._put_document("https://b", ("u", "p"), "b", "s", "c", "k", {}) == "302"
@@ -221,7 +229,7 @@ def test_an_http_error_carries_its_body_back_to_the_caller(monkeypatch):
     def fake(request, timeout=None):
         raise _http_error(403, b"forbidden by CIDR")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     why = fixture._put_document("https://b", ("u", "p"), "b", "s", "c", "k", {})
     assert why.startswith("403: ")
     assert "forbidden by CIDR" in why
@@ -234,7 +242,7 @@ def test_any_other_failure_is_returned_rather_than_raised(monkeypatch):
     def fake(request, timeout=None):
         raise TimeoutError("timed out")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     why = fixture._put_document("https://b", ("u", "p"), "b", "s", "c", "k", {})
     assert why == "TimeoutError: timed out"
 
@@ -244,7 +252,8 @@ def test_any_other_failure_is_returned_rather_than_raised(monkeypatch):
 
 def test_a_query_returns_the_parsed_body(monkeypatch):
     monkeypatch.setattr(
-        "urllib.request.urlopen",
+        fixture,
+        "_open_data_api",
         lambda r, timeout=None: _Response(200, json.dumps({"results": [1]}).encode()),
     )
     assert fixture._sql_query("https://b", ("u", "p"), "SELECT 1") == {"results": [1]}
@@ -257,7 +266,7 @@ def test_named_parameters_are_merged_into_the_request_body(monkeypatch):
         captured["body"] = json.loads(request.data)
         return _Response(200, b"{}")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     fixture._sql_query("https://b", ("u", "p"), "SELECT 1", {"$k": "v"})
     assert captured["body"] == {"statement": "SELECT 1", "$k": "v"}
 
@@ -268,7 +277,7 @@ def test_a_401_names_the_kind_of_credential_rather_than_the_value(monkeypatch):
     def fake(request, timeout=None):
         raise _http_error(401, b"unauthorized")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     with pytest.raises(RuntimeError) as caught:
         fixture._sql_query("https://b", ("u", "p"), "SELECT 1")
     assert "Data API 401" in str(caught.value)
@@ -283,7 +292,7 @@ def test_a_403_points_at_the_allowed_cidr_list(monkeypatch):
     def fake(request, timeout=None):
         raise _http_error(403, b"forbidden")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     with pytest.raises(RuntimeError) as caught:
         fixture._sql_query("https://b", ("u", "p"), "SELECT 1")
     assert "allowed CIDR list" in str(caught.value)
@@ -298,7 +307,7 @@ def test_an_error_body_is_returned_at_length_rather_than_truncated_to_nothing(
     def fake(request, timeout=None):
         raise _http_error(400, b"Keyspace not found in CB datastore: default:missing")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     with pytest.raises(RuntimeError) as caught:
         fixture._sql_query("https://b", ("u", "p"), "SELECT 1")
     assert "Keyspace not found" in str(caught.value)
@@ -313,7 +322,7 @@ def test_an_unreachable_data_api_explains_that_a_timeout_looks_like_a_hang(
     def fake(request, timeout=None):
         raise TimeoutError("timed out")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr(fixture, "_open_data_api", fake)
     with pytest.raises(RuntimeError) as caught:
         fixture._sql_query("https://b", ("u", "p"), "SELECT 1")
     text = str(caught.value)

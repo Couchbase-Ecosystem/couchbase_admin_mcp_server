@@ -184,3 +184,39 @@ def test_an_unknown_path_falls_back_to_the_app_shell(gui):
     every deep link into the console."""
     response = gui.app.test_client().get("/some/console/route")
     assert response.status_code in (200, 304)
+
+
+# ── Round-2 audit: validation and audit of malformed calls ───────────────────
+
+
+def test_a_non_object_body_is_a_400_and_is_audited(gui, records):
+    response = gui.app.test_client().post("/api/call", json=["not", "an", "object"])
+    assert response.status_code == 400
+    assert [r for r in records if r["decision"] == "denied_invalid_arguments"]
+
+
+def test_a_non_string_tool_is_a_400_and_is_audited(gui, records):
+    response = gui.app.test_client().post("/api/call", json={"tool": 5})
+    assert response.status_code == 400
+    assert [r for r in records if r["decision"] == "denied_invalid_arguments"]
+
+
+@pytest.mark.parametrize("bad", [1, None, "yes", 0, ""])
+def test_a_non_boolean_dry_run_is_refused_before_any_handler_runs(gui, records, bad):
+    """`dry_run: 1` used to be read by one parser as 'not a preview' and run for real."""
+    response = call(
+        gui,
+        "admin_bucket_create",
+        name="b1",
+        ramQuota=100,
+        confirm=True,
+        dry_run=bad,
+    )
+    assert response.status_code == 400, response.get_json()
+    assert [r for r in records if r["decision"] == "denied_invalid_arguments"]
+
+
+def test_the_tool_list_is_filtered_by_scope(gui, monkeypatch):
+    monkeypatch.setattr(gui, "check_scope", lambda tool: "no scope")
+    response = gui.app.test_client().get("/api/tools")
+    assert json.loads(response.data) == []

@@ -1234,6 +1234,10 @@ def list_tools():
     """
     result = []
     for tool in _visible_tools():
+        # Only what this caller may actually call. Listing every tool disclosed the whole
+        # admin surface to a token that holds a single scope.
+        if check_scope(tool):
+            continue
         result.append(
             {
                 "name": tool.name,
@@ -1294,6 +1298,34 @@ def _audit_gui(
     )
 
 
+def _schema_problem_for_call(tool: Any, arguments: dict) -> str:
+    """Why `arguments` do not satisfy the tool's served input schema, or "" when they do.
+
+    The MCP SDK validates tool input against the schema on every MCP transport; this route
+    is not one, so it validated nothing. A `dry_run` of `1`, `null` or `"yes"` then reached
+    the handlers, which parse it their own way, and one parse performed a real write.
+    The schema checked here is the one `/api/tools` serves, control fields included.
+    """
+    import jsonschema
+
+    schema = mcp_compat.input_schema(
+        mcp_compat.with_control_fields(
+            tool,
+            read_only=is_read_side(tool),
+            needs_confirm=tool.name in _CONSOLE_CONFIRMATION_REQUIRED,
+        )
+    )
+    try:
+        jsonschema.validate(arguments, schema)
+    except jsonschema.ValidationError as exc:
+        where = "/".join(str(part) for part in exc.absolute_path) or "(root)"
+        return f"{where}: {exc.message[:200]}"
+    except jsonschema.SchemaError:
+        # A tool whose own schema is malformed cannot be validated; leave it to the handler.
+        return ""
+    return ""
+
+
 @app.route("/api/call", methods=["POST"])
 def call_tool():
     """POST /api/call: run one tool for the console, with the same policy as the MCP server.
@@ -1307,9 +1339,27 @@ def call_tool():
     """
     # force=False: the Content-Type requirement above is load-bearing, and
     # force=True would parse a text/plain body and reinstate the CSRF path.
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        # A list, string or number body raised AttributeError at `.get`: HTTP 500, no audit.
+        _audit_gui(
+            "(none)",
+            {},
+            "denied_invalid_arguments",
+            "request body is not a JSON object",
+        )
+        return jsonify({"error": "The request body must be a JSON object."}), 400
     tool_name = body.get("tool")
-    arguments = body.get("arguments", {}) or {}
+    if tool_name is not None and not isinstance(tool_name, str):
+        _audit_gui(
+            "(invalid)", {}, "denied_invalid_arguments", "`tool` is not a string"
+        )
+        return jsonify({"error": "`tool` must be a string."}), 400
+    arguments = body.get("arguments", {})
+    if arguments is None:
+        arguments = {}
     # A non-object `arguments` raised an unhandled AttributeError inside
     # require_confirmation: HTTP 500, no audit record, and a full traceback when
     # FLASK_DEBUG is on. Refuse it as the client error it is.
@@ -1494,6 +1544,22 @@ def call_tool():
                 "hard_ceiling": tool_name in authz.hard_ceiling_tools(),
             }
         ), 403
+
+    # After every authorization decision, before anything interprets the arguments (the
+    # dry-run flag included): an argument that violates the served schema is refused, as the
+    # MCP SDK refuses it on the transports.
+    invalid = _schema_problem_for_call(tool, arguments)
+    if invalid:
+        _audit_gui(
+            tool_name,
+            arguments,
+            "denied_invalid_arguments",
+            invalid,
+            correlation_id=_correlation,
+        )
+        return jsonify(
+            {"error": f"Invalid arguments for '{tool_name}': {invalid}"}
+        ), 400
 
     # Strip BOTH control fields, as the MCP dispatch does. The GUI stripped only
     # `confirm`, so a caller following the documented advice to pass correlation_id was

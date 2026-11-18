@@ -189,8 +189,10 @@ def test_a_confirmed_write_reaches_the_handler_on_both_paths(both, monkeypatch):
     server, gui, via_mcp, via_console = both
     stub = _stub_both(monkeypatch, server, gui, WRITE_TOOL)
 
-    mcp_record, _ = via_mcp(WRITE_TOOL, name="parity-test", confirm=True)
-    gui_record, response = via_console(WRITE_TOOL, name="parity-test", confirm=True)
+    mcp_record, _ = via_mcp(WRITE_TOOL, name="parity-test", ramQuota=100, confirm=True)
+    gui_record, response = via_console(
+        WRITE_TOOL, name="parity-test", ramQuota=100, confirm=True
+    )
 
     assert mcp_record["decision"] == "allowed"
     assert gui_record["decision"] == "allowed"
@@ -225,8 +227,20 @@ def test_both_paths_strip_the_control_fields_before_the_handler(both, monkeypatc
     server, gui, via_mcp, via_console = both
     stub = _stub_both(monkeypatch, server, gui, WRITE_TOOL)
 
-    via_mcp(WRITE_TOOL, name="parity-test", confirm=True, correlation_id="run-1")
-    via_console(WRITE_TOOL, name="parity-test", confirm=True, correlation_id="run-1")
+    via_mcp(
+        WRITE_TOOL,
+        name="parity-test",
+        ramQuota=100,
+        confirm=True,
+        correlation_id="run-1",
+    )
+    via_console(
+        WRITE_TOOL,
+        name="parity-test",
+        ramQuota=100,
+        confirm=True,
+        correlation_id="run-1",
+    )
 
     assert len(stub.seen) == 2
     for seen, path in zip(stub.seen, ("mcp", "console"), strict=False):

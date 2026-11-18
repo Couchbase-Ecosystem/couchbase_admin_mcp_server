@@ -244,6 +244,14 @@ def _parse_tool_list(raw: str | None) -> set[str]:
                     continue
                 names.add(line)
         return names
+    # A value that looks like a PATH but is not a file is a misconfiguration, and it used to
+    # be read as one tool name, so the list the operator meant to apply silently did nothing.
+    if re.search(r"[\\/]|\.(txt|list|conf)$", raw.strip()):
+        _log.warning(
+            "tool list %r looks like a file path but no such file exists; it was read "
+            "as a comma-separated list, so NOTHING from it is applied. Fix the path.",
+            raw[:200],
+        )
     return {n.strip() for n in raw.split(",") if n.strip()}
 
 

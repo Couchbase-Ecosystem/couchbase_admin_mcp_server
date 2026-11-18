@@ -49,6 +49,21 @@ _log = get_logger("handlers.diagnostics")
 # ── Plan-tree walking ────────────────────────────────────────────────────────
 
 
+#: Upper bounds on caller-supplied sizes. The schemas had none, so a read-scope caller could ask
+#: the query service for an unbounded sample or an unbounded history scan.
+_MAX_LIMIT = 1000
+_MAX_SAMPLE = 10_000
+
+
+def _bounded(value: object, default: int, low: int, high: int) -> int:
+    """Coerce `value` to an int in [low, high]; `default` when it is absent or not a number."""
+    try:
+        number = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        number = default
+    return max(low, min(high, number))
+
+
 def _walk_plan(node: Any) -> Iterable[dict]:
     """Yield every dict in the plan tree that has a `#operator` field."""
     if isinstance(node, dict):
@@ -162,7 +177,9 @@ TOOLS: list[Tool] = [
                 },
                 "sample_size": {
                     "type": "integer",
-                    "description": "How many docs to sample (default 100)",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "description": "How many docs to sample (default 100, at most 10000)",
                 },
             },
             "required": ["bucket_name"],
@@ -232,7 +249,12 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "default 20"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "default 20, at most 1000",
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -250,7 +272,12 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "default 20"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "default 20, at most 1000",
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -268,7 +295,12 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "default 20"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "default 20, at most 1000",
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -287,7 +319,12 @@ TOOLS: list[Tool] = [
             "type": "object",
             "properties": {
                 "threshold": {"type": "integer", "description": "default 1000"},
-                "limit": {"type": "integer", "description": "default 20"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "default 20, at most 1000",
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -308,7 +345,12 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "default 20"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "default 20, at most 1000",
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -330,7 +372,9 @@ TOOLS: list[Tool] = [
             "properties": {
                 "limit": {
                     "type": "integer",
-                    "description": "How many recent queries to inspect (default 20)",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "How many recent queries to inspect (default 20, at most 1000)",
                 },
             },
         },
@@ -359,7 +403,12 @@ TOOLS: list[Tool] = [
                     "type": "number",
                     "description": "Maximum result/scan ratio to flag (default 0.1)",
                 },
-                "limit": {"type": "integer", "description": "default 20"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "default 20, at most 1000",
+                },
             },
         },
         annotations=ToolAnnotations(
@@ -502,7 +551,7 @@ def _schema(cluster, QueryOptions, args: dict) -> list[TextContent]:
     bucket = args["bucket_name"]
     scope = args.get("scope_name") or "_default"
     coll = args.get("collection_name") or "_default"
-    sample_size = int(args.get("sample_size", 100))
+    sample_size = _bounded(args.get("sample_size"), 100, 1, _MAX_SAMPLE)
 
     keyspace = _keyspace(bucket, scope, coll)
     stmt = f"""
@@ -607,7 +656,7 @@ def _explain(cluster, QueryOptions, args: dict) -> list[TextContent]:
 
 
 def _perf_longest(cluster, QueryOptions, args: dict) -> list[TextContent]:
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     stmt = """
         SELECT requestId, statement, users, elapsedTime, executionTime,
                resultCount, resultSize, state, requestTime
@@ -621,7 +670,7 @@ def _perf_longest(cluster, QueryOptions, args: dict) -> list[TextContent]:
 
 
 def _perf_frequent(cluster, QueryOptions, args: dict) -> list[TextContent]:
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     stmt = """
         SELECT statement,
                COUNT(*) AS execution_count,
@@ -639,7 +688,7 @@ def _perf_frequent(cluster, QueryOptions, args: dict) -> list[TextContent]:
 
 
 def _perf_largest_responses(cluster, QueryOptions, args: dict) -> list[TextContent]:
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     stmt = """
         SELECT requestId, statement, resultSize, resultCount, elapsedTime
         FROM system:completed_requests
@@ -653,7 +702,7 @@ def _perf_largest_responses(cluster, QueryOptions, args: dict) -> list[TextConte
 
 
 def _perf_large_count(cluster, QueryOptions, args: dict) -> list[TextContent]:
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     threshold = int(args.get("threshold", 1000))
     stmt = """
         SELECT requestId, statement, resultCount, elapsedTime
@@ -678,7 +727,7 @@ def _perf_primary(cluster, QueryOptions, args: dict) -> list[TextContent]:
     is a map of operator->count in 7.0+), and fall back to a statement-pattern
     match against statements that select on fields without obvious predicates.
     """
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     # Primary attempt: ~phaseOperators map contains a "PrimaryScan*" key.
     stmt = """
         SELECT requestId, statement, elapsedTime, resultCount,
@@ -744,7 +793,7 @@ def _perf_primary_via_explain(cluster, QueryOptions, limit: int) -> list[TextCon
 
 
 def _perf_not_covering(cluster, QueryOptions, args: dict) -> list[TextContent]:
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     # Pull recent queries and EXPLAIN each, flag those with Fetch in plan.
     recent_stmt = """
         SELECT requestId, statement, elapsedTime, resultCount
@@ -789,7 +838,7 @@ def _perf_not_selective(cluster, QueryOptions, args: dict) -> list[TextContent]:
     result was a small fraction — predicate not selective."""
     min_scan = int(args.get("min_scan_count", 1000))
     max_ratio = float(args.get("max_ratio", 0.1))
-    limit = int(args.get("limit", 20))
+    limit = _bounded(args.get("limit"), 20, 1, _MAX_LIMIT)
     # ~phaseCounts.indexScan / IndexScan / primaryScan are typical fields.
     # If unavailable, fall back to comparing resultCount to high-bound estimate.
     stmt = """

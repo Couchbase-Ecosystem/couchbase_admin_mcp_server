@@ -193,3 +193,12 @@ def test_a_quote_inside_an_optimizer_hint_does_not_hide_a_second_statement():
 def test_a_plain_optimizer_hint_is_still_accepted():
     stmt = "SELECT /*+ INDEX(t idx_a) */ * FROM `b` t WHERE a = 1"
     assert shared.assert_single_statement(stmt) is None
+
+
+def test_a_tool_list_path_that_does_not_exist_is_warned_about(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        names = shared._parse_tool_list("/no/such/dir/disabled.txt")
+    assert names == {"/no/such/dir/disabled.txt"}
+    assert "looks like a file path" in caplog.text

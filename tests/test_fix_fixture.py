@@ -5,7 +5,7 @@ Spec: docs/spec.md S8, S9.
 Main items: tests for manifest index DDL, manifest file paths, identifier quoting,
 xattr names, the conflict-log limit, temporary-user roles and password change.
 Callers: none; collected by pytest
-Callees: `handlers.capella.fixture`, `handlers.eight_x`, `handlers.fixture`,
+Callees: `handlers.capella.fixture`, `handlers.diagnostics`, `handlers.eight_x`, `handlers.fixture`,
     `handlers.fixture_core`, `handlers.security`, `handlers.shared`
 
 Each test fails on the code before the fix: a manifest is data from outside the
@@ -445,3 +445,12 @@ def test_a_role_with_an_inner_scope_gap_is_refused_not_widened():
     }
     with pytest.raises(ValueError):
         security._roles_to_form(user)
+
+
+def test_diagnostics_sizes_are_clamped():
+    from handlers import diagnostics
+
+    assert diagnostics._bounded(10**9, 20, 1, 1000) == 1000
+    assert diagnostics._bounded(-5, 20, 1, 1000) == 1
+    assert diagnostics._bounded("x", 20, 1, 1000) == 20
+    assert diagnostics._bounded(None, 20, 1, 1000) == 20

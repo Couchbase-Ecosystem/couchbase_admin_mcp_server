@@ -462,12 +462,22 @@ def _roles_to_form(user: dict) -> str:
         # component may be absent; an INNER one cannot be skipped, so stop at the
         # first gap rather than emitting a malformed [travel::orders].
         parts: list[str] = []
-        for key in ("bucket_name", "scope_name", "collection_name"):
+        keys = ("bucket_name", "scope_name", "collection_name")
+        for index, key in enumerate(keys):
             value = entry.get(key)
-            if value in (None, "", "*") and key == "bucket_name":
-                break
             if value in (None, ""):
+                # A gap is only harmless when nothing scoped follows it. `[travel::orders]`
+                # cannot be written, and dropping the tail would WIDEN a collection role
+                # to the whole bucket, so refuse instead of guessing.
+                if any(
+                    entry.get(later) not in (None, "") for later in keys[index + 1 :]
+                ):
+                    raise ValueError(
+                        f"role {role!r} has a scope gap ({key} is empty but a narrower "
+                        f"part is set); refusing to rewrite it as a wider role."
+                    )
                 break
+            # "*" (every bucket) is a real parameter value, written as `role[*]`.
             parts.append(str(value))
         encoded.append(f"{role}[{':'.join(parts)}]" if parts else role)
     return ",".join(encoded)

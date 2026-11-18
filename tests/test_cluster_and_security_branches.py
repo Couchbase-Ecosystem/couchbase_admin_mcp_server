@@ -305,18 +305,11 @@ def test_a_supplied_value_wins_over_the_one_already_on_the_cluster(wire):
             ],
             "data_reader[travel:inv:airline]",
         ),
-        # A wildcard bucket is the unscoped form, not a literal '*'.
-        ([{"role": "data_reader", "bucket_name": "*"}], "data_reader"),
-        # An INNER gap stops the encoding rather than emitting travel::orders.
+        # A wildcard bucket keeps its parameter: `data_reader[*]`, never the bare role.
+        ([{"role": "data_reader", "bucket_name": "*"}], "data_reader[*]"),
+        # A TRAILING gap is harmless and stops the encoding.
         (
-            [
-                {
-                    "role": "data_reader",
-                    "bucket_name": "travel",
-                    "scope_name": "",
-                    "collection_name": "orders",
-                }
-            ],
+            [{"role": "data_reader", "bucket_name": "travel", "scope_name": ""}],
             "data_reader[travel]",
         ),
         ([{"role": ""}, "not-a-dict", {"no": "role"}], ""),

@@ -16,7 +16,15 @@ from __future__ import annotations
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
-from .shared import admin_request, admin_request_json, err, form_data, ok, quote_path
+from .shared import (
+    admin_request,
+    admin_request_json,
+    err,
+    form_data,
+    ok,
+    quote_path,
+    refuse_undeclared,
+)
 
 #: Keys /pools/default/buckets/<b> accepts on update. Built from a list rather
 #: than from args so an invented key cannot reach the endpoint.
@@ -269,6 +277,16 @@ def handle(name: str, args: dict) -> list[TextContent]:
         if name == "admin_bucket_get":
             b = quote_path(args["bucket_name"])
             return ok(admin_request("GET", f"/pools/default/buckets/{b}"))
+
+        if name in ("admin_bucket_create", "admin_bucket_update"):
+            # Refuse an argument the tool does not DECLARE. The allow-lists below are wider
+            # than the schemas, so an undeclared but allow-listed key (one the caller was
+            # never offered) was forwarded to ns_server silently.
+            unknown = refuse_undeclared(
+                args, name, TOOLS, endpoint="/pools/default/buckets"
+            )
+            if unknown:
+                return unknown
 
         if name == "admin_bucket_create":
             # form_data + allow-list, matching admin_bucket_update. The raw

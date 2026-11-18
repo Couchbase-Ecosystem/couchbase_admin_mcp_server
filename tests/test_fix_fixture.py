@@ -430,3 +430,18 @@ def test_export_refuses_a_cluster_name_with_a_path_separator(
         {"fixture_id": "f1", "fixture_path": str(tmp_path / "f1")},
     )
     assert "refusing to export" in result[0].text
+
+
+def test_a_wildcard_bucket_role_keeps_its_parameter():
+    user = {"roles": [{"role": "data_reader", "bucket_name": "*"}]}
+    assert security._roles_to_form(user) == "data_reader[*]"
+
+
+def test_a_role_with_an_inner_scope_gap_is_refused_not_widened():
+    user = {
+        "roles": [
+            {"role": "data_reader", "bucket_name": "b", "collection_name": "orders"}
+        ]
+    }
+    with pytest.raises(ValueError):
+        security._roles_to_form(user)

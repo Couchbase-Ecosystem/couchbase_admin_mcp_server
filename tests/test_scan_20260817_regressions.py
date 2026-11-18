@@ -112,11 +112,13 @@ def test_bug1_bucket_create_still_refuses_invented_keys(monkeypatch):
         "admin_request",
         lambda m, p, data=None, **kw: sent.update({"data": data or {}}) or {"ok": True},
     )
-    buckets.handle(
+    result = buckets.handle(
         "admin_bucket_create",
         {"name": "b1", "ramQuota": 256, "notARealSetting": "x"},
     )
-    assert "notARealSetting" not in sent["data"]
+    # Refused outright (round-2 audit) rather than silently dropped: nothing is sent.
+    assert "notARealSetting" in result[0].text
+    assert sent == {}
 
 
 # ── BUG-2: a tool that owns dry_run must receive it ──────────────────────────

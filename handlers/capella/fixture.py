@@ -2637,7 +2637,23 @@ def _cluster_checks(manifest: dict, args: dict) -> dict:
         ]
 
         missing: list[str] = []
+        # ZERO ROWS IS NOT "EVERY INDEX IS MISSING". Measured live: a Data API user holding
+        # data_reader on ONE bucket sees no rows at all in system:indexes (27 rows with
+        # data_reader on all buckets), so every recorded index was reported as absent from
+        # a cluster that had them. An empty answer means the credential cannot see index
+        # state, and that is what the operator needs to be told.
+        index_state_unreadable = not index_rows and bool(recorded)
+        if index_state_unreadable:
+            problems.append(
+                "system:indexes returned no rows, so index state could not be checked "
+                f"({len(recorded)} index(es) are recorded in the fixture). This is what a "
+                "database credential restricted to one bucket sees; use a credential with "
+                "data_reader on all buckets (or one with index visibility) to verify "
+                "indexes. It does NOT mean the indexes are missing."
+            )
         for name, copies in sorted(recorded.items()):
+            if index_state_unreadable:
+                break
             states = on_cluster.get(name)
             if not states:
                 missing.append(name)

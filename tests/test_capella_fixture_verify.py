@@ -308,11 +308,28 @@ def _index_row(name, state="online", bucket="b", scope="s", collection="c", **ex
 
 
 def test_an_index_recorded_and_absent_is_a_problem(cluster):
+    # The cluster reports OTHER indexes, so the credential can see index state and
+    # ix1 is genuinely absent.
+    cluster["index_rows"] = [_index_row("other")]
     manifest = {"files": [], "gsi_definitions": [{"indexName": "ix1"}]}
     checks = fixture._cluster_checks(manifest, {"cluster_id": "c1"})
     assert checks["verified"] is False
     assert "does not exist on the cluster" in " ".join(checks["problems"])
     assert checks["indexes"]["missing_on_cluster"] == ["ix1"]
+
+
+def test_zero_index_rows_is_reported_as_unreadable_not_as_every_index_missing(cluster):
+    """Measured live: a one-bucket data_reader sees no rows in system:indexes."""
+    cluster["index_rows"] = []
+    manifest = {
+        "files": [],
+        "gsi_definitions": [{"indexName": "ix1"}, {"indexName": "ix2"}],
+    }
+    checks = fixture._cluster_checks(manifest, {"cluster_id": "c1"})
+    text = " ".join(checks["problems"])
+    assert checks["verified"] is False
+    assert "returned no rows" in text
+    assert "does not exist on the cluster" not in text
 
 
 def test_an_index_that_is_not_online_names_the_keyspace_and_the_next_command(

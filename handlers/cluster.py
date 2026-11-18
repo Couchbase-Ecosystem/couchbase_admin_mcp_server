@@ -729,7 +729,8 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # them applied to a settings endpoint verbatim.
             unknown = refuse_undeclared(args, name, TOOLS)
             if unknown:
-                return err(unknown, tool=name)
+                # Already an err() result; wrapping it again passed a LIST to err().
+                return unknown
             # READ-MODIFY-WRITE. POST /settings/alerts is a full replace, so a call
             # that named only `recipients` reset everything else -- most damagingly
             # `alerts`, the list of TYPES that fire, which the schema did not even
@@ -788,10 +789,27 @@ def handle(name: str, args: dict) -> list[TextContent]:
                         ):
                             merged[in_key] = server[out_key]
             merged.update(supplied)
+            # The GET never returns the SMTP password, and the POST is a full replace, so
+            # a partial call against an authenticated SMTP server would CLEAR the password
+            # and mail would silently stop. Refuse until the caller supplies it.
+            smtp = current.get("emailServer")
+            if (
+                isinstance(smtp, dict)
+                and smtp.get("user") not in (None, "")
+                and "emailPass" not in supplied
+            ):
+                return err(
+                    "This cluster sends mail with SMTP authentication, and the alert "
+                    "settings endpoint never returns the stored password. Because the "
+                    "update replaces the whole document, a call without `emailPass` "
+                    "would clear it.",
+                    tool=name,
+                    hint="Pass emailPass (and emailUser) again with this change.",
+                )
             # Comma-separated, not JSON. form_value JSON-encodes a list, and
             # /settings/alerts parses these two as comma-separated tokens -- a JSON
             # array is unparseable, which on this endpoint means "no alert types".
-            for key in ("alerts", "pop_up_alerts"):
+            for key in ("alerts", "pop_up_alerts", "recipients"):
                 if isinstance(merged.get(key), (list, tuple)):
                     merged[key] = ",".join(str(a) for a in merged[key])
             data = form_data(merged, exclude=("confirm",))

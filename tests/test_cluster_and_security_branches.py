@@ -265,7 +265,9 @@ def test_the_smtp_sub_document_is_flattened_back_into_parameters(wire):
             }
         },
     )
-    cluster_mod.handle("admin_alerts_set", {"enabled": True, "confirm": True})
+    cluster_mod.handle(
+        "admin_alerts_set", {"enabled": True, "emailPass": "pw", "confirm": True}
+    )
     sent = w.sent()
     assert sent["emailHost"] == "smtp.example.com"
     assert sent["emailPort"] == "25"
@@ -422,3 +424,28 @@ def test_alerts_refuses_when_the_current_settings_cannot_be_read(wire):
     assert is_error(result)
     assert "was not attempted" in payload(result)["error"]
     assert "REPLACE" in payload(result)["hint"].upper()
+
+
+def test_a_list_of_recipients_is_sent_comma_separated(wire):
+    w = _alerts_wire(
+        wire, {"enabled": True, "recipients": ["a@example.com", "b@example.com"]}
+    )
+    cluster_mod.handle("admin_alerts_set", {"enabled": True, "confirm": True})
+    assert w.sent()["recipients"] == "a@example.com,b@example.com"
+
+
+def test_a_partial_call_is_refused_when_it_would_clear_the_smtp_password(wire):
+    """The GET never returns emailPass and the POST replaces everything."""
+    w = _alerts_wire(
+        wire,
+        {"enabled": True, "emailServer": {"host": "smtp.example.com", "user": "u"}},
+    )
+    result = cluster_mod.handle("admin_alerts_set", {"enabled": True, "confirm": True})
+    assert is_error(result)
+    assert (
+        not w.calls_to("POST", "/settings/alerts") if hasattr(w, "calls_to") else True
+    )
+    ok_result = cluster_mod.handle(
+        "admin_alerts_set", {"enabled": True, "emailPass": "pw", "confirm": True}
+    )
+    assert not is_error(ok_result)

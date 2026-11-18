@@ -6,7 +6,8 @@ Main items: tests for marker shadowing, the CIDR floor, dot-segment ids, the Dat
     host and redirect checks, the read-side project policy and the reap dry-run parse.
 Callers: none; collected by pytest
 Callees: `handlers.capella.client`, `handlers.capella.environment`,
-    `handlers.capella.fixture`, `handlers.capella.guardrails`, `handlers.fixture_core`,
+    `handlers.capella.fixture`, `handlers.capella.guardrails`, `handlers.egress`,
+    `handlers.fixture_core`,
     `handlers.shared`
 
 Each test fails on the code before the fix.
@@ -134,3 +135,25 @@ def test_a_rewritten_index_statement_is_guarded_again(monkeypatch):
     evil = 'CREATE INDEX i ON `b`(x) WITH {"nodes": ["a"]}; DROP SCOPE `b`.`p`'
     rewritten, _ = fixture_core.strip_index_nodes(evil)
     assert shared.assert_index_create_ddl(rewritten) is not None
+
+
+@pytest.mark.parametrize(
+    "value,host",
+    [
+        ("169.254.169.254/a://example.com", "169.254.169.254"),
+        ("evil.com/x://allowed.corp", "evil.com"),
+        ("https://allowed.corp\\@evil.com", "allowed.corp"),
+        ("https://svc.corp:8091/x", "svc.corp"),
+    ],
+)
+def test_split_host_judges_the_first_host_only(value, host):
+    from handlers import egress
+
+    assert egress.split_host(value) == host
+
+
+def test_a_long_s_key_is_folded_to_its_ascii_spelling():
+    from handlers import egress
+
+    assert egress._fold_key("ſmtpHost") == egress._fold_key("smtpHost")
+    assert egress._fold_key("ｔarget") == "target"

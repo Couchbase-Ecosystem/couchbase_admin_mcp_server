@@ -720,7 +720,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
             return ok(admin_request("GET", "/settings/alerts"))
 
         if name == "admin_alerts_set":
-            if args.get("emailHost"):
+            # `is not None`, not truthiness: a falsy non-string (0, False, []) skipped the
+            # check yet was still forwarded to the settings endpoint.
+            if args.get("emailHost") is not None:
                 assert_egress_allowed(args["emailHost"], field="emailHost", tool=name)
             # Per-tool key allow-list. This used to forward EVERY caller-supplied
             # key to /settings/alerts, so a model could invent fields and have

@@ -75,6 +75,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import unicodedata
 from typing import Any
 
 # Addresses that are never an acceptable destination for a cluster-originated
@@ -165,6 +166,9 @@ def _allowed_entries() -> tuple[str, ...]:
     return tuple(e.strip().lower() for e in raw.split(",") if e.strip())
 
 
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
 def split_host(value: str) -> str:
     """Extract the host a value will actually be dialled at.
 
@@ -179,8 +183,13 @@ def split_host(value: str) -> str:
     cannot be a hostname is refused rather than guessed at.
     """
     host = (value or "").strip()
-    if "://" in host:
-        host = host.split("://", 1)[1]
+    # A backslash is a path separator to most URL parsers, so judge it as one.
+    host = host.replace("\\", "/")
+    # Only a scheme at the START is a scheme. Splitting on the first "://" ANYWHERE judged
+    # `169.254.169.254/a://example.com` as `example.com`, while a consumer dials the first.
+    scheme = _SCHEME_RE.match(host)
+    if scheme:
+        host = host[scheme.end() :]
     # Query and fragment first: their contents must never influence the decision.
     for sep in ("?", "#"):
         host = host.split(sep, 1)[0]
@@ -197,8 +206,6 @@ def split_host(value: str) -> str:
         host = host.split(":", 1)[0]
     return host.strip().rstrip(".").lower()
 
-
-_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 
 #: Characters that can never be part of a plain host, `host:port` or `scheme://host[:port]`.
 _STRICT_FORBIDDEN = re.compile(r"[/?#\\\s]")
@@ -634,11 +641,19 @@ _EXPLICIT_DESTINATION_KEYS: frozenset[str] = frozenset(
 _OBJECT_STORE_SCHEMES = frozenset({"s3", "az", "azure", "gs", "gcs"})
 
 
+def _fold_key(key: object) -> str:
+    """Fold a JSON key the way a lenient decoder might: NFKC, then casefold.
+
+    `str.lower()` leaves U+017F (long s) and compatibility forms alone, while a Go-style
+    case-folding decoder maps them onto ASCII, so `ſmtp` or a full-width key could name a
+    destination field this check never saw. Folding both ways is over-guarding at worst.
+    """
+    return unicodedata.normalize("NFKC", str(key)).casefold()
+
+
 def _is_explicit_destination_key(key: object) -> bool:
     """Whether `key`, as the last segment of its path, is one of the explicit destination names."""
-    return (
-        str(key).lower().rsplit(".", 1)[-1].split("[")[0] in _EXPLICIT_DESTINATION_KEYS
-    )
+    return _fold_key(key).rsplit(".", 1)[-1].split("[")[0] in _EXPLICIT_DESTINATION_KEYS
 
 
 def _is_filesystem_path(text: str) -> bool:
@@ -747,7 +762,7 @@ def guard_host_like_fields(data: dict, *, tool: str) -> None:
     destination to the allowlist.
     """
     for key, value in data.items():
-        lowered = str(key).lower()
+        lowered = _fold_key(key)
         if value is None or value is True or value is False or value == "":
             continue
         exempt = lowered in _host_like_exempt()
@@ -876,7 +891,7 @@ def guard_nested_host_fields(
         # guards therefore disagreed in both directions for the same field.
         if value is None or value is True or value is False or value == "":
             return
-        lowered = str(key_name).lower()
+        lowered = _fold_key(key_name)
         if not force:
             if lowered in _host_like_exempt():
                 # Exemption suppresses the ALLOWLIST only, never the absolute

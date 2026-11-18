@@ -5,7 +5,7 @@ Spec: docs/spec.md S3 step 8, S8.
 Main items: tests for marker shadowing, the CIDR floor, dot-segment ids, the Data API
     host and redirect checks, the read-side project policy and the reap dry-run parse.
 Callers: none; collected by pytest
-Callees: `handlers.capella.client`, `handlers.capella.environment`,
+Callees: `auth.oidc`, `auth.scope_gate`, `handlers.capella.client`, `handlers.capella.environment`,
     `handlers.capella.fixture`, `handlers.capella.guardrails`, `handlers.egress`,
     `handlers.fixture_core`,
     `handlers.shared`
@@ -155,5 +155,14 @@ def test_split_host_judges_the_first_host_only(value, host):
 def test_a_long_s_key_is_folded_to_its_ascii_spelling():
     from handlers import egress
 
-    assert egress._fold_key("ſmtpHost") == egress._fold_key("smtpHost")
-    assert egress._fold_key("ｔarget") == "target"
+    assert egress._fold_key("\u017fmtpHost") == egress._fold_key("smtpHost")
+    assert egress._fold_key("\uff54arget") == "target"
+
+
+@pytest.mark.parametrize("spelling", ["1", "true", "yes", "on", "y", "t", "T"])
+def test_every_truthy_spelling_demands_auth_in_every_parser(monkeypatch, spelling):
+    from auth import oidc, scope_gate
+
+    monkeypatch.setenv("CB_ADMIN_HTTP_REQUIRE_AUTH", spelling)
+    assert oidc.require_auth_enabled() is True
+    assert scope_gate._auth_required() is True

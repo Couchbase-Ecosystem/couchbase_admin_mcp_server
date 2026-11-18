@@ -645,7 +645,7 @@ def _fold_key(key: object) -> str:
     """Fold a JSON key the way a lenient decoder might: NFKC, then casefold.
 
     `str.lower()` leaves U+017F (long s) and compatibility forms alone, while a Go-style
-    case-folding decoder maps them onto ASCII, so `ſmtp` or a full-width key could name a
+    case-folding decoder maps them onto ASCII, so a long-s (U+017F) or full-width key could name a
     destination field this check never saw. Folding both ways is over-guarding at worst.
     """
     return unicodedata.normalize("NFKC", str(key)).casefold()

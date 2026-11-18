@@ -8,7 +8,7 @@ Main items: `check_scope`, `denial_for`, `principal_of`, `is_read_side`,
     `session_has_automation_scope`, `set_token_claims`, `current_claims`, `clear_token_claims`,
     `configure`.
 Callers: `gui/gui_server.py`, `scripts/idp_lab_assertions.py`, `server.py`; 9 test file(s)
-Callees: `auth.request_auth`, `mcp_compat`
+Callees: `auth.oidc`, `auth.request_auth`, `mcp_compat`
 
 KISS design:
   * When no validated token is in context (stdio transport, or HTTP with OAuth
@@ -310,12 +310,9 @@ def _auth_required() -> bool:
     Read from the environment rather than injected, so the gate cannot be left
     un-configured by a caller that forgets to wire it.
     """
-    return (os.environ.get("CB_ADMIN_HTTP_REQUIRE_AUTH", "") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    from auth.oidc import require_auth_enabled
+
+    return require_auth_enabled()
 
 
 def check_scope(tool: Any) -> str | None:

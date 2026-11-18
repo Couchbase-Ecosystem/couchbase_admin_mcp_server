@@ -703,7 +703,7 @@ MUTATIONS = [
     (
         "auth: skip-verify no longer refuses to combine with required auth",
         "auth/oidc.py",
-        '        if _env("CB_ADMIN_HTTP_REQUIRE_AUTH", "").lower() in ("1", "true", "yes", "on"):',
+        "        if require_auth_enabled():",
         "        if False:",
         TOKEN,
     ),

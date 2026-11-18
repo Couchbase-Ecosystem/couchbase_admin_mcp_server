@@ -7,7 +7,7 @@ Spec: docs/spec.md S5 (enterprise profile needs an OAuth issuer), S6 (transports
 Main items: `validate_token`, `userinfo_from_claims`, `build_authorization_url`,
     `generate_pkce_pair`, `exchange_code`, `refresh_access_token`, `client_credentials_token`,
     `gate_unknown_kid`.
-Callers: `auth/request_auth.py`, `gui/gui_server.py`, `server.py`; 3 test file(s)
+Callers: `auth/request_auth.py`, `auth/scope_gate.py`, `gui/gui_server.py`, `server.py`; 3 test file(s)
 Callees: no module of this repository; the `PyJWT` and `requests` libraries.
 
 Supports:
@@ -51,6 +51,19 @@ import jwt
 import requests as _requests
 
 # ── Config helpers ────────────────────────────────────────────────────────────
+
+
+#: The one spelling set for CB_ADMIN_HTTP_REQUIRE_AUTH. It must match `handlers.shared.TRUTHY_VALUES`
+#: (this layer may not import handlers). Two parsers with different sets made `y` or `t` true in
+#: one place and false in another, which switched the audience-required guard off.
+_TRUTHY = frozenset({"1", "true", "yes", "on", "y", "t"})
+
+
+def require_auth_enabled() -> bool:
+    """Whether the operator has demanded authenticated access (CB_ADMIN_HTTP_REQUIRE_AUTH)."""
+    return (
+        os.environ.get("CB_ADMIN_HTTP_REQUIRE_AUTH", "") or ""
+    ).strip().lower() in _TRUTHY
 
 
 def _env(key: str, default: str = "") -> str:
@@ -544,7 +557,7 @@ def validate_token(token: str) -> dict[str, Any]:
         # emitted per-token rather than at startup, and was accepted even with
         # CB_ADMIN_HTTP_REQUIRE_AUTH=true — so the "hardened" configuration could
         # silently be a no-op.
-        if _env("CB_ADMIN_HTTP_REQUIRE_AUTH", "").lower() in ("1", "true", "yes", "on"):
+        if require_auth_enabled():
             raise RuntimeError(
                 "OAUTH_SKIP_VERIFY is enabled while CB_ADMIN_HTTP_REQUIRE_AUTH=true. "
                 "That combination demands authentication and then verifies nothing, "
@@ -587,12 +600,7 @@ def validate_token(token: str) -> dict[str, Any]:
 
     issuer = _env("OAUTH_ISSUER").rstrip("/")
     audience = _env("OAUTH_AUDIENCE") or None
-    if not audience and _env("CB_ADMIN_HTTP_REQUIRE_AUTH", "").lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    ):
+    if not audience and require_auth_enabled():
         # Without an audience check, ANY validly-signed token from the issuer is
         # accepted — including one minted for an unrelated application in the same
         # corporate IdP tenant. In a large shared tenant that is a realistic path

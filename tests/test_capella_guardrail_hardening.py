@@ -6,7 +6,7 @@ Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S3 step 8, S8.
 Main items: 80 test function(s). Helpers and fixtures: `_sandbox`, `Recorder`, `api`, `_call`,
     `_synthetic_args`, `_TwoClusters`, `two_clusters`.
-Callers: none; collected by pytest
+Callers: `tests/test_fix_capella.py`; collected by pytest
 Callees: `handlers.capella.client`, `handlers.capella.environment`,
     `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.shared`
 

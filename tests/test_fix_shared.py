@@ -71,25 +71,63 @@ def test_admin_request_refuses_a_redirect_and_never_resends_credentials(
     assert "auth" not in seen, "the redirect target must never be contacted"
 
 
-def test_redaction_leaves_nothing_unmasked_past_the_cap():
-    """A secret before the cap is masked and one after it is not returned at all."""
-    after = "password=lateSecret99 "
-    body = "x " * 10 + "password=hunter2 " + "y" * 5000 + " " + after
+def test_redaction_masks_every_secret_in_a_long_value_and_keeps_the_rest():
+    """A long value is returned in full, with a secret anywhere in it masked."""
+    late = "password=lateSecret99 "
+    body = "x " * 10 + "password=hunter2 " + "y" * 5000 + " " + late + "tail-marker"
     for out in (
         shared.err("HTTP 400: " + body)[0].text,
         shared.redact_text(body),
     ):
         assert "hunter2" not in out
         assert "lateSecret99" not in out
-        assert "truncated" in out
+        # Nothing is dropped: the end of the value is still there.
+        assert "tail-marker" in out
+        assert "truncated" not in out
 
 
-def test_redaction_drops_a_secret_straddling_the_cap():
-    """A token cut by the cap is dropped whole instead of leaking its first characters."""
-    pad = "a" * (shared._REDACT_MAX_TEXT - 20)
-    text = pad + " Bearer abcdefghijklmnopqrstuvwxyz0123456789"
+def test_redaction_masks_a_secret_straddling_a_window_boundary():
+    """A token on a window edge is masked, not cut where its key no longer shows."""
+    pad = "a " * (shared._REDACT_CHUNK // 2 - 6)
+    text = pad + "Bearer abcdefghijklmnopqrstuvwxyz0123456789 and more text"
     out = shared.redact_text(text)
     assert "abcdefgh" not in out
+    assert out.endswith("and more text")
+
+
+def test_redaction_still_caps_an_absurd_value():
+    out = shared.redact_text("a " * shared._REDACT_MAX_TEXT)
+    assert "truncated at" in out
+    assert len(out) < shared._REDACT_MAX_TEXT + 400
+
+
+def test_a_long_function_source_round_trips_through_ok():
+    code = "function OnUpdate(doc, meta) {\n" + "  log(doc);\n" * 2000 + "}\n"
+    out = json.loads(shared.ok({"appcode": code})[0].text)
+    assert out["appcode"] == code
+
+
+def test_uri_password_with_reserved_characters_is_masked():
+    for uri in (
+        "couchbase://admin:p/ss@host",
+        "couchbase://admin:p?ss@host",
+        "couchbase://admin:p#ss@host",
+    ):
+        out = shared.redact_uri_credentials(uri)
+        assert "ss" not in out.split("@")[0].split(":", 2)[-1]
+        assert out.endswith("@host")
+    # A bare port is not a password.
+    assert (
+        shared.redact_uri_credentials("http://host:8080/a@b") == "http://host:8080/a@b"
+    )
+
+
+@pytest.mark.parametrize(
+    "key", ["X-API-Key", "api-key", "otpCookie", "clientKey", "spKey"]
+)
+def test_header_and_cookie_spellings_are_masked(key):
+    assert "s3cr3tvalue" not in shared.redact_text('{"%s": "s3cr3tvalue"}' % key)
+    assert shared.redact({key: "s3cr3tvalue"})[key] == shared.REDACTED
 
 
 def test_ok_masks_a_secret_inside_a_long_string_value():

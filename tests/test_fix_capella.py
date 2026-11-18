@@ -1,4 +1,16 @@
-"""Regression tests for the Capella client and guardrail fixes of 2026-11."""
+"""Regression tests for the Capella client and guardrail fixes of 2026-11.
+
+Component: regression suite; see tests/README.md.
+Spec: docs/spec.md S3 step 8, S8.
+Main items: tests for the no-redirect client, the https-only base URL, case-colliding
+    body keys, the open-CIDR refusal, the webhook egress check, the twoWay source check
+    and the organisation-id alias.
+Callers: none; collected by pytest
+Callees: `handlers.capella.client`, `handlers.capella.environment`,
+    `handlers.capella.guardrails`, `tests.test_capella_guardrail_hardening`
+
+Each test fails on the code before the fix.
+"""
 
 import http.server
 import json

@@ -171,12 +171,27 @@ class SafeRecordFilter(logging.Filter):
         """
         try:
             from handlers.shared import redact as _redact
+            from handlers.shared import redact_text as _redact_text
+
+            def _scrub(arg):
+                # An exception (or any other object) is interpolated with str() when
+                # the message is built, and redact() leaves it untouched, so a secret
+                # in a cluster error body reached the head of the log line unmasked
+                # even though the traceback copy was masked. Convert such objects to
+                # their text and mask that. Numbers, booleans and None are inert.
+                if arg is None or isinstance(arg, (bool, int, float)):
+                    return arg
+                if isinstance(arg, (dict, list, tuple, str)):
+                    return _redact(arg)
+                return _redact_text(str(arg))
 
             if record.args:
                 if isinstance(record.args, dict):
-                    record.args = _redact(record.args)
+                    record.args = {
+                        k: _scrub(v) for k, v in _redact(record.args).items()
+                    }
                 elif isinstance(record.args, tuple):
-                    record.args = tuple(_redact(a) for a in record.args)
+                    record.args = tuple(_scrub(a) for a in record.args)
         except Exception:
             # Logging must never break a request. An unscrubbed record is still
             # better emitted than dropped, and the flattening below still applies.
@@ -207,7 +222,8 @@ class SafeRecordFilter(logging.Filter):
 
                     text = _redact_text(text)
                 except Exception:
-                    pass
+                    # Fail CLOSED: an unmasked traceback is not better than a missing one.
+                    text = "(traceback withheld: could not be scrubbed)"
                 # Folded into the message, not left in exc_text: the formatter would put
                 # exc_text on a new line, and every record must stay one line.
                 record.msg = f"{record.getMessage()} | {_flatten(text)}"

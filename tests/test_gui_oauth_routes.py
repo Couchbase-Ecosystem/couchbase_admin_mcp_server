@@ -5,7 +5,7 @@ Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S6.
 Main items: 38 test function(s). Helpers and fixtures: `gui`, `client`, `_start_login`,
     `_login`.
-Callers: none; collected by pytest
+Callers: `tests/test_fix_server_gui_oidc.py`; collected by pytest
 Callees: `audit`, `profile_config`
 
 WHY THESE, SPECIFICALLY

@@ -247,8 +247,8 @@ MUTATIONS = [
     (
         "redaction: URI userinfo masking is a no-op",
         "handlers/shared.py",
-        "    return _URI_CREDENTIAL_RE.sub(",
-        "    return text or _URI_CREDENTIAL_RE.sub(",
+        "    text = _URI_CREDENTIAL_RE.sub(",
+        "    text = text or _URI_CREDENTIAL_RE.sub(",
         STATUS,
     ),
     (

@@ -122,11 +122,23 @@ _MAX_HINT_BLOCKS = 32
 #: below where the guards' worst-case cost becomes a denial of service.
 _MAX_STATEMENT_CHARS = 16384
 
-#: Upper bound on the text redaction will SCAN. Above it the value is cut to this length
-#: and the remainder is dropped, never returned: the patterns are super-linear, the input
-#: can be caller- or cluster-controlled, and this runs on the event-loop thread inside
-#: err().
-_REDACT_MAX_TEXT = 4096
+#: Upper bound on the text redaction will process at all. Above it the value is cut to
+#: this length and the remainder is dropped, never returned unmasked. The bound exists
+#: for CPU, not for tidiness: redaction runs on the event-loop thread inside err() and
+#: ok(), and the input can be caller- or cluster-controlled.
+#:
+#: This used to be 4096 and was applied to EVERY string leaf, which silently cut a
+#: function's source, an FTS definition or a long statement to ~4 KB. An agent that read
+#: a function with admin_eventing_get and wrote it back with admin_eventing_create then
+#: deployed truncated code. Redaction is now done in bounded chunks (see
+#: _REDACT_CHUNK), so the per-call cost stays linear in the length and nothing below
+#: this ceiling is dropped.
+_REDACT_MAX_TEXT = 262_144
+
+#: Size of one redaction window. The key/value pattern in redact_text is bounded but
+#: costly (see the measurements there), so it only ever runs over a window this long.
+#: Chunk boundaries are chosen at separators so a `key: value` pair is not split.
+_REDACT_CHUNK = 3072
 
 #: The single accepted spelling set for boolean environment variables.
 #:
@@ -1202,6 +1214,18 @@ _SENSITIVE_KEY_PARTS: tuple[str, ...] = (
     "access_key",
     "accesskey",
     "auth",
+    # Added after the second review: header and field spellings the list missed.
+    # `X-API-Key` (hyphen) contains neither "apikey" nor "api_key"; `otpCookie` is the
+    # Erlang cluster cookie and `cookie` covers session cookies; the SAML/OIDC/KMIP
+    # key fields are named clientKey, spKey and signingKey. `encryption_key*` is NOT listed:
+    # admin_kmip_get returns `all_encryption_keys`, a harmless list a wildcard would blank.
+    "api-key",
+    "cookie",
+    "clientkey",
+    "spkey",
+    "signingkey",
+    "session_id",
+    "sessionid",
 )
 
 # Keys that look sensitive by the rule above but are safe to keep — otherwise
@@ -1494,6 +1518,21 @@ _URI_CREDENTIAL_RE = re.compile(
 )
 
 
+#: Second URI pattern, for a password holding a raw "/", "?" or "#". RFC 3986 requires
+#: those to be percent-encoded, but operators paste them raw, and the strict pattern above
+#: then fails to reach the "@" and returns the whole credential. The text after the ":"
+#: may not be a bare port (`http://host:8080/a@b` is a host, a port and a path, not a
+#: credential), which is what the lookahead rules out. The password runs to the LAST "@"
+#: in the unbroken (no whitespace or quote) token. Over-masking a path is harmless.
+_URI_CREDENTIAL_LOOSE_RE = re.compile(
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]{0,31}://)"
+    r"(?P<user>[^/?#@\s:\"\']+)"
+    r":(?!\d+(?:[/?#]|$|\s|\"|\'))"
+    r"(?P<password>[^\s\"\']*[/?#][^\s\"\']*)"
+    r"(?=@)"
+)
+
+
 def redact_uri_credentials(text: str) -> str:
     """Mask the password in any `scheme://user:password@host` URI inside `text`.
 
@@ -1509,9 +1548,50 @@ def redact_uri_credentials(text: str) -> str:
     """
     if not isinstance(text, str) or not text:
         return text
-    return _URI_CREDENTIAL_RE.sub(
+    text = _URI_CREDENTIAL_RE.sub(
         lambda m: f"{m.group('scheme')}{m.group('user')}:{REDACTED}", text
     )
+    return _URI_CREDENTIAL_LOOSE_RE.sub(
+        lambda m: f"{m.group('scheme')}{m.group('user')}:{REDACTED}", text
+    )
+
+
+def _chunk_text(text: str) -> list[str]:
+    """Split `text` into windows of at most `_REDACT_CHUNK` characters at separators.
+
+    A cut is placed after the last whitespace, comma, semicolon, ampersand, closing brace
+    or closing bracket in the final 512 characters of the window, so a `key: value` pair
+    or a `key=value` query parameter is not divided between two windows (the masker could
+    not recognise either half). A quote is deliberately NOT a separator: cutting between a
+    JSON key and its value is exactly the split to avoid. With no separator in range, the
+    window is cut hard at the limit; that only happens in a single unbroken token.
+    """
+    chunks: list[str] = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        end = min(pos + _REDACT_CHUNK, n)
+        if end < n:
+            floor = max(pos, end - 512)
+            cut = -1
+            for i in range(end - 1, floor - 1, -1):
+                ch = text[i]
+                if ch in " \t\r\n":
+                    # Not directly after a ":" or "=": cutting between a separator and
+                    # its value would leave the value in the next window with no key.
+                    before = text[pos:i].rstrip()
+                    if before and before[-1] in ":=":
+                        continue
+                    cut = i + 1
+                    break
+                if ch in ",;&}]":
+                    cut = i + 1
+                    break
+            if cut > pos:
+                end = cut
+        chunks.append(text[pos:end])
+        pos = end
+    return chunks
 
 
 def redact_text(text: str) -> str:
@@ -1520,41 +1600,50 @@ def redact_text(text: str) -> str:
     redact() walks dicts and lists; a bare string was returned unchanged. Exception
     messages are the one place attacker- and cluster-influenced text enters a response
     and a log line without passing through a dict, so they need their own pass.
+
+    The text is masked in bounded windows (`_chunk_text`), so a long value is returned in
+    full with its secrets masked, rather than cut to a prefix. Only a value above
+    `_REDACT_MAX_TEXT` is cut, and the remainder is then dropped, never returned unmasked.
     """
     if not isinstance(text, str) or not text:
         return text
 
-    # Truncate FIRST, then mask the kept head. The unscanned remainder is dropped and
-    # replaced by the notice, so nothing past the cap is ever returned unmasked. Every
-    # pattern below therefore runs over at most _REDACT_MAX_TEXT characters.
-    #
+    notice = ""
+    if len(text) > _REDACT_MAX_TEXT:
+        text = text[:_REDACT_MAX_TEXT]
+        notice = (
+            f"...(truncated at {_REDACT_MAX_TEXT} characters; the remainder was "
+            "dropped rather than returned unmasked)"
+        )
+
+    # Connection strings reach logs and error messages constantly -- "failed to connect to
+    # couchbase://admin:pw@host" is the single most likely place this leaks. The URI
+    # pattern is linear (its scheme is bounded), so it runs over the whole text and a
+    # credential is never split by a window boundary.
+    text = redact_uri_credentials(text)
+    if len(text) <= _REDACT_CHUNK:
+        masked = _redact_window(text)
+    else:
+        masked = "".join(_redact_window(chunk) for chunk in _chunk_text(text))
+    # The scheme-token rule runs once over the joined text: its scheme word and its token
+    # can sit either side of a window boundary, and the pattern is linear.
+    return _mask_auth_schemes(masked) + notice
+
+
+def _redact_window(text: str) -> str:
+    """Mask `key: value` credentials and auth-scheme tokens in one bounded window."""
     # The key group below is a bounded-but-still-costly pattern, and the value it
     # guards can be caller-controlled: `err()` runs this over the message AND the
     # `tool=` context, so an MCP client sending a 20 000-character TOOL NAME -- which
     # needs no authentication, since an unknown name is refused after this runs --
     # stalled the event-loop thread for 25 seconds and every other client with it.
-    # A cluster error body reaches the same path through each handler's except block.
-    notice = ""
-    if len(text) > _REDACT_MAX_TEXT:
-        # Back the cut up to a whitespace boundary (at most 512 characters) so a secret
-        # straddling the cap is dropped whole instead of being cut where its key or
-        # its `@` no longer shows and the pattern cannot recognise it.
-        window = _REDACT_MAX_TEXT - 512
-        cut = max(text.rfind(" ", window, _REDACT_MAX_TEXT), window)
-        for ws in ("\n", "\t"):
-            cut = max(cut, text.rfind(ws, window, _REDACT_MAX_TEXT))
-        text = text[:cut]
-        notice = (
-            f"...(truncated at {_REDACT_MAX_TEXT} characters; the remainder was "
-            "dropped rather than returned unmasked, and an oversized value is not "
-            "scanned, because scanning it is a denial of service against this server)"
-        )
-
-    # Connection strings reach logs and error messages constantly — "failed to connect to
-    # couchbase://admin:pw@host" is the single most likely place this leaks.
-    text = redact_uri_credentials(text)
-
+    # Running it per window keeps the cost linear in the length.
     fragments = "|".join(re.escape(part) for part in _SENSITIVE_KEY_PARTS)
+    # Cheap linear pre-check. The costly pattern below can only match where a fragment
+    # and a ":" or "=" both occur, so a window with neither (the common case for a long
+    # blob of source, base64 or an unbroken token) skips it entirely.
+    if not re.search(fragments, text, re.IGNORECASE) or not re.search(r"[:=]", text):
+        return text
     pattern = re.compile(
         # Both quantifiers BOUNDED. `[\w.-]*?(?:frag)[\w.-]*` is the same unbounded
         # prefix shape that made _URI_CREDENTIAL_RE quadratic: every position in a long
@@ -1565,7 +1654,7 @@ def redact_text(text: str) -> str:
         r"(?P<sep>\s*[:=]+\s*)"
         # A scheme-prefixed value is ONE value. Without this alternative the value
         # matched only the word "Bearer", so `Authorization: Bearer <jwt>` became
-        # `Authorization: ***REDACTED*** <jwt>` — the label masked and the credential
+        # `Authorization: ***REDACTED*** <jwt>` -- the label masked and the credential
         # left in place, which is worse than not matching at all.
         r"(?P<val>(?:Bearer|Basic|Digest)\s+[A-Za-z0-9._~+/=-]+"
         r"|\"[^\"]*\"|\'[^\']*\'|[^\s,;&}\)\]]+)",
@@ -1579,8 +1668,7 @@ def redact_text(text: str) -> str:
             return match.group(0)
         return f"{match.group('key')}{match.group('sep')}{REDACTED}"
 
-    text = pattern.sub(_mask, text)
-    return _mask_auth_schemes(text) + notice
+    return pattern.sub(_mask, text)
 
 
 def _mask_auth_schemes(text: str) -> str:

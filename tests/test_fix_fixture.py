@@ -5,8 +5,8 @@ Spec: docs/spec.md S8, S9.
 Main items: tests for manifest index DDL, manifest file paths, identifier quoting,
 xattr names, the conflict-log limit, temporary-user roles and password change.
 Callers: none; collected by pytest
-Callees: `handlers.fixture`, `handlers.fixture_core`, `handlers.capella.fixture`,
-`handlers.eight_x`, `handlers.security`
+Callees: `handlers.capella.fixture`, `handlers.eight_x`, `handlers.fixture`,
+    `handlers.fixture_core`, `handlers.security`, `handlers.shared`
 
 Each test fails on the code before the fix: a manifest is data from outside the
 server and must not steer SQL++ or file reads.

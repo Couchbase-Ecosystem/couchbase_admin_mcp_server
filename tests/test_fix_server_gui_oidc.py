@@ -6,8 +6,8 @@ Main items: `test_a_cancelled_call_is_audited_and_reraised`, `test_login_next_*`
     `test_traceback_*`, `test_server_wide_dry_run_*`, `test_discovery_*`,
     `test_healthcheck_*`, `test_enterprise_warns_*`.
 Callers: none; collected by pytest
-Callees: `server`, `gui.gui_server`, `logging_config`, `auth.oidc`, `healthcheck`,
-    `profile_config`, `dryrun`
+Callees: `auth.oidc`, `dryrun`, `handlers.shared`, `healthcheck`, `logging_config`,
+    `profile_config`, `server`, `tests.test_gui_oauth_routes`
 
 Each test fails on the code as it was before the fix: a cancelled call left no audit
 record, `next=/\\evil.com` was stored, a traceback bypassed redaction and flattening, a

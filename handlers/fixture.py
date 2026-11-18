@@ -4,7 +4,7 @@ Component: the `fixture` tool group: fixtures on Enterprise Edition (`admin_fixt
 Spec: docs/spec.md S9 (fixtures and the backup catalogue), S3 step 8.
 Main items: `TOOLS` (4 tools) and `handle`.
 Callers: `gui/gui_server.py`, `server.py`; 4 test file(s)
-Callees: `handlers.fixture_core`, `handlers.shared`, `logging_config`
+Callees: `dryrun`, `handlers.fixture_core`, `handlers.shared`, `logging_config`
 
 WHAT A FIXTURE IS, AND WHY EE WANTS ONE
 =======================================
@@ -101,6 +101,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+import dryrun
 from handlers.fixture_core import (
     MANIFEST_SCHEMA,
     META_EXP_ALIAS,
@@ -468,7 +469,9 @@ def _structure(wanted_buckets: set[str]) -> tuple[list[dict], list[str]]:
             k: v for k, v in record["settings"].items() if v is not None
         }
         try:
-            payload = admin_request("GET", f"/pools/default/buckets/{name}/scopes")
+            payload = admin_request(
+                "GET", f"/pools/default/buckets/{quote_path(str(name))}/scopes"
+            )
         except Exception as exc:
             warnings.append(f"scopes for bucket {name} could not be read: {exc}")
             payload = {}
@@ -645,6 +648,17 @@ def _export(args: dict) -> list[TextContent]:
     except ValueError as exc:
         return err(str(exc), tool=tool)
 
+    # The export WRITES FILES while carrying readOnlyHint, so the dispatch never previews it.
+    # The operator's server-wide preview flag is honoured here instead.
+    if dryrun.server_wide() or dryrun.requested(args):
+        return ok(
+            {
+                "dry_run": True,
+                "would_write": str(root),
+                "note": "Preview only: nothing was read from the cluster or written to disk.",
+            }
+        )
+
     include_data = bool(args.get("include_data", True))
     page_size = int(args.get("page_size") or 1000)
     xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
@@ -690,6 +704,18 @@ def _export(args: dict) -> list[TextContent]:
                     continue
                 for collection in scope["collections"]:
                     keyspace = f"{bucket['name']}.{scope_name}.{collection['name']}"
+                    # The file name is built from names the CLUSTER supplied. A name with a
+                    # path separator would write (or truncate, or unlink) outside data/.
+                    if any(
+                        sep in str(part) or str(part) in ("", ".", "..")
+                        for part in (bucket["name"], scope_name, collection["name"])
+                        for sep in ("/", "\\", "\x00")
+                    ):
+                        return err(
+                            f"refusing to export {keyspace!r}: a name contains a path "
+                            f"separator or is a dot segment.",
+                            tool=tool,
+                        )
                     if wanted_keyspaces:
                         if keyspace not in wanted_keyspaces:
                             continue

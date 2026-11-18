@@ -396,3 +396,37 @@ def test_change_password_does_not_flatten_group_roles(monkeypatch):
     data = next(c for c in calls if c[0] == "PUT")[2]["data"]
     assert data["roles"].split(",") == ["bucket_admin[b]", "ro_admin"]
     assert data["groups"] == "g1"
+
+
+def test_export_honours_server_wide_preview_and_writes_nothing(monkeypatch, tmp_path):
+    monkeypatch.setenv("CB_ADMIN_FIXTURE_ROOT", str(tmp_path))
+    monkeypatch.setenv("CB_ADMIN_DRY_RUN", "true")
+    monkeypatch.setattr(
+        fixture,
+        "_structure",
+        lambda *_: pytest.fail("a preview must not read the cluster"),
+    )
+    result = fixture.handle(
+        "admin_fixture_export",
+        {"fixture_id": "f1", "fixture_path": str(tmp_path / "f1")},
+    )
+    assert "dry_run" in result[0].text
+    assert not (tmp_path / "f1").exists()
+
+
+@pytest.mark.parametrize("bad", ["../x", "a/b", "..", "a\\b"])
+def test_export_refuses_a_cluster_name_with_a_path_separator(
+    monkeypatch, tmp_path, bad
+):
+    monkeypatch.setenv("CB_ADMIN_FIXTURE_ROOT", str(tmp_path))
+    monkeypatch.delenv("CB_ADMIN_DRY_RUN", raising=False)
+    structure = [
+        {"name": "b", "scopes": [{"name": "s", "collections": [{"name": bad}]}]}
+    ]
+    monkeypatch.setattr(fixture, "_structure", lambda *_: (structure, []))
+    monkeypatch.setattr(fixture, "_eventing_functions", lambda: ([], []))
+    result = fixture.handle(
+        "admin_fixture_export",
+        {"fixture_id": "f1", "fixture_path": str(tmp_path / "f1")},
+    )
+    assert "refusing to export" in result[0].text

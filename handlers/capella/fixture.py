@@ -5,7 +5,7 @@ Component: portable, taggable Capella fixtures, moved through the Data API.
 Spec: docs/spec.md S8 (Capella operations), S9 (fixtures and the backup catalogue).
 Main items: `TOOLS` (4 tools) and `handle`.
 Callers: `handlers/capella/__init__.py`; 4 test file(s)
-Callees: `handlers.capella.client`, `handlers.capella.environment`,
+Callees: `dryrun`, `handlers.capella.client`, `handlers.capella.environment`,
     `handlers.capella.guardrails`, `handlers.capella.spec`, `handlers.fixture_core`,
     `handlers.shared`, `logging_config`
 
@@ -101,6 +101,7 @@ from typing import Any
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+import dryrun
 from handlers.fixture_core import (
     MANIFEST_SCHEMA as _MANIFEST_SCHEMA,
 )
@@ -862,6 +863,17 @@ def _export(args: dict) -> list[TextContent]:
     except ValueError as exc:
         return err(str(exc), tool="capella_fixture_export")
 
+    # Writes files while annotated read-only, so the dispatch never previews it; the
+    # operator's server-wide preview flag is honoured here.
+    if dryrun.server_wide() or dryrun.requested(args):
+        return ok(
+            {
+                "dry_run": True,
+                "would_write": str(root),
+                "note": "Preview only: nothing was read from Capella or written to disk.",
+            }
+        )
+
     ids = {"organization_id": org, "project_id": project, "cluster_id": cluster_id}
     started = datetime.now(timezone.utc)
     structure: list[dict] = []
@@ -1050,6 +1062,18 @@ def _export(args: dict) -> list[TextContent]:
             for scope in bucket.get("scopes") or []:
                 for collection in scope.get("collections") or []:
                     keyspace = f"{bucket['name']}.{scope['name']}.{collection['name']}"
+                    # Names come from the cluster and become a file name: refuse a path
+                    # separator or dot segment rather than write outside data/.
+                    if any(
+                        sep in str(part) or str(part) in ("", ".", "..")
+                        for part in (bucket["name"], scope["name"], collection["name"])
+                        for sep in ("/", "\\", "\x00")
+                    ):
+                        return err(
+                            f"refusing to export {keyspace!r}: a name contains a path "
+                            f"separator or is a dot segment.",
+                            tool="capella_fixture_export",
+                        )
                     if wanted_keyspaces and keyspace in wanted_keyspaces:
                         matched_keyspaces.add(keyspace)
                     if wanted_keyspaces and keyspace not in wanted_keyspaces:

@@ -5,7 +5,7 @@ Component: the dry-run gate: withholds a write after every other gate and return
 Spec: docs/spec.md S3 step 7; docs/questions.md Q-002 (the cycle with `mcp_compat`).
 Main items: `requested`, `in_effect`, `strip`, `preview`, `server_wide`,
     `register_handler_owned`, `handler_owns`, `force_handler_owned`.
-Callers: `gui/gui_server.py`, `handlers/mcp_status.py`, `mcp_compat.py`, `server.py`; 2 test
+Callers: `gui/gui_server.py`, `handlers/capella/fixture.py`, `handlers/fixture.py`, `handlers/mcp_status.py`, `mcp_compat.py`, `server.py`; 2 test
     file(s)
 Callees: `handlers.shared`, `mcp_compat`
 

@@ -5,7 +5,7 @@ Spec: docs/spec.md S3 steps 3 and 7, S9.
 Main items: tests for `dry_run` on the fixture export tools, the `page_size` bound, the audit size cap, and the
     caller-scoped view of the `cb_mcp_*` tools.
 Callers: none; collected by pytest
-Callees: `audit`, `auth.scope_gate`, `auth.session`, `authz`, `dryrun`, `handlers.capella.guardrails`, `handlers.shared`, `logging_config`, `handlers.capella.fixture`, `handlers.fixture`,
+Callees: `audit`, `auth.scope_gate`, `auth.session`, `authz`, `deployment`, `dryrun`, `handlers.capella.guardrails`, `handlers.shared`, `logging_config`, `handlers.capella.fixture`, `handlers.fixture`,
     `handlers.fixture_core`, `handlers.mcp_status`, `mcp_compat`, `server`
 
 Each test fails on the code before the fix.
@@ -301,3 +301,90 @@ def test_cluster_creates_are_serialised_by_a_reentrant_lock():
 
     with guardrails.CREATE_LOCK, guardrails.CREATE_LOCK:
         pass
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "--x\rDELETE FROM b",
+        "-- x\r\nDELETE FROM b",
+        "/*a*/DELETE FROM b",
+        "-- a\nUPDATE b SET x = 1",
+    ],
+)
+def test_a_line_comment_ended_by_a_bare_cr_does_not_hide_dml(statement):
+    from handlers import shared
+
+    assert shared.is_dml_statement(statement) is True
+
+
+def test_distinct_long_audit_keys_do_not_collapse():
+    import audit
+
+    prefix = "A" * 2048
+    record = audit.build_record(
+        tool="t",
+        decision="allowed",
+        arguments={prefix + "x": "danger", prefix + "y": "benign"},
+    )
+    assert sorted(record["args"].values()) == ["benign", "danger"]
+
+
+@pytest.mark.parametrize("spelling", ["y", "t", "Y", "yes", "1"])
+def test_the_deployment_gate_flag_reads_every_truthy_spelling(monkeypatch, spelling):
+    import deployment
+
+    monkeypatch.setenv("CB_DEPLOYMENT_GATE", spelling)
+    assert deployment._env_bool("CB_DEPLOYMENT_GATE", False) is True
+
+
+@pytest.mark.parametrize("value", ["0/0", "0.0.0.0/0;", "garbage", "[]", "{}"])
+def test_an_unparseable_cidr_is_refused_not_waved_through(monkeypatch, value):
+    from handlers.capella import guardrails
+
+    monkeypatch.delenv("CAPELLA_ALLOW_OPEN_CIDR", raising=False)
+    with pytest.raises(guardrails.GuardrailError):
+        guardrails.assert_cidr_not_open(value, field="cidr")
+
+
+def test_a_normal_cidr_is_still_accepted():
+    from handlers.capella import guardrails
+
+    guardrails.assert_cidr_not_open("203.0.113.7/32", field="cidr")
+
+
+def test_a_create_that_cannot_get_the_lock_is_refused_not_queued_forever(monkeypatch):
+    import threading
+
+    from handlers.capella import guardrails
+
+    monkeypatch.setattr(guardrails, "CREATE_LOCK_WAIT_SECONDS", 0.05)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with guardrails.create_lock():
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    assert held.wait(5)
+    try:
+        with pytest.raises(guardrails.GuardrailError), guardrails.create_lock():
+            pass
+    finally:
+        release.set()
+        t.join()
+    with guardrails.create_lock():  # released again afterwards
+        pass
+
+
+def test_status_counts_of_disabled_and_gated_tools_are_scoped(surface, monkeypatch):
+    monkeypatch.setattr(mcp_status, "DISABLED_TOOLS", {"demo_write", "hidden_other"})
+    monkeypatch.setattr(server, "_CONFIRMATION_REQUIRED", {"demo_write"}, raising=False)
+    full = json.loads(mcp_status.handle("cb_mcp_status", {})[0].text)["safety"]
+    with authz.caller_context(human_present=False, claims=_reader_claims()):
+        scoped = json.loads(mcp_status.handle("cb_mcp_status", {})[0].text)["safety"]
+    assert full["disabled_tools_count"] == 2
+    assert scoped["disabled_tools_count"] == 0
+    assert scoped["confirmation_required_count"] == 0

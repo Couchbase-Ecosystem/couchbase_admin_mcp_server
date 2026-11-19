@@ -101,7 +101,9 @@ def _env_bool(key: str, default: bool) -> bool:
     raw = _env(key)
     if not raw:
         return default
-    return raw.lower() in ("1", "true", "yes", "on")
+    # Same spellings as handlers.shared.TRUTHY_VALUES: `y` and `t` used to read as FALSE here,
+    # so CB_DEPLOYMENT_GATE=y silently turned the deployment gate off.
+    return raw.strip().lower() in ("1", "true", "yes", "on", "y", "t")
 
 
 def looks_like_capella_host(connection_string: str) -> bool:

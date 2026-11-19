@@ -290,6 +290,19 @@ def _redact(value: Any) -> Any:
     return _impl(value)
 
 
+def _bound_key(key: Any, depth: int) -> str:
+    """A dict key, capped. A truncated key carries a hash of the FULL key, because two long
+    keys sharing a prefix would otherwise collapse to one and the later value would overwrite
+    the earlier, which lets a caller hide an argument from the record."""
+    text = str(key)
+    if len(text) <= _MAX_FIELD_LEN:
+        return text
+    import hashlib
+
+    digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+    return f"{text[:_MAX_FIELD_LEN]}...[{len(text) - _MAX_FIELD_LEN} chars not logged; sha256:{digest}]"
+
+
 def _bound(value: Any, _depth: int = 0) -> Any:
     """Cap every string leaf at `_MAX_FIELD_LEN`, noting how many characters were not logged."""
     if isinstance(value, str):
@@ -300,7 +313,7 @@ def _bound(value: Any, _depth: int = 0) -> Any:
         return "[nesting too deep to log]"
     if isinstance(value, dict):
         return {
-            _bound(str(k), _depth + 1): _bound(v, _depth + 1) for k, v in value.items()
+            _bound_key(k, _depth + 1): _bound(v, _depth + 1) for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [_bound(v, _depth + 1) for v in value]

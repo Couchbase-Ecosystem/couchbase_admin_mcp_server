@@ -185,11 +185,15 @@ def _status_payload(server_module) -> dict:
         "safety": {
             "read_only_mode": READ_ONLY_MODE,
             "elicitation_hints": ELICITATION_HINTS,
-            "disabled_tools_count": len(DISABLED_TOOLS),
+            "disabled_tools_count": len(
+                [n for n in (DISABLED_TOOLS or ()) if not _scoped or n in _seen]
+            ),
             "disabled_tools": sorted(
                 n for n in (DISABLED_TOOLS or ()) if not _scoped or n in _seen
             ),
-            "confirmation_required_count": len(confirmation_required),
+            "confirmation_required_count": len(
+                [n for n in confirmation_required if not _scoped or n in _seen]
+            ),
             # Preview mode, and the exception to it.
             #
             # CB_ADMIN_DRY_RUN is an operator control in the same family as

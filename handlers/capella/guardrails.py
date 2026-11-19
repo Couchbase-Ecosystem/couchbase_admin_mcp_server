@@ -95,6 +95,28 @@ _log = get_logger("handlers.capella.guardrails")
 #: processes against one organization still race, which only Capella's own quota can stop.
 CREATE_LOCK = threading.RLock()
 
+#: Longest a create waits for the lock. A create can hold it across several slow Capella
+#: calls, and each waiter occupies a worker thread, so an unbounded wait lets a flood of
+#: creates starve every other tool. Past this the caller is told to retry.
+CREATE_LOCK_WAIT_SECONDS = 120
+
+
+class create_lock:  # noqa: N801 - used as a context manager, reads like one
+    """Hold `CREATE_LOCK`, or refuse after `CREATE_LOCK_WAIT_SECONDS` rather than queue forever."""
+
+    def __enter__(self) -> None:
+        if not CREATE_LOCK.acquire(timeout=CREATE_LOCK_WAIT_SECONDS):
+            raise GuardrailError(
+                "Another environment create is still in progress and this one waited "
+                f"{CREATE_LOCK_WAIT_SECONDS}s for it.",
+                hint="Retry in a minute. Creates run one at a time so the spend ceiling holds.",
+            )
+
+    def __exit__(self, *exc: object) -> bool:
+        CREATE_LOCK.release()
+        return False
+
+
 ENV_MARKER_PREFIX = "mcp-env:"
 
 _ISO = "%Y-%m-%dT%H:%M:%SZ"
@@ -218,7 +240,9 @@ def assert_cidr_not_open(cidr: object, *, field: str = "cidr") -> None:
         # the whole internet, so every prefix shorter than the floor is refused.
         is_open = net.prefixlen < _MIN_PREFIX[net.version]
     except ValueError:
-        is_open = text in _OPEN_CIDRS
+        # Fail CLOSED. An unparseable value used to pass unless it was a known all-addresses
+        # spelling, so a form Python rejects but Capella's parser accepts (`0/0`) got through.
+        is_open = True
     if not is_open:
         return
     if _env("CAPELLA_ALLOW_OPEN_CIDR").lower() in ("1", "true", "yes", "on"):

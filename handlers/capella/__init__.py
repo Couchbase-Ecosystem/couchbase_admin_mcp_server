@@ -629,9 +629,9 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
 
     # The spend ceiling counts, then the POST creates: hold one lock across both for the create
     # primitive so parallel calls cannot all pass the count (see guardrails.CREATE_LOCK).
-    _lock = guardrails.CREATE_LOCK if name == "capella_cluster_create" else None
+    _lock = guardrails.create_lock() if name == "capella_cluster_create" else None
     if _lock is not None:
-        _lock.acquire()
+        _lock.__enter__()
     try:
         if op.guarded:
             # Before any guard: a body with `name` and `Name` could pass the checks on one
@@ -659,7 +659,7 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
             )
     finally:
         if _lock is not None:
-            _lock.release()
+            _lock.__exit__(None, None, None)
 
     if op.sensitive_response:
         # The response carries a generated password or API token. Redact before

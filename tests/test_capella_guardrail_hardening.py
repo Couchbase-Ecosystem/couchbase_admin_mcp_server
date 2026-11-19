@@ -1685,7 +1685,7 @@ def test_the_race_test_would_catch_a_missing_lock(monkeypatch):
     """Proves the test above is not vacuous: with the lock removed, creates overshoot."""
 
     class _NoLock:
-        def acquire(self):
+        def acquire(self, timeout=None):
             return True
 
         def release(self):

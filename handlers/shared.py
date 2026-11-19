@@ -727,7 +727,7 @@ def is_7x() -> bool:
 _DML_RE = re.compile(
     r"""
     ^\s*                           # leading whitespace
-    (?:--[^\n]*\n\s*|/\*(?:(?!\*/).)*\*/\s*)*  # optional line / block comments, each ended by its FIRST close
+    (?:--[^\n\r]*[\r\n]\s*|/\*(?:(?!\*/).)*\*/\s*)*  # optional line / block comments, each ended by its FIRST close
     (?P<kw>INSERT|UPSERT|UPDATE|DELETE|MERGE|CREATE|DROP|BUILD|ALTER|GRANT|REVOKE|EXECUTE|INFER)
     \b
     """,

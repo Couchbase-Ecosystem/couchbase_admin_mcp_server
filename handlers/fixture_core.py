@@ -4,7 +4,7 @@ Component: fixture mechanics that belong to no control plane: manifests, hashing
     resolution, statement export.
 Spec: docs/spec.md S9 (fixtures and the backup catalogue).
 Main items: `read_manifest`, `export_statement`, `schema_problem`, `resolve_under_root`,
-    `sha256_file`, `count_lines`, `parse_timestamp`, `strip_index_nodes`.
+    `sha256_file`, `count_lines`, `parse_timestamp`, `strip_index_nodes`, `bounded_page_size`.
 Callers: `handlers/capella/fixture.py`, `handlers/fixture.py`; 3 test file(s)
 Callees: none
 
@@ -335,6 +335,31 @@ def schema_problem(value: Any) -> str | None:
 #: from a developer workstation and the wrong one for a shared container. Set it
 #: in any deployment where the caller is not the operator.
 FIXTURE_ROOT_ENV = "CB_ADMIN_FIXTURE_ROOT"
+
+
+#: Documents per export page. The ceiling keeps one page, which the exporter holds in memory
+#: whole, bounded however the caller asks.
+PAGE_SIZE_DEFAULT = 1000
+PAGE_SIZE_MAX = 5000
+
+
+def bounded_page_size(raw: object) -> tuple[int, str]:
+    """Return `(page_size, problem)` for an export's `page_size` argument.
+
+    Absent or null means the default. A bool, a non-integer, or a value outside
+    1..PAGE_SIZE_MAX is REFUSED with a message rather than clamped: a caller who asked for
+    ten million documents a page should be told the limit, not silently given 5000.
+    """
+    if raw is None:
+        return PAGE_SIZE_DEFAULT, ""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return (
+            0,
+            f"page_size must be an integer from 1 to {PAGE_SIZE_MAX}, got {raw!r}.",
+        )
+    if not 1 <= raw <= PAGE_SIZE_MAX:
+        return 0, f"page_size must be from 1 to {PAGE_SIZE_MAX}, got {raw}."
+    return raw, ""
 
 
 def resolve_under_root(raw: str, *, field: str, tool: str) -> pathlib.Path:

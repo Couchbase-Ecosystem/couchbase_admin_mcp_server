@@ -106,6 +106,7 @@ from handlers.fixture_core import (
     MANIFEST_SCHEMA,
     META_EXP_ALIAS,
     META_ID_ALIAS,
+    bounded_page_size,
     export_statement,
     fixture_integrity,
     index_definition_problems,
@@ -242,7 +243,16 @@ TOOLS: list[Tool] = [
                 "page_size": {
                     "type": "integer",
                     "default": 1000,
-                    "description": "Documents per key-range page.",
+                    "minimum": 1,
+                    "maximum": 5000,
+                    "description": "Documents per key-range page (1 to 5000).",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "True previews the destination and writes "
+                    "nothing. Declared here because this tool WRITES FILES "
+                    "while annotated read-only, so the dispatch cannot preview "
+                    "it for the caller.",
                 },
             },
             "required": ["fixture_id", "fixture_path"],
@@ -660,7 +670,9 @@ def _export(args: dict) -> list[TextContent]:
         )
 
     include_data = bool(args.get("include_data", True))
-    page_size = int(args.get("page_size") or 1000)
+    page_size, page_problem = bounded_page_size(args.get("page_size"))
+    if page_problem:
+        return err(page_problem, tool=tool)
     xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
     bad_xattrs = invalid_xattr_names(xattrs)
     if bad_xattrs:

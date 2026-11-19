@@ -660,7 +660,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # variable. Established inside the executor thread, because the context is
         # thread-local and run_in_executor does not propagate it across the hop.
         def _run_handler() -> list[TextContent]:
-            with authz.caller_context(human_present=human_present):
+            with authz.caller_context(human_present=human_present, claims=_claims):
                 return handler.handle(name, arguments)
 
         result = await loop.run_in_executor(None, _run_handler)

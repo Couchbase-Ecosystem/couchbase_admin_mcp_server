@@ -1610,7 +1610,9 @@ def call_tool():
         # this context it read the MCP transport's answer and let
         # capella_env_teardown delete a cluster this very request would have refused
         # to delete directly.
-        with authz.caller_context(human_present=False):
+        with authz.caller_context(
+            human_present=False, claims=getattr(request, "oauth_claims", None)
+        ):
             result = handler.handle(tool_name, arguments)
         elapsed = (time.perf_counter() - started) * 1000
         text = result[0].text if result else "{}"

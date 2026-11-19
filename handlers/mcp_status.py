@@ -5,7 +5,7 @@ Component: the `mcp_status` tool group: the server describing itself (configurat
 Spec: docs/spec.md S1, S3 step 8; docs/questions.md Q-002 (the cycle with `server`).
 Main items: `TOOLS` (3 tools) and `handle`.
 Callers: `gui/gui_server.py`, `server.py`; 2 test file(s)
-Callees: `dryrun`, `handlers.shared`, `mcp_compat`, `server`
+Callees: `auth.scope_gate`, `authz`, `dryrun`, `handlers.shared`, `mcp_compat`, `server`
 
 These tools report on the MCP server itself (the Python process running
 `server.py`), not the Couchbase cluster. They're useful for verifying that
@@ -30,6 +30,7 @@ import sys
 
 from mcp.types import TextContent, Tool, ToolAnnotations
 
+import authz
 import dryrun
 import mcp_compat
 
@@ -138,10 +139,28 @@ def _tls_state() -> dict:
     }
 
 
+def _visible(tool) -> bool:
+    """Whether the calling principal may see `tool` at all.
+
+    The same decision `list_tools` makes, through the same function (`denial_for`), so the
+    introspection tools cannot hand a read-scoped token the catalogue the listing withholds.
+    No claims means no token was involved (stdio, workstation, auth off), and then nothing is
+    withheld, exactly as `list_tools` behaves.
+    """
+    claims = authz.caller_claims()
+    if claims is None:
+        return True
+    from auth.scope_gate import denial_for
+
+    return denial_for(tool, claims) is None
+
+
 def _status_payload(server_module) -> dict:
     """Build the cb_mcp_status payload from in-process server state."""
-    raw_tools = getattr(server_module, "_RAW_TOOLS", [])
-    loaded_tools = getattr(server_module, "_TOOLS", [])
+    raw_tools = [t for t in getattr(server_module, "_RAW_TOOLS", []) if _visible(t)]
+    loaded_tools = [t for t in getattr(server_module, "_TOOLS", []) if _visible(t)]
+    _seen = {t.name for t in raw_tools}
+    _scoped = authz.caller_claims() is not None
     confirmation_required = getattr(server_module, "_CONFIRMATION_REQUIRED", set())
 
     # Counted through _category_of, the SAME classifier cb_mcp_list_tools filters
@@ -167,7 +186,9 @@ def _status_payload(server_module) -> dict:
             "read_only_mode": READ_ONLY_MODE,
             "elicitation_hints": ELICITATION_HINTS,
             "disabled_tools_count": len(DISABLED_TOOLS),
-            "disabled_tools": sorted(DISABLED_TOOLS) if DISABLED_TOOLS else [],
+            "disabled_tools": sorted(
+                n for n in (DISABLED_TOOLS or ()) if not _scoped or n in _seen
+            ),
             "confirmation_required_count": len(confirmation_required),
             # Preview mode, and the exception to it.
             #
@@ -192,7 +213,9 @@ def _status_payload(server_module) -> dict:
             "dry_run": {
                 "server_wide": dryrun.server_wide(),
                 "environment_variable": dryrun.ENV,
-                "handler_owned": sorted(dryrun.handler_owned_tools()),
+                "handler_owned": sorted(
+                    n for n in dryrun.handler_owned_tools() if not _scoped or n in _seen
+                ),
             },
         },
         "tools": {
@@ -258,7 +281,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
 
         if name == "cb_mcp_list_tools":
             category = args.get("category", "all")
-            loaded_tools = getattr(server_module, "_TOOLS", [])
+            loaded_tools = [
+                t for t in getattr(server_module, "_TOOLS", []) if _visible(t)
+            ]
             rows = []
             for t in loaded_tools:
                 cat = _category_of(t)
@@ -281,6 +306,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
             loaded_tools = getattr(server_module, "_TOOLS", [])
             loaded_names = {t.name for t in loaded_tools}
             match = next((t for t in raw_tools if t.name == target), None)
+            # A tool the caller may not see is reported exactly like one that does not exist,
+            # so the answer cannot be used to probe which write tools are registered.
+            if match is not None and not _visible(match):
+                match = None
             if match is None:
                 return err(
                     f"No tool named {target!r} is registered with this server.",

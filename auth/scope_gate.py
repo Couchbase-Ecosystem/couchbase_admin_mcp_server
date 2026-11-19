@@ -7,7 +7,8 @@ Spec: docs/spec.md S3 step 3 (scope), S5 (profiles).
 Main items: `check_scope`, `denial_for`, `principal_of`, `is_read_side`,
     `session_has_automation_scope`, `set_token_claims`, `current_claims`, `clear_token_claims`,
     `configure`.
-Callers: `gui/gui_server.py`, `scripts/idp_lab_assertions.py`, `server.py`; 9 test file(s)
+Callers: `gui/gui_server.py`, `handlers/mcp_status.py`, `scripts/idp_lab_assertions.py`,
+    `server.py`; 9 test file(s)
 Callees: `auth.oidc`, `auth.request_auth`, `mcp_compat`
 
 KISS design:

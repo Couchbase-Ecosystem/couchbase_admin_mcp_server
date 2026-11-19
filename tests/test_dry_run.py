@@ -247,7 +247,13 @@ def test_the_handler_keeps_its_own_flag():
     """
     owned = dryrun.handler_owned_tools()
     assert "capella_env_reap" in owned
-    assert len(owned) == 1, f"unexpected handler-owned dry runs: {sorted(owned)}"
+    # The two fixture exports declare dry_run too: they write files while annotated
+    # read-only, so only the handler can preview them (the dispatch never does).
+    assert owned == {
+        "capella_env_reap",
+        "admin_fixture_export",
+        "capella_fixture_export",
+    }, f"unexpected handler-owned dry runs: {sorted(owned)}"
 
 
 def test_a_dry_run_is_its_own_audit_decision(a_write_tool, audited, executed):

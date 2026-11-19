@@ -108,6 +108,7 @@ from handlers.fixture_core import (
 from handlers.fixture_core import (
     META_EXP_ALIAS,
     META_ID_ALIAS,
+    bounded_page_size,
     export_statement,
 )
 
@@ -302,8 +303,18 @@ TOOLS: list[Tool] = [
                     ),
                     "items": {"type": "string"},
                 },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": (
+                        "True previews the destination and writes nothing. Declared "
+                        "here because this tool writes files while annotated "
+                        "read-only, so the dispatch cannot preview it for the caller."
+                    ),
+                },
                 "page_size": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000,
                     "description": (
                         "Documents per SQL++ page. Keep the response under the Data "
                         "API's 100 MB payload cap and 120 second timeout. Defaults "
@@ -1035,7 +1046,9 @@ def _export(args: dict) -> list[TextContent]:
                 tool="capella_fixture_export",
             )
 
-        page_size = int(args.get("page_size") or 1000)
+        page_size, page_problem = bounded_page_size(args.get("page_size"))
+        if page_problem:
+            return err(page_problem, tool="capella_fixture_export")
         xattrs = [str(x) for x in (args.get("user_xattrs") or [])]
         _bad_xattrs = _invalid_xattr_names(xattrs)
         if _bad_xattrs:

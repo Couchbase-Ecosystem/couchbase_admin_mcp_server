@@ -5,8 +5,9 @@ Component: the one place that decides scope, hard ceiling, automation and confir
     by the MCP path and the console.
 Spec: docs/spec.md S3 steps 3 to 5, S5 (profiles); docs/design/authorization.md.
 Main items: `evaluate` and its `Decision`, `hard_ceiling_tools`, `human_is_present`,
-    `caller_context`, `caller_evidence`.
-Callers: `gui/gui_server.py`, `handlers/capella/environment.py`, `server.py`; 2 test file(s)
+    `caller_context`, `caller_evidence`, `caller_claims`.
+Callers: `gui/gui_server.py`, `handlers/capella/environment.py`, `handlers/mcp_status.py`,
+    `server.py`; 2 test file(s)
 Callees: `profile_config`
 
 WHY THIS MODULE EXISTS
@@ -100,13 +101,27 @@ import profile_config
 _EVIDENCE_ATTR = "_cb_admin_human_present"
 
 
+#: The validated token claims of the call being dispatched, for the handlers that must scope what
+#: they REVEAL (`cb_mcp_list_tools`, `cb_mcp_get_tool_info`, `cb_mcp_status`). On the thread for
+#: the same reason as the evidence above: the handler runs in an executor thread that does not
+#: inherit the request's context.
+_CLAIMS_ATTR = "_cb_admin_caller_claims"
+
+
+def caller_claims() -> dict | None:
+    """The current call's validated token claims, or None (no token, or no caller context)."""
+    return getattr(threading.current_thread(), _CLAIMS_ATTR, None)
+
+
 def caller_evidence() -> bool | None:
     """The current call's own human_present, or None outside a caller context."""
     return getattr(threading.current_thread(), _EVIDENCE_ATTR, None)
 
 
 @contextlib.contextmanager
-def caller_context(*, human_present: bool) -> Iterator[None]:
+def caller_context(
+    *, human_present: bool, claims: dict | None = None
+) -> Iterator[None]:
     """Establish this call's evidence for anything downstream that asks.
 
     Both dispatch paths wrap the handler invocation in this. Nesting NARROWS only: an
@@ -130,9 +145,16 @@ def caller_context(*, human_present: bool) -> Iterator[None]:
     # construction. The docstring and the test both claimed it already.
     effective = human_present if previous is not False else False
     setattr(thread, _EVIDENCE_ATTR, effective)
+    previous_claims = getattr(thread, _CLAIMS_ATTR, None)
+    setattr(thread, _CLAIMS_ATTR, claims if claims is not None else previous_claims)
     try:
         yield
     finally:
+        if previous_claims is None:
+            with contextlib.suppress(AttributeError):
+                delattr(thread, _CLAIMS_ATTR)
+        else:
+            setattr(thread, _CLAIMS_ATTR, previous_claims)
         if previous is None:
             with contextlib.suppress(AttributeError):
                 delattr(thread, _EVIDENCE_ATTR)

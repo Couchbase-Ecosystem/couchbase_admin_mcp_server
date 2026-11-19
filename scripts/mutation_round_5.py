@@ -290,8 +290,8 @@ MUTATIONS = [
     (
         "status: list_tools reports registered tools instead of loaded ones",
         "handlers/mcp_status.py",
-        '            loaded_tools = getattr(server_module, "_TOOLS", [])\n            rows = []',
-        '            loaded_tools = getattr(server_module, "_RAW_TOOLS", [])\n            rows = []',
+        '                t for t in getattr(server_module, "_TOOLS", []) if _visible(t)\n            ]\n            rows = []',
+        '                t for t in getattr(server_module, "_RAW_TOOLS", []) if _visible(t)\n            ]\n            rows = []',
         STATUS,
     ),
     (

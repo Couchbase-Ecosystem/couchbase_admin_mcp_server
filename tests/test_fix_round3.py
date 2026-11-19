@@ -5,7 +5,7 @@ Spec: docs/spec.md S3 steps 3 and 7, S9.
 Main items: tests for `dry_run` on the fixture export tools, the `page_size` bound, the audit size cap, and the
     caller-scoped view of the `cb_mcp_*` tools.
 Callers: none; collected by pytest
-Callees: `audit`, `auth.scope_gate`, `authz`, `dryrun`, `handlers.capella.fixture`, `handlers.fixture`,
+Callees: `audit`, `auth.scope_gate`, `auth.session`, `authz`, `dryrun`, `handlers.capella.fixture`, `handlers.fixture`,
     `handlers.fixture_core`, `handlers.mcp_status`, `mcp_compat`, `server`
 
 Each test fails on the code before the fix.
@@ -19,7 +19,7 @@ import authz
 import dryrun
 import mcp_compat
 import server
-from auth import scope_gate
+from auth import scope_gate, session
 from handlers import fixture, fixture_core, mcp_status
 from handlers.capella import fixture as capella_fixture
 
@@ -206,3 +206,40 @@ def test_a_short_audit_record_is_unchanged():
     )
     assert record["args"] == {"a": "b" * 100}
     assert record["tool"] == "admin_bucket_list"
+
+
+def _load_console(monkeypatch):
+    import importlib
+    import sys
+
+    monkeypatch.setenv("CB_ADMIN_PROFILE", "workstation")
+    monkeypatch.setenv("CB_GUI_INSECURE_NO_AUTH", "1")
+    monkeypatch.setenv("OAUTH_ENABLED", "false")
+    for name in ("profile_config", "handlers.shared", "authz"):
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+    sys.modules.pop("gui.gui_server", None)
+    return importlib.import_module("gui.gui_server")
+
+
+def test_login_state_cookie_is_a_host_cookie_over_tls(monkeypatch):
+    gui = _load_console(monkeypatch)
+    monkeypatch.setattr(session, "cookie_is_secure", lambda: True)
+    # __Host- requires Secure, path "/" and no Domain: the browser then refuses to let a
+    # sibling subdomain or an origin without a certificate for this host plant it.
+    assert gui._login_state_cookie() == ("__Host-cb_admin_login_state", "/")
+
+
+def test_login_state_cookie_keeps_the_narrow_path_on_plain_http(monkeypatch):
+    gui = _load_console(monkeypatch)
+    monkeypatch.setattr(session, "cookie_is_secure", lambda: False)
+    assert gui._login_state_cookie() == ("cb_admin_login_state", "/auth/")
+
+
+def test_a_planted_plain_cookie_is_not_read_when_the_host_cookie_is_in_force(
+    monkeypatch,
+):
+    gui = _load_console(monkeypatch)
+    monkeypatch.setattr(session, "cookie_is_secure", lambda: True)
+    name, _ = gui._login_state_cookie()
+    assert name != "cb_admin_login_state"

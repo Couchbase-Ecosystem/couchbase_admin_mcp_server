@@ -923,6 +923,25 @@ _MAX_PKCE_ENTRIES = 256
 #: Cookie carrying the state of the login this browser started. Path-scoped to
 #: /auth/ so it is not sent with ordinary console traffic.
 _LOGIN_STATE_COOKIE = "cb_admin_login_state"
+_LOGIN_STATE_COOKIE_HOST = "__Host-cb_admin_login_state"
+
+
+def _login_state_cookie() -> tuple[str, str]:
+    """The (name, path) of the login-state cookie for this deployment.
+
+    Over TLS it is a `__Host-` cookie: the browser refuses to let a sibling subdomain, or any
+    origin without a valid certificate for this exact host, set one, and requires `Secure` and
+    path `/`. A plain cookie can be PLANTED by anything on the same host (cookies are not
+    port-isolated), and planting the attacker's own state is all login CSRF needs: the victim
+    then redeems the attacker's authorization code and lands in the attacker's session. Plain
+    http (a laptop) cannot use the prefix, so it keeps the narrow path and the plain name.
+    """
+    from auth import session as _session
+
+    if _session.cookie_is_secure():
+        return _LOGIN_STATE_COOKIE_HOST, "/"
+    return _LOGIN_STATE_COOKIE, "/auth/"
+
 
 #: The shape secrets.token_urlsafe(32) produces. Checked before any comparison so a
 #: malformed `state` is a 400 rather than a TypeError from compare_digest.
@@ -1016,14 +1035,15 @@ def auth_login():
     # two independent clients. The state now has to arrive in BOTH the query string
     # and a cookie only the initiating browser holds.
     response = redirect(url)
+    _cookie_name, _cookie_path = _login_state_cookie()
     response.set_cookie(
-        _LOGIN_STATE_COOKIE,
+        _cookie_name,
         state,
         max_age=_PKCE_TTL,
         httponly=True,
         samesite="Lax",
         secure=_session.cookie_is_secure(),
-        path="/auth/",
+        path=_cookie_path,
     )
     return response
 
@@ -1055,7 +1075,7 @@ def auth_callback():
     # `state` is unvalidated query input -- so /auth/callback?state=%C3%A9 was an
     # unauthenticated HTTP 500 with a traceback. The shape is checked first, so a value
     # that cannot be one of our states is refused before any comparison.
-    cookie_state = request.cookies.get(_LOGIN_STATE_COOKIE, "")
+    cookie_state = request.cookies.get(_login_state_cookie()[0], "")
     if not _STATE_RE.fullmatch(state or "") or not cookie_state:
         return jsonify(
             {

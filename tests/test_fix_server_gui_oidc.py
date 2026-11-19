@@ -47,8 +47,26 @@ def test_a_cancelled_call_is_audited_and_reraised(monkeypatch):
             return shared.ok({"x": 1})
 
     name = "admin_xdcr_conflict_log_query"
-    if name not in server._HANDLERS:
-        pytest.skip("tool not loaded in this configuration")
+    # Hermetic: whether this tool is exposed depends on the ambient deployment mode
+    # (CB_DEPLOYMENT, the Capella variables a developer shell carries). When it was not
+    # exposed the dispatch refused at once, so there was nothing in flight to cancel and the
+    # test failed for a reason unrelated to cancellation. Expose it explicitly.
+    from mcp.types import Tool, ToolAnnotations
+
+    if name not in {t.name for t in server._TOOLS}:
+        stub = Tool(
+            name=name,
+            description="stub",
+            inputSchema={
+                "type": "object",
+                "properties": {"bucket_name": {"type": "string"}},
+            },
+            annotations=ToolAnnotations(readOnlyHint=True),
+        )
+        monkeypatch.setattr(server, "_TOOLS", [*server._TOOLS, stub])
+    # This test is about cancellation, not authorization: an enterprise-profile shell would
+    # otherwise refuse the call for want of a token before any handler is in flight.
+    monkeypatch.setattr(server, "check_scope", lambda _tool: None)
     monkeypatch.setitem(server._HANDLERS, name, Slow())
 
     async def main():

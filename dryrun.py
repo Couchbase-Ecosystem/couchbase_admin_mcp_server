@@ -71,7 +71,10 @@ from typing import Any
 ARG = "dry_run"
 ENV = "CB_ADMIN_DRY_RUN"
 
-_TRUE = ("1", "true", "yes", "on")
+#: The same spellings as the shared truthy set (`handlers.shared.TRUTHY_VALUES`). This was a
+#: shorter list, so `CB_ADMIN_DRY_RUN=y` silently left preview mode OFF while every other
+#: boolean control read `y` as true -- a fail-open spelling on an operator control.
+_TRUE = ("1", "true", "yes", "on", "y", "t")
 
 #: What the flag says in a tool schema, so the model sending it knows what it gets back.
 SCHEMA_PROPERTY = {

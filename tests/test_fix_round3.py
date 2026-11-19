@@ -2,10 +2,10 @@
 
 Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S3 steps 3 and 7, S9.
-Main items: tests for `dry_run` on the fixture export tools, the `page_size` bound, and the
+Main items: tests for `dry_run` on the fixture export tools, the `page_size` bound, the audit size cap, and the
     caller-scoped view of the `cb_mcp_*` tools.
 Callers: none; collected by pytest
-Callees: `auth.scope_gate`, `authz`, `dryrun`, `handlers.capella.fixture`, `handlers.fixture`,
+Callees: `audit`, `auth.scope_gate`, `authz`, `dryrun`, `handlers.capella.fixture`, `handlers.fixture`,
     `handlers.fixture_core`, `handlers.mcp_status`, `mcp_compat`, `server`
 
 Each test fails on the code before the fix.
@@ -167,3 +167,42 @@ def test_claims_do_not_leak_past_the_context():
     with authz.caller_context(human_present=False, claims=_reader_claims()):
         assert authz.caller_claims() is not None
     assert authz.caller_claims() is None
+
+
+@pytest.mark.parametrize("spelling", ["1", "true", "yes", "on", "y", "t", " Y "])
+def test_server_wide_dry_run_reads_every_truthy_spelling(monkeypatch, spelling):
+    monkeypatch.setenv(dryrun.ENV, spelling)
+    assert dryrun.server_wide() is True
+
+
+def test_server_wide_dry_run_is_off_for_other_values(monkeypatch):
+    for value in ("", "0", "false", "no", "off", "maybe"):
+        monkeypatch.setenv(dryrun.ENV, value)
+        assert dryrun.server_wide() is False
+
+
+def test_an_audit_record_cannot_be_made_unbounded():
+    import audit
+
+    huge = "A" * 5_000_000
+    record = audit.build_record(
+        tool=huge,
+        decision="denied_scope",
+        arguments={"body": {"statement": huge, "items": [huge]}},
+        reason=huge,
+    )
+    line = json.dumps(record)
+    assert len(line) < 20_000
+    assert "chars not logged" in record["tool"]
+    assert "chars not logged" in record["reason"]
+    assert "chars not logged" in record["args"]["body"]["statement"]
+
+
+def test_a_short_audit_record_is_unchanged():
+    import audit
+
+    record = audit.build_record(
+        tool="admin_bucket_list", decision="allowed", arguments={"a": "b" * 100}
+    )
+    assert record["args"] == {"a": "b" * 100}
+    assert record["tool"] == "admin_bucket_list"

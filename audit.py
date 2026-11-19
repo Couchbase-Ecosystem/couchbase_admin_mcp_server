@@ -263,6 +263,12 @@ def reset_audit_sink() -> None:
 #: a log line; unbounded input there is a log-flooding and log-forgery vector.
 _MAX_CORRELATION_LEN = 200
 
+#: Longest string the audit record keeps from any one field. Only the correlation id was
+#: capped, so any authenticated caller, including one whose token grants nothing, could post
+#: multi-megabyte tool names or arguments and rotate real history out of retention. The
+#: record says how much was dropped, so a truncated entry is never mistaken for the whole.
+_MAX_FIELD_LEN = 2048
+
 #: Argument key through which a workflow passes its provenance. Stripped from the
 #: arguments before they reach any REST call, exactly like `confirm`.
 CORRELATION_ARG = "correlation_id"
@@ -282,6 +288,23 @@ def _redact(value: Any) -> Any:
     from handlers.shared import redact as _impl
 
     return _impl(value)
+
+
+def _bound(value: Any, _depth: int = 0) -> Any:
+    """Cap every string leaf at `_MAX_FIELD_LEN`, noting how many characters were not logged."""
+    if isinstance(value, str):
+        if len(value) <= _MAX_FIELD_LEN:
+            return value
+        return f"{value[:_MAX_FIELD_LEN]}...[{len(value) - _MAX_FIELD_LEN} chars not logged]"
+    if _depth > 20:
+        return "[nesting too deep to log]"
+    if isinstance(value, dict):
+        return {
+            _bound(str(k), _depth + 1): _bound(v, _depth + 1) for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_bound(v, _depth + 1) for v in value]
+    return value
 
 
 def sanitize_correlation(value: Any) -> str | None:
@@ -348,10 +371,11 @@ def build_record(
     record: dict[str, Any] = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "event": "tool_call",
-        "tool": tool,
+        "tool": _bound(tool),
         "decision": decision,
-        # redact() masks credential-looking keys, including nested bodies.
-        "args": _redact(args),
+        # redact() masks credential-looking keys, including nested bodies. _bound() then
+        # caps each string, so one call cannot write an unbounded record.
+        "args": _bound(_redact(args)),
     }
 
     if principal:
@@ -391,7 +415,7 @@ def build_record(
         # this change back to a human decision. Log-only, never authorizing.
         record["correlation_id"] = correlation
     if reason:
-        record["reason"] = reason
+        record["reason"] = _bound(reason)
     if duration_ms is not None:
         record["duration_ms"] = round(duration_ms, 1)
     if source:

@@ -104,6 +104,12 @@ def _preserve_ownership_marker(name: str, args: dict, body_in: dict) -> None:
     and Capella leaves the stored value untouched.
     """
     if "description" not in body_in:
+        # The PUT is documented as a REPLACE, so an omitted description may be read as an
+        # empty one and wipe the marker. When a marker exists, send the stored description
+        # back unchanged rather than trusting the field to be left alone.
+        stored = _fetch_cluster(args).get("description")
+        if guardrails.parse_marker(stored):
+            body_in["description"] = stored
         return
     supplied = str(body_in.get("description") or "")
     try:
@@ -360,6 +366,11 @@ def _apply_guardrails(name: str, op, args: dict, policy: guardrails.Policy) -> N
                 if isinstance(body_dir := args.get("body"), dict)
                 else None
             )
+            # An omitted direction is judged as twoWay, the stricter reading: if Capella
+            # defaults it that way the SOURCE is written to as well, and a missing field must
+            # not be the way past the ownership check on that cluster.
+            if direction is None:
+                direction = "twoWay"
             if direction is not None:
                 if not isinstance(direction, str) or direction.casefold() not in (
                     "oneway",
@@ -616,30 +627,39 @@ def _handle_primitive(name: str, args: dict) -> list[TextContent]:
         # it is not, even on a call where the value is inert.
         guardrails.resolve_org(args, policy)
 
-    if op.guarded:
-        # Before any guard: a body with `name` and `Name` could pass the checks on one
-        # spelling and be read by Capella as the other.
-        guardrails.assert_no_case_collisions(args.get("body"))
-        guardrails.assert_guarded_keys_canonical(args.get("body"))
-        _apply_guardrails(name, op, args, policy)
+    # The spend ceiling counts, then the POST creates: hold one lock across both for the create
+    # primitive so parallel calls cannot all pass the count (see guardrails.CREATE_LOCK).
+    _lock = guardrails.CREATE_LOCK if name == "capella_cluster_create" else None
+    if _lock is not None:
+        _lock.acquire()
+    try:
+        if op.guarded:
+            # Before any guard: a body with `name` and `Name` could pass the checks on one
+            # spelling and be read by Capella as the other.
+            guardrails.assert_no_case_collisions(args.get("body"))
+            guardrails.assert_guarded_keys_canonical(args.get("body"))
+            _apply_guardrails(name, op, args, policy)
 
-    path = build_path(op.path, args)
-    body = args.get("body")
+        path = build_path(op.path, args)
+        body = args.get("body")
 
-    if op.paginated:
-        result: Any = capella_list(
-            path,
-            params=_query_params(op, args),
-            max_items=args.get("max_items"),
-        )
-    else:
-        result = capella_request(
-            op.method,
-            path,
-            params=_query_params(op, args) or None,
-            body=body,
-            content_type=op.body_content_type,
-        )
+        if op.paginated:
+            result: Any = capella_list(
+                path,
+                params=_query_params(op, args),
+                max_items=args.get("max_items"),
+            )
+        else:
+            result = capella_request(
+                op.method,
+                path,
+                params=_query_params(op, args) or None,
+                body=body,
+                content_type=op.body_content_type,
+            )
+    finally:
+        if _lock is not None:
+            _lock.release()
 
     if op.sensitive_response:
         # The response carries a generated password or API token. Redact before

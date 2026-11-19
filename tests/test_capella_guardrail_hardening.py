@@ -1558,7 +1558,9 @@ _WRITE_CASES = [
     (
         "capella_replication_create",
         {},
-        lambda target_id: {"target": {"cluster": target_id}},
+        # Stated oneWay: an omitted direction is judged as twoWay, which writes into the source
+        # too (see test_an_omitted_replication_direction_is_checked_like_twoway).
+        lambda target_id: {"target": {"cluster": target_id}, "direction": "oneWay"},
     ),
 ]
 
@@ -1614,3 +1616,86 @@ def test_an_unmanaged_target_is_refused_even_from_a_managed_source(
     )
     assert payload.get("guardrail") is True, payload
     assert rec.mutating_requests == []
+
+
+def test_an_omitted_replication_direction_is_checked_like_twoway(two_clusters):
+    """Capella may default a missing direction to twoWay, which writes into the SOURCE."""
+    payload = _call(
+        "capella_replication_create",
+        project_id="test-proj",
+        cluster_id="src",
+        body={"target": {"cluster": "dst"}},
+    )
+    assert payload.get("guardrail") is True, payload
+    assert two_clusters.mutating_requests == []
+
+
+def _race_creates(monkeypatch, parallel: int) -> int:
+    """Fire `parallel` creates at a ceiling of one and return how many reached Capella."""
+    import threading
+    import time
+
+    monkeypatch.setenv("CAPELLA_MAX_ENVIRONMENTS", "1")
+    created: list[dict] = []
+    lock = threading.Lock()
+
+    def listing(path, *, params=None, page_size=None, max_items=None):
+        with lock:
+            data = list(created)
+        time.sleep(0.02)  # widen the window between the count and the create
+        return {"data": data, "itemCount": len(data), "truncated": False}
+
+    def request(
+        method, path, *, params=None, body=None, content_type="application/json"
+    ):
+        if method == "POST":
+            with lock:
+                created.append(
+                    {
+                        "id": f"c{len(created)}",
+                        "name": body["name"],
+                        "description": body["description"],
+                    }
+                )
+        return {"status": "ok"}
+
+    monkeypatch.setattr(capella, "capella_request", request)
+    monkeypatch.setattr(capella, "capella_list", listing)
+
+    def worker(index: int) -> None:
+        _call(
+            "capella_cluster_create",
+            project_id="test-proj",
+            body={"name": f"mcptest-race-{index}", "description": "x"},
+        )
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(parallel)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return len(created)
+
+
+def test_parallel_creates_cannot_exceed_the_ceiling(monkeypatch):
+    assert _race_creates(monkeypatch, 6) == 1
+
+
+def test_the_race_test_would_catch_a_missing_lock(monkeypatch):
+    """Proves the test above is not vacuous: with the lock removed, creates overshoot."""
+
+    class _NoLock:
+        def acquire(self):
+            return True
+
+        def release(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(guardrails, "CREATE_LOCK", _NoLock())
+    assert _race_creates(monkeypatch, 6) > 1

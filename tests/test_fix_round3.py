@@ -5,7 +5,7 @@ Spec: docs/spec.md S3 steps 3 and 7, S9.
 Main items: tests for `dry_run` on the fixture export tools, the `page_size` bound, the audit size cap, and the
     caller-scoped view of the `cb_mcp_*` tools.
 Callers: none; collected by pytest
-Callees: `audit`, `auth.scope_gate`, `auth.session`, `authz`, `dryrun`, `handlers.capella.fixture`, `handlers.fixture`,
+Callees: `audit`, `auth.scope_gate`, `auth.session`, `authz`, `dryrun`, `handlers.capella.guardrails`, `handlers.shared`, `logging_config`, `handlers.capella.fixture`, `handlers.fixture`,
     `handlers.fixture_core`, `handlers.mcp_status`, `mcp_compat`, `server`
 
 Each test fails on the code before the fix.
@@ -243,3 +243,61 @@ def test_a_planted_plain_cookie_is_not_read_when_the_host_cookie_is_in_force(
     monkeypatch.setattr(session, "cookie_is_secure", lambda: True)
     name, _ = gui._login_state_cookie()
     assert name != "cb_admin_login_state"
+
+
+def test_uri_password_redaction_is_not_quadratic():
+    import time
+
+    from handlers import shared
+
+    started = time.perf_counter()
+    shared.redact_uri_credentials("a://u:" + "/" * 262_144)  # no "@": returns at once
+    shared.redact_uri_credentials("a://u:/" * 37_000 + "@")  # many starts, one "@"
+    shared.redact_text("a://u:" + "/" * 262_144 + "@")
+    # Before the fix this took minutes; even a slow machine finishes in well under 10 s.
+    assert time.perf_counter() - started < 10
+
+
+def test_uri_password_redaction_still_masks_a_slash_in_the_password():
+    from handlers import shared
+
+    out = shared.redact_uri_credentials("couchbase://admin:p/a?s#w@host:8091")
+    assert "p/a" not in out
+    assert out.endswith("@host:8091")
+
+
+def test_leading_hint_blocks_do_not_make_the_dml_check_exponential():
+    import time
+
+    from handlers import shared
+
+    started = time.perf_counter()
+    assert shared.is_dml_statement("/*+a*/ " * 32 + "SELECT 1") is False
+    assert shared.is_dml_statement("/*+a*/ /* c */ DELETE FROM b") is True
+    assert time.perf_counter() - started < 10
+
+
+def test_a_log_record_whose_arguments_cannot_be_masked_is_not_emitted_unmasked(
+    monkeypatch,
+):
+    import logging
+
+    import logging_config
+    from handlers import shared
+
+    def boom(_value):
+        raise RuntimeError("scrub failed")
+
+    monkeypatch.setattr(shared, "redact", boom)
+    record = logging.LogRecord(
+        "t", logging.INFO, __file__, 1, "password=%s", ("hunter2",), None
+    )
+    logging_config.SafeRecordFilter().filter(record)
+    assert "hunter2" not in record.getMessage()
+
+
+def test_cluster_creates_are_serialised_by_a_reentrant_lock():
+    from handlers.capella import guardrails
+
+    with guardrails.CREATE_LOCK, guardrails.CREATE_LOCK:
+        pass

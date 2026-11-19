@@ -193,9 +193,12 @@ class SafeRecordFilter(logging.Filter):
                 elif isinstance(record.args, tuple):
                     record.args = tuple(_scrub(a) for a in record.args)
         except Exception:
-            # Logging must never break a request. An unscrubbed record is still
-            # better emitted than dropped, and the flattening below still applies.
-            pass
+            # Logging must never break a request, and must not emit what it could not mask
+            # either. The scrub failing (an int-keyed dict, an object whose str() raises) used
+            # to leave the arguments UNMASKED. Replace them with a placeholder instead: the
+            # record is still emitted, and the flattening below still applies.
+            record.args = ()
+            record.msg = "[log arguments withheld: they could not be masked]"
 
         try:
             # Interpolate here, then flatten, then blank the args so the formatter

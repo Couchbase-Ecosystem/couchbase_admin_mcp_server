@@ -132,9 +132,19 @@ def test_a_cluster_that_never_had_a_marker_gains_nothing(cluster):
     assert body["description"] == "new text"
 
 
-def test_an_update_that_does_not_touch_the_description_is_untouched(cluster):
-    """No description in the body means Capella leaves the stored value alone,
-    so there is nothing to preserve."""
+def test_an_update_that_omits_the_description_carries_the_stored_one(cluster):
+    """The PUT is documented as a REPLACE, so an omitted description might be read as empty
+    and wipe the marker. The stored description is sent back unchanged instead."""
+    body = {"name": "renamed"}
+    capella._preserve_ownership_marker("capella_cluster_update", ARGS, body)
+    assert guardrails.parse_marker(body["description"]) == MARKER
+    assert body["name"] == "renamed"
+
+
+def test_an_update_that_omits_the_description_on_an_unmarked_cluster_is_untouched(
+    cluster,
+):
+    cluster["response"] = {"name": "not-ours", "description": "someone else's"}
     body = {"name": "renamed"}
     capella._preserve_ownership_marker("capella_cluster_update", ARGS, body)
     assert body == {"name": "renamed"}

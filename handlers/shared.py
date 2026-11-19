@@ -727,7 +727,7 @@ def is_7x() -> bool:
 _DML_RE = re.compile(
     r"""
     ^\s*                           # leading whitespace
-    (?:--[^\n]*\n\s*|/\*.*?\*/\s*)*  # optional line / block comments
+    (?:--[^\n]*\n\s*|/\*(?:(?!\*/).)*\*/\s*)*  # optional line / block comments, each ended by its FIRST close
     (?P<kw>INSERT|UPSERT|UPDATE|DELETE|MERGE|CREATE|DROP|BUILD|ALTER|GRANT|REVOKE|EXECUTE|INFER)
     \b
     """,
@@ -1552,7 +1552,7 @@ _URI_CREDENTIAL_LOOSE_RE = re.compile(
     r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]{0,31}://)"
     r"(?P<user>[^/?#@\s:\"\']+)"
     r":(?!\d+(?:[/?#]|$|\s|\"|\'))"
-    r"(?P<password>[^\s\"\']*[/?#][^\s\"\']*)"
+    r"(?P<password>[^\s\"\'/?#]{0,512}[/?#][^\s\"\']{0,512})"
     r"(?=@)"
 )
 
@@ -1571,6 +1571,10 @@ def redact_uri_credentials(text: str) -> str:
     server using?" is the main reason someone reads this field.
     """
     if not isinstance(text, str) or not text:
+        return text
+    # No "@" means no userinfo, so neither pattern can match. Checked first because the loose
+    # pattern backtracks and this text can be 256 KB of caller-chosen characters.
+    if "@" not in text:
         return text
     text = _URI_CREDENTIAL_RE.sub(
         lambda m: f"{m.group('scheme')}{m.group('user')}:{REDACTED}", text

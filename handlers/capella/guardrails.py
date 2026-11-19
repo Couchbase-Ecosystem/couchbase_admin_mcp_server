@@ -75,6 +75,7 @@ import ipaddress
 import json
 import os
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -87,6 +88,13 @@ _log = get_logger("handlers.capella.guardrails")
 
 # The marker that identifies a cluster/app-service as owned by this server.
 # Deliberately verbose and unlikely to collide with a human-written description.
+#: Serialises "count the managed environments, then create one". Each create used to list and
+#: count, see room, and POST, so N parallel calls all saw the same count and the spend ceiling
+#: became ceiling + N - 1. Reentrant because `capella_env_ensure` holds it while it calls the
+#: create primitive on the same thread. This orders calls inside ONE server process; two
+#: processes against one organization still race, which only Capella's own quota can stop.
+CREATE_LOCK = threading.RLock()
+
 ENV_MARKER_PREFIX = "mcp-env:"
 
 _ISO = "%Y-%m-%dT%H:%M:%SZ"

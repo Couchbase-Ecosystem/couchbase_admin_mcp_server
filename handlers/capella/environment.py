@@ -795,48 +795,51 @@ def _ensure(args: dict) -> dict:
     cluster = _get_cluster(org, project, env_name)
 
     if cluster is None:
-        # Skip the multi-project count if THIS SCOPE was just refused.
-        scope = g.ceiling_scope_key(policy, org, project)
-        if g.ceiling_refusal_active(scope):
-            g.raise_ceiling_refusal(policy)
-        g.assert_capacity(
-            _count_managed_environments(org, policy, project), policy, scope=scope
-        )
+        # Count and create under ONE lock, or parallel ensures all see room and all create
+        # (see g.CREATE_LOCK). Reentrant: the create primitive takes it again on this thread.
+        with g.CREATE_LOCK:
+            # Skip the multi-project count if THIS SCOPE was just refused.
+            scope = g.ceiling_scope_key(policy, org, project)
+            if g.ceiling_refusal_active(scope):
+                g.raise_ceiling_refusal(policy)
+            g.assert_capacity(
+                _count_managed_environments(org, policy, project), policy, scope=scope
+            )
 
-        marker = g.build_marker(
-            env_name,
-            ttl_hours=args.get("ttl_hours"),
-            owner=str(args.get("owner") or ""),
-            extra={"app_services": want_app_services},
-        )
-        body = {
-            "name": cluster_name,
-            "description": marker,
-            "cloudProvider": {
-                "type": args.get("cloud_provider") or "aws",
-                "region": args.get("region") or "us-east-1",
-                "cidr": args.get("cluster_cidr") or "10.0.1.0/23",
-            },
-            "couchbaseServer": {"version": args.get("server_version") or "7.6"},
-            "serviceGroups": [
-                {
-                    "node": {
-                        "compute": {"cpu": 4, "ram": 16},
-                        "disk": {"storage": 50, "type": "gp3", "iops": 3000},
-                    },
-                    "numOfNodes": 3,
-                    "services": ["data", "query", "index"],
-                }
-            ],
-            "availability": {"type": "single"},
-            "support": {"plan": "basic", "timezone": "ET"},
-        }
-        _invoke(
-            "capella_cluster_create",
-            {"organization_id": org, "project_id": project},
-            body=body,
-        )
-        actions.append(f"created cluster {cluster_name}")
+            marker = g.build_marker(
+                env_name,
+                ttl_hours=args.get("ttl_hours"),
+                owner=str(args.get("owner") or ""),
+                extra={"app_services": want_app_services},
+            )
+            body = {
+                "name": cluster_name,
+                "description": marker,
+                "cloudProvider": {
+                    "type": args.get("cloud_provider") or "aws",
+                    "region": args.get("region") or "us-east-1",
+                    "cidr": args.get("cluster_cidr") or "10.0.1.0/23",
+                },
+                "couchbaseServer": {"version": args.get("server_version") or "7.6"},
+                "serviceGroups": [
+                    {
+                        "node": {
+                            "compute": {"cpu": 4, "ram": 16},
+                            "disk": {"storage": 50, "type": "gp3", "iops": 3000},
+                        },
+                        "numOfNodes": 3,
+                        "services": ["data", "query", "index"],
+                    }
+                ],
+                "availability": {"type": "single"},
+                "support": {"plan": "basic", "timezone": "ET"},
+            }
+            _invoke(
+                "capella_cluster_create",
+                {"organization_id": org, "project_id": project},
+                body=body,
+            )
+            actions.append(f"created cluster {cluster_name}")
         return _phase_result(
             "creating_cluster",
             environment=env_name,

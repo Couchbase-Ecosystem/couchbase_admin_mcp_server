@@ -33,7 +33,7 @@ import json
 import pytest
 
 from handlers import diagnostics
-from handlers.shared import ERROR_MARKER
+from handlers.shared import ERROR_MARKER, sql_identifier, sql_keyspace
 
 
 def payload(result) -> dict:
@@ -247,9 +247,9 @@ def test_the_walk_reaches_operators_nested_in_lists_and_objects():
     ],
 )
 def test_an_identifier_is_quoted_and_its_backticks_doubled(given, expected):
-    assert diagnostics._safe_ident(given) == expected
+    assert sql_identifier(given) == expected
 
 
 def test_a_keyspace_defaults_its_scope_and_collection():
-    assert diagnostics._keyspace("b", None, None) == "`b`.`_default`.`_default`"
-    assert diagnostics._keyspace("b", "s", "c") == "`b`.`s`.`c`"
+    assert sql_keyspace("b", None, None) == "`b`.`_default`.`_default`"
+    assert sql_keyspace("b", "s", "c") == "`b`.`s`.`c`"

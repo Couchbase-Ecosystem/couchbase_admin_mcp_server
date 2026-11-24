@@ -32,6 +32,7 @@ from .shared import (
     get_sdk_cluster,
     ok,
     refuse_undeclared,
+    sql_identifier,
 )
 
 TOOLS: list[Tool] = [
@@ -195,12 +196,6 @@ TOOLS: list[Tool] = [
 ]
 
 
-def _safe_ident(s: str) -> str:
-    """Backtick-quote and escape an identifier for N1QL/SQL++.
-    Couchbase backtick-quoting requires doubling embedded backticks."""
-    return "`" + (s or "").replace("`", "``") + "`"
-
-
 def _run_n1ql(statement: str) -> list[TextContent]:
     from couchbase.options import QueryOptions
 
@@ -293,9 +288,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
                     tool=name,
                 )
 
-            bucket = _safe_ident(args["bucket_name"])
-            scope = _safe_ident(args.get("scope_name", "_default"))
-            coll = _safe_ident(args.get("collection_name", "_default"))
+            bucket = sql_identifier(args["bucket_name"])
+            scope = sql_identifier(args.get("scope_name", "_default"))
+            coll = sql_identifier(args.get("collection_name", "_default"))
 
             # arg_truthy, not raw truthiness. These are declared booleans that
             # nothing enforces as boolean, and the GUI/console path applies no schema
@@ -303,7 +298,7 @@ def handle(name: str, args: dict) -> list[TextContent]:
             # full PRIMARY index on a production bucket and silently discarded the
             # `fields` the caller asked for. Same class as the fixed BUG-5.
             if arg_truthy(args.get("is_primary")):
-                idx = _safe_ident(args.get("index_name", "#primary"))
+                idx = sql_identifier(args.get("index_name", "#primary"))
                 stmt = f"CREATE PRIMARY INDEX {idx} ON {bucket}.{scope}.{coll}"
             else:
                 if not args.get("index_name"):
@@ -312,8 +307,8 @@ def handle(name: str, args: dict) -> list[TextContent]:
                     )
                 if not args.get("fields"):
                     return err("fields are required for non-primary indexes", tool=name)
-                idx = _safe_ident(args["index_name"])
-                fields = ", ".join(_safe_ident(f) for f in args["fields"])
+                idx = sql_identifier(args["index_name"])
+                fields = ", ".join(sql_identifier(f) for f in args["fields"])
                 stmt = f"CREATE INDEX {idx} ON {bucket}.{scope}.{coll} ({fields})"
 
             withs = []
@@ -343,9 +338,9 @@ def handle(name: str, args: dict) -> list[TextContent]:
                     "bucket_name is required when statement is not provided", tool=name
                 )
 
-            bucket = _safe_ident(args["bucket_name"])
-            scope = _safe_ident(args.get("scope_name", "_default"))
-            coll = _safe_ident(args.get("collection_name", "_default"))
+            bucket = sql_identifier(args["bucket_name"])
+            scope = sql_identifier(args.get("scope_name", "_default"))
+            coll = sql_identifier(args.get("collection_name", "_default"))
             # `is_primary="false"` used to drop the bucket's PRIMARY index instead
             # of the named one -- the opposite index destroyed, and the one the
             # caller named still present.
@@ -354,12 +349,12 @@ def handle(name: str, args: dict) -> list[TextContent]:
             else:
                 if not args.get("index_name"):
                     return err("index_name is required for non-primary drop", tool=name)
-                idx = _safe_ident(args["index_name"])
+                idx = sql_identifier(args["index_name"])
                 stmt = f"DROP INDEX {idx} ON {bucket}.{scope}.{coll}"
             return _run_n1ql(stmt)
 
         if name == "admin_index_build":
-            bucket = _safe_ident(args["bucket_name"])
+            bucket = sql_identifier(args["bucket_name"])
             scope = args.get("scope_name")
             coll = args.get("collection_name")
             # Refuse a half-specified keyspace instead of silently widening it.
@@ -375,10 +370,10 @@ def handle(name: str, args: dict) -> list[TextContent]:
                     "you named.",
                     tool=name,
                 )
-            indexes = ", ".join(_safe_ident(i) for i in args["index_names"])
+            indexes = ", ".join(sql_identifier(i) for i in args["index_names"])
             if scope and coll:
                 # CB 7+ scoped build
-                keyspace = f"{bucket}.{_safe_ident(scope)}.{_safe_ident(coll)}"
+                keyspace = f"{bucket}.{sql_identifier(scope)}.{sql_identifier(coll)}"
             else:
                 keyspace = bucket
             stmt = f"BUILD INDEX ON {keyspace} ({indexes})"

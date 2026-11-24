@@ -3,15 +3,15 @@ The SQL++ that `handlers/indexes.py` and `handlers/diagnostics.py` construct by 
 
 Component: regression suite; see tests/README.md.
 Spec: docs/spec.md S1.
-Main items: 32 test function(s). Helpers and fixtures: `_Capture`, `_QueryOptions`, `sql`,
+Main items: 33 test function(s). Helpers and fixtures: `_Capture`, `_QueryOptions`, `sql`,
     `_body`.
 Callers: none; collected by pytest
-Callees: `handlers.diagnostics`, `handlers.indexes`, `handlers.shared`
+Callees: `handlers.diagnostics`, `handlers.eight_x`, `handlers.indexes`, `handlers.shared`
 
 WHY THIS IS WORTH TESTING RATHER THAN JUST COVERING
 ===================================================
 These two modules build statements by interpolating caller-supplied names into f-strings.
-Every one of those names comes from a model, which got it from a user. `_safe_ident` is the
+Every one of those names comes from a model, which got it from a user. `shared.sql_identifier` is the
 only thing between that and injection, and it works by doubling backticks inside a
 backtick-quoted identifier — the SQL++ escaping rule.
 
@@ -31,7 +31,7 @@ import json
 import pytest
 from mcp.types import TextContent
 
-from handlers import diagnostics, indexes
+from handlers import diagnostics, eight_x, indexes, shared
 
 
 class _Capture:
@@ -116,7 +116,32 @@ def _body(result) -> dict:
     ],
 )
 def test_identifier_quoting(given, expected):
-    assert indexes._safe_ident(given) == expected
+    assert shared.sql_identifier(given) == expected
+
+
+def test_every_sql_builder_quotes_through_the_one_shared_helper():
+    """The three handler modules that build SQL++ by interpolation once each carried
+    their own copy of the quoting function, and the mutation harness only exercised
+    the copy in `indexes`. Holding them to the shared object means a mutation of the
+    injection boundary is a mutation of every caller.
+
+    Compared by defining module and name, not identity: other tests reload
+    `handlers.shared` (AGENTS.md 2.2), after which the handlers still hold the
+    function object from the first import."""
+    for module in (indexes, diagnostics, eight_x):
+        assert not hasattr(module, "_safe_ident"), module.__name__
+    used = [
+        (indexes, "sql_identifier"),
+        (eight_x, "sql_identifier"),
+        (eight_x, "sql_keyspace"),
+        (diagnostics, "sql_keyspace"),
+    ]
+    for module, name in used:
+        fn = getattr(module, name)
+        assert (fn.__module__, fn.__qualname__) == ("handlers.shared", name), (
+            module.__name__
+        )
+    assert shared.sql_identifier.__qualname__ == "sql_identifier"
 
 
 def test_a_hostile_bucket_name_cannot_escape_its_identifier(sql):

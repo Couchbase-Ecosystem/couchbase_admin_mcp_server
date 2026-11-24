@@ -1014,16 +1014,16 @@ MUTATIONS = [
     # ── SQL++ identifier quoting: the injection boundary ────────────────────
     (
         "sql: identifier quoting stops doubling backticks, so a name can escape",
-        "handlers/indexes.py",
-        '    return "`" + (s or "").replace("`", "``") + "`"',
-        '    return "`" + (s or "") + "`"',
+        "handlers/shared.py",
+        '    return "`" + (name or "").replace("`", "``") + "`"',
+        '    return "`" + (name or "") + "`"',
         SQLB,
     ),
     (
         "sql: identifiers are interpolated unquoted",
-        "handlers/indexes.py",
-        '    return "`" + (s or "").replace("`", "``") + "`"',
-        '    return s or ""',
+        "handlers/shared.py",
+        '    return "`" + (name or "").replace("`", "``") + "`"',
+        '    return name or ""',
         SQLB,
     ),
     (

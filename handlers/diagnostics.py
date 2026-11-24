@@ -42,6 +42,7 @@ from .shared import (
     err,
     get_sdk_cluster,
     ok,
+    sql_keyspace,
 )
 
 _log = get_logger("handlers.diagnostics")
@@ -143,17 +144,6 @@ def _findings_for(summary: dict) -> list[str]:
     if not summary["operators"]:
         f.append("Plan was empty or unparseable; check the EXPLAIN output directly.")
     return f
-
-
-# ── Identifier quoting (mirrors handlers/indexes.py) ─────────────────────────
-
-
-def _safe_ident(s: str) -> str:
-    return "`" + (s or "").replace("`", "``") + "`"
-
-
-def _keyspace(bucket: str, scope: str | None, coll: str | None) -> str:
-    return f"{_safe_ident(bucket)}.{_safe_ident(scope or '_default')}.{_safe_ident(coll or '_default')}"
 
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
@@ -553,7 +543,7 @@ def _schema(cluster, QueryOptions, args: dict) -> list[TextContent]:
     coll = args.get("collection_name") or "_default"
     sample_size = _bounded(args.get("sample_size"), 100, 1, _MAX_SAMPLE)
 
-    keyspace = _keyspace(bucket, scope, coll)
+    keyspace = sql_keyspace(bucket, scope, coll)
     stmt = f"""
         SELECT pair.name AS field,
                type(pair.val) AS field_type,

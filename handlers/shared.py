@@ -7,7 +7,8 @@ Spec: docs/spec.md S3 steps 5 and 8, S7 (the error marker); docs/THREADING_MODEL
     docs/questions.md Q-001 (the cluster cache is built under a lock), Q-002 (the cycle with
     `logging_config`).
 Main items: `get_sdk_cluster`, `admin_request`, `admin_request_json`, `require_confirmation`,
-    the statement guards (`assert_read_only_statement` and others), `redact`, `ok`, `err`,
+    the statement guards (`assert_read_only_statement` and others), SQL++ identifier quoting
+    (`sql_identifier`, `sql_keyspace`), `redact`, `ok`, `err`,
     `get_env` and the `env_*` helpers.
 Callers: `audit.py`, `dryrun.py`, `gui/gui_server.py`, `handlers/backup.py`,
     `handlers/backup_catalog.py`, `handlers/buckets.py`, `handlers/capella/__init__.py`,
@@ -1102,6 +1103,41 @@ def quote_path(segment: str) -> str:
     if quoted in (".", ".."):
         return quoted.replace(".", "%2E")
     return quoted
+
+
+def sql_identifier(name: str | None) -> str:
+    """Backtick-quote one caller-supplied name for a SQL++ statement.
+
+    Parameters: `name`, a bucket, scope, collection, index or field name as the
+    caller gave it. `None` is treated as the empty string.
+    Returns: the name inside backticks with every embedded backtick doubled, which is
+    how SQL++ escapes one inside a quoted identifier. Never raises.
+
+    This is the injection boundary for every statement `handlers/indexes.py`,
+    `handlers/diagnostics.py` and `handlers/eight_x.py` build by interpolation: a
+    bucket named ``a` OR 1=1 --`` would otherwise close the quote and continue the
+    statement. It is kept in one place so that the mutation entries in
+    `scripts/mutation_round_5.py` cover every caller, not one copy of three.
+
+    It is deliberately lenient (an empty name becomes ``````, which the query service
+    rejects) so that it reproduces exactly what those handlers did before it was
+    shared. `handlers.fixture_core.quote_identifier` is the stricter variant used by
+    the fixture layer: it refuses an empty name and control characters.
+    """
+    return "`" + (name or "").replace("`", "``") + "`"
+
+
+def sql_keyspace(bucket: str, scope: str | None, collection: str | None) -> str:
+    """`bucket`.`scope`.`collection` for a SQL++ statement, each part quoted.
+
+    Parameters: the three keyspace parts. A missing scope or collection means
+    `_default`, which is what Couchbase names the default scope and collection.
+    Returns: the dotted path with each part passed through `sql_identifier`.
+    """
+    return (
+        f"{sql_identifier(bucket)}.{sql_identifier(scope or '_default')}"
+        f".{sql_identifier(collection or '_default')}"
+    )
 
 
 def form_data(args: dict, exclude: Iterable[str] = ("confirm",)) -> dict:

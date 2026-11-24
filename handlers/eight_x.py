@@ -48,6 +48,8 @@ from .shared import (
     is_8x,
     ok,
     quote_path,
+    sql_identifier,
+    sql_keyspace,
 )
 
 # ── Version gate ─────────────────────────────────────────────────────────────
@@ -68,20 +70,6 @@ def _require_8x(tool_name: str) -> list[TextContent] | None:
         "or the documented SQL++ workarounds.",
         tool=tool_name,
         hint="Use admin_cluster_info to verify the cluster version.",
-    )
-
-
-# ── Identifier quoting (mirrors handlers/indexes.py) ─────────────────────────
-
-
-def _safe_ident(s: str) -> str:
-    return "`" + (s or "").replace("`", "``") + "`"
-
-
-def _keyspace(bucket: str, scope: str | None, coll: str | None) -> str:
-    return (
-        f"{_safe_ident(bucket)}.{_safe_ident(scope or '_default')}"
-        f".{_safe_ident(coll or '_default')}"
     )
 
 
@@ -405,11 +393,11 @@ def _vec_hyperscale(args: dict) -> list[TextContent]:
     if bad_sim:
         return bad_sim
 
-    keyspace = _keyspace(
+    keyspace = sql_keyspace(
         args["bucket_name"], args.get("scope_name"), args.get("collection_name")
     )
-    idx = _safe_ident(args["index_name"])
-    field = _safe_ident(args["field_name"])
+    idx = sql_identifier(args["index_name"])
+    field = sql_identifier(args["field_name"])
     with_clause = _with_clause(
         dimension=args["dimension"],
         similarity=args["similarity"],
@@ -455,12 +443,12 @@ def _vec_composite(args: dict) -> list[TextContent]:
             where_clause=where,
         )
 
-    keyspace = _keyspace(
+    keyspace = sql_keyspace(
         args["bucket_name"], args.get("scope_name"), args.get("collection_name")
     )
-    idx = _safe_ident(args["index_name"])
-    vec = _safe_ident(args["vector_field"])
-    scalar_list = ", ".join(_safe_ident(s) for s in scalar_fields)
+    idx = sql_identifier(args["index_name"])
+    vec = sql_identifier(args["vector_field"])
+    scalar_list = ", ".join(sql_identifier(s) for s in scalar_fields)
     key_list = f"{scalar_list}, {vec} VECTOR"
 
     where_part = f" WHERE {where}" if where else ""
@@ -564,7 +552,7 @@ def _conflict_query(args: dict) -> list[TextContent]:
                 tool="admin_xdcr_conflict_log_query",
             )
         limit = max(1, min(limit, _CONFLICT_LIMIT_MAX))
-    keyspace = _keyspace(
+    keyspace = sql_keyspace(
         args["bucket_name"],
         args.get("scope_name"),
         args.get("collection_name"),

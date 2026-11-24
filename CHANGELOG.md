@@ -88,6 +88,7 @@ Not fixed (design decisions): the TLS 1.2 floor in `tls_config.py` (uvicorn buil
 - `seed-ee-bucket.ps1`, `probe-alternate-ports.ps1` and `probe_rest_paths.ps1` read the lab password from `CB_LAB_PASSWORD` instead of holding it as a literal. `ee-lab.ps1` documents the same variable.
 
 - References to `CLAUDE.md` in code comments, tests and documents now name `AGENTS.md`.
+- SQL++ identifier quoting is defined once, as `handlers.shared.sql_identifier` and `sql_keyspace`. `handlers/indexes.py`, `handlers/diagnostics.py` and `handlers/eight_x.py` each carried an identical copy, and the round-5 mutation entries for this injection boundary only exercised the copy in `indexes.py`. They now target the shared function, so they cover all three callers. The quoted output is unchanged.
 
 ## [1.0.0+e57765b] - 2026-10-09
 
